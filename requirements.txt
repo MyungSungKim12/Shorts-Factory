@@ -1,0 +1,10 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-dotenv==1.0.1
+gtts==2.4.0
+requests==2.32.3
+aiohttp==3.11.4
+Pillow==10.4.0
+google-api-python-client==2.156.0
+google-auth-oauthlib==1.2.1
+apscheduler==3.11.0
