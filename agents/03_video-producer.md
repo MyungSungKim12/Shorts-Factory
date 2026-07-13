@@ -9,7 +9,8 @@ script.json을 받아 **완성된 mp4 (1080x1920 세로, 9:16)**를 만든다.
 - **출력**: `data/work/{date}/output.mp4` + `produce_log.json` (각 씬별 사용 소스 기록)
 
 ## 제작 파이프라인 (전부 무료)
-1. **TTS**: `edge-tts` — 씬별 narration → `scene_{n}.mp3` (추천 음성: `ko-KR-SunHiNeural`)
+1. **TTS**: `gTTS` (Google TTS, lang=ko) — 씬별 narration → `scene_{n}.mp3`
+   (배속은 ffmpeg atempo로 적용, `.env`의 TTS_SPEED. edge-tts는 403 이슈로 gTTS로 대체됨)
 2. **이미지**: Pexels/Pixabay API — 씬별 visual 키워드로 세로형 이미지/영상 다운로드
 3. **자막**: narration을 ass/srt로 변환 (숏츠는 자막 필수 — 무음 시청자 다수)
 4. **순위 오버레이**: 씬에 rank가 있으면 ffmpeg drawtext로 화면 상단에 큰 순위 숫자 표시

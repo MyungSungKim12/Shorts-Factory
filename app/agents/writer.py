@@ -43,7 +43,11 @@ def run_writer(data_dir: Path, date_str: str) -> dict:
         else:
             raise ValueError(f"작가 응답을 JSON으로 파싱할 수 없음:\n{script_text}")
 
-    # script.json 저장
+    # 검증 게이트 — 역순 구조/길이 정합성/제목 길이 검사. 실패 시 파이프라인 중단.
+    from app.models import validate_script
+    script_dict = validate_script(script_dict)
+
+    # script.json 저장 (검증 통과분만 저장됨)
     script_file = work_dir / "script.json"
     script_file.write_text(json.dumps(script_dict, ensure_ascii=False, indent=2), encoding="utf-8")
 

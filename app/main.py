@@ -36,11 +36,13 @@ def health():
 
 @app.get("/api/status")
 def pipeline_status():
-    """오늘 파이프라인 실행 상태 — run 로그가 있으면 반환."""
-    log_file = DATA_DIR / "logs" / f"run-{date.today():%Y%m%d}.json"
-    if log_file.exists():
-        return json.loads(log_file.read_text(encoding="utf-8"))
-    return {"date": str(date.today()), "run": None, "message": "오늘 실행 기록 없음"}
+    """오늘 파이프라인 실행 상태 — 가장 최근 회차의 run 로그 반환."""
+    logs_dir = DATA_DIR / "logs"
+    today = f"{date.today():%Y%m%d}"
+    log_files = sorted(logs_dir.glob(f"run-{today}*.json")) if logs_dir.exists() else []
+    if log_files:
+        return json.loads(log_files[-1].read_text(encoding="utf-8"))
+    return {"date": today, "run": None, "message": "오늘 실행 기록 없음"}
 
 
 @app.get("/api/videos")
@@ -81,7 +83,7 @@ def run_history():
         return {"runs": []}
 
     runs = []
-    for f in sorted(logs_dir.glob("run-*.json"), reverse=True)[:14]:
+    for f in sorted(logs_dir.glob("run-*.json"), reverse=True)[:30]:
         try:
             runs.append(json.loads(f.read_text(encoding="utf-8")))
         except (json.JSONDecodeError, OSError):
@@ -103,9 +105,12 @@ def trigger_pipeline(background_tasks: BackgroundTasks, x_token: str = Header(de
     """파이프라인 수동 실행 트리거 (DASHBOARD_TOKEN 설정 시 토큰 필요)."""
     global _pipeline_running
 
-    # 공개 서버 보호 — 조회는 누구나, 실행은 토큰 소유자만
+    # 공개 서버 보호 — 조회는 누구나, 실행은 토큰 소유자만 (fail-closed:
+    # 토큰 미설정 시 열리는 게 아니라 실행 자체를 차단)
     token = os.getenv("DASHBOARD_TOKEN", "")
-    if token and x_token != token:
+    if not token:
+        raise HTTPException(status_code=503, detail="DASHBOARD_TOKEN 미설정 — 원격 실행이 차단되어 있습니다")
+    if x_token != token:
         raise HTTPException(status_code=401, detail="관리 토큰이 필요합니다")
 
     if _pipeline_running:

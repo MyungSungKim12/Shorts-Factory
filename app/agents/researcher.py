@@ -27,12 +27,13 @@ def _load_recent_topics(data_dir: Path, days: int = 14) -> list:
     return [r[0] for r in rows]
 
 
-def run_researcher(data_dir: Path, recent_topics: list = None) -> dict:
+def run_researcher(data_dir: Path, run_id: str = None, recent_topics: list = None) -> dict:
     """
     랭킹 소재를 발굴하고 순위 데이터를 수집한다.
 
     Args:
         data_dir: 데이터 저장 경로
+        run_id: 작업 단위 식별자 (예: "20260713-2", None이면 오늘 날짜)
         recent_topics: 최근 사용 소재 목록 (None이면 업로드 DB에서 자동 조회)
 
     Returns:
@@ -41,8 +42,9 @@ def run_researcher(data_dir: Path, recent_topics: list = None) -> dict:
     if recent_topics is None:
         recent_topics = _load_recent_topics(data_dir)
 
-    date_str = datetime.now().strftime("%Y%m%d")
-    work_dir = data_dir / "work" / date_str
+    if run_id is None:
+        run_id = datetime.now().strftime("%Y%m%d")
+    work_dir = data_dir / "work" / run_id
     work_dir.mkdir(parents=True, exist_ok=True)
 
     # 프롬프트에 전달할 컨텍스트
@@ -51,17 +53,17 @@ def run_researcher(data_dir: Path, recent_topics: list = None) -> dict:
         "recent_topics": recent_topics,
     }
 
-    # Claude를 통해 리서처 에이전트 실행
+    # Gemini + Google 검색 그라운딩 — 실제 검색 결과에 근거한 순위 데이터 수집
     topic = call_agent(
         prompt=_researcher_prompt(context),
         agent_name="trend-researcher",
+        grounded=True,
     )
 
-    # JSON 파싱
+    # JSON 파싱 (그라운딩 모드는 JSON 강제가 안 되므로 블록 추출 폴백 필수)
     try:
         topic_dict = json.loads(topic)
     except json.JSONDecodeError:
-        # 응답에서 JSON 블록 추출
         import re
         match = re.search(r'\{.*\}', topic, re.DOTALL)
         if match:
@@ -69,7 +71,11 @@ def run_researcher(data_dir: Path, recent_topics: list = None) -> dict:
         else:
             raise ValueError(f"리서처 응답을 JSON으로 파싱할 수 없음:\n{topic}")
 
-    # topic.json 저장
+    # 검증 게이트 — 순위 완결성/자리표시자/출처 누락 검사. 실패 시 파이프라인 중단.
+    from app.models import validate_topic
+    topic_dict = validate_topic(topic_dict)
+
+    # topic.json 저장 (검증 통과분만 저장됨)
     topic_file = work_dir / "topic.json"
     topic_file.write_text(json.dumps(topic_dict, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -85,21 +91,22 @@ def _researcher_prompt(context: dict) -> str:
 - 최근 14일 사용 소재(중복 금지): {context['recent_topics'] if context['recent_topics'] else '없음'}
 
 [작업]
-1. 당신이 순위와 수치를 확실히 알고 있는 랭킹 소재 후보를 4개 이상 떠올려라.
-   (예: 세계에서 가장 매운 고추 — 스코빌 지수, 가장 깊은 바다, 가장 빠른 동물, 가장 많이 팔린 게임 등
+1. 랭킹 소재 후보를 4개 이상 떠올려라.
+   (예: 세계에서 가장 매운 고추 — 스코빌 지수, 가장 깊은 바다, 가장 빠른 동물 등
    객관적 수치·기록이 존재하는 분야)
 2. 각 후보를 점수화하라:
    - 1위 의외성(0-5): 사람들이 예상한 1위와 실제 1위가 다른가?
    - 대중성(0-5): 사전지식 없이 이해 가능한가?
-   - 사실 확신도(0-5): 순위와 수치를 당신이 확실히 알고 있는가?
-3. 최고점 소재 1개를 골라 TOP {context['ranking_size']} 순위를 완성하라.
+   - 영상 확보성(0-5): 항목들이 음식/동물/자연/건축/탈것처럼 무료 스톡 영상이 존재하는 대상인가?
+     (특정 인물/게임/브랜드 제품은 스톡이 없어 감점)
+3. 최고점 소재 1개를 골라 **구글 검색으로 순위 데이터를 확인**하고 TOP {context['ranking_size']}를 완성하라.
 
-[사실성 규칙 — 가장 중요]
-- 확실히 아는 사실만 사용하라. 순위나 수치가 불확실한 소재는 후보에서 제외하라.
-- 최신 트렌드·시사보다 시간이 지나도 변하지 않는 기록/수치 기반 소재를 우선하라.
-  (지식 기준 시점 이후 바뀌었을 수 있는 순위는 피하라 — 예: 현재 구독자 1위 유튜버)
+[사실 검증 규칙 — 가장 중요]
+- 각 항목의 fact(수치)와 순위는 반드시 검색 결과에 근거하라. 기억이 아니라 검색이 기준이다.
+- source에는 검색으로 확인한 실제 출처(매체/기관명)를 적어라.
+- 검색으로 확인하지 못한 항목은 목록에 넣지 말라 — 항목을 채우려고 추측하는 것은 금지.
 - fact에는 반드시 구체적 수치를 넣어라 (스코빌 지수, 미터, km/h, 판매량 등).
-- 모든 항목의 name/fact를 실제 내용으로 채워라. "..."나 빈 값은 절대 금지.
+- 모든 항목의 name/fact/source를 실제 내용으로 채워라. "..."나 빈 값은 절대 금지.
 
 [제약]
 - 정답이 없는 주관 순위 금지 (예: 가장 예쁜 연예인)

@@ -33,9 +33,11 @@ def cleanup_old_work(data_dir: Path, keep_days: int = 7):
         return
     cutoff = datetime.now() - timedelta(days=keep_days)
     for d in work.iterdir():
-        if d.is_dir() and len(d.name) == 8 and d.name.isdigit():
+        # 폴더명: "20260713" (구형식) 또는 "20260713-2" (회차 형식)
+        date_part = d.name[:8]
+        if d.is_dir() and date_part.isdigit():
             try:
-                if datetime.strptime(d.name, "%Y%m%d") < cutoff:
+                if datetime.strptime(date_part, "%Y%m%d") < cutoff:
                     shutil.rmtree(d)
                     print(f"오래된 작업 폴더 삭제: {d.name}")
             except ValueError:
@@ -46,10 +48,13 @@ def main():
     data_dir = Path(os.getenv("DATA_DIR", "./data"))
     ffmpeg_path = os.getenv("FFMPEG_PATH", "ffmpeg")
 
+    # 회차: cron이 인자로 지정 (12시=1, 15시=2, 18시=3). 없으면 자동 선택.
+    slot = int(sys.argv[1]) if len(sys.argv) > 1 else None
+
     cleanup_old_work(data_dir, int(os.getenv("WORK_RETENTION_DAYS", "7")))
 
     try:
-        result = asyncio.run(run_pipeline(data_dir, ffmpeg_path))
+        result = asyncio.run(run_pipeline(data_dir, ffmpeg_path, slot=slot))
         uploader = result.get("stages", {}).get("uploader", {})
         print("\n===== 오늘의 실행 결과 =====")
         print(f"성공 여부: {result.get('success')}")

@@ -16,15 +16,18 @@ FALLBACK_MODELS = [
 ]
 
 
-def call_agent(prompt: str, agent_name: str = "general", max_tokens: int = 16000) -> str:
+def call_agent(prompt: str, agent_name: str = "general", max_tokens: int = 16000, grounded: bool = False) -> str:
     """
-    Gemini를 통해 에이전트를 호출한다. JSON 강제 모드 사용.
+    Gemini를 통해 에이전트를 호출한다.
     503/429 발생 시 재시도 후 예비 모델로 자동 전환한다.
 
     Args:
         prompt: 에이전트에게 전달할 프롬프트
         agent_name: 에이전트 이름 (로깅용)
         max_tokens: 최대 응답 토큰 수
+        grounded: True면 Google 검색 그라운딩 사용 — 모델이 실제 검색 결과에
+                  근거해 답변 (사실 검증용). 그라운딩은 JSON 강제 모드와 동시
+                  사용이 불가해 이 경우 일반 텍스트로 응답받는다.
 
     Returns:
         모델의 응답 텍스트 (JSON 문자열)
@@ -46,7 +49,7 @@ def call_agent(prompt: str, agent_name: str = "general", max_tokens: int = 16000
         # 모델당 2회 시도 (일시적 혼잡 대비)
         for attempt in range(2):
             try:
-                return _generate(model, prompt, max_tokens, api_key)
+                return _generate(model, prompt, max_tokens, api_key, grounded)
             except _SkipModelError as e:
                 # 이 모델은 사용 불가 — 재시도 없이 다음 모델로
                 last_error = str(e)
@@ -71,19 +74,25 @@ class _SkipModelError(Exception):
     """모델 자체가 사용 불가(404 등) — 재시도 없이 다음 모델로."""
 
 
-def _generate(model: str, prompt: str, max_tokens: int, api_key: str) -> str:
+def _generate(model: str, prompt: str, max_tokens: int, api_key: str, grounded: bool = False) -> str:
     """단일 모델로 1회 생성 요청."""
     url = f"{GEMINI_API_BASE}/{model}:generateContent?key={api_key}"
 
+    generation_config = {
+        "maxOutputTokens": max_tokens,
+        "temperature": 0.7,
+    }
     body = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "maxOutputTokens": max_tokens,
-            "temperature": 0.7,
-            # JSON 강제 모드 — 모델이 유효한 JSON 외의 텍스트를 출력할 수 없음
-            "response_mime_type": "application/json",
-        },
+        "generationConfig": generation_config,
     }
+
+    if grounded:
+        # Google 검색 그라운딩 — 실제 검색 결과 기반 응답 (JSON 강제 모드와 병용 불가)
+        body["tools"] = [{"google_search": {}}]
+    else:
+        # JSON 강제 모드 — 모델이 유효한 JSON 외의 텍스트를 출력할 수 없음
+        generation_config["response_mime_type"] = "application/json"
 
     try:
         response = requests.post(url, json=body, timeout=120)
