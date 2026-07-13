@@ -26,10 +26,12 @@ def run_writer(data_dir: Path, date_str: str) -> dict:
     topic = json.loads(topic_file.read_text(encoding="utf-8"))
 
     # Claude를 통해 작가 에이전트 실행
+    # 작가는 Groq 우선 (검색 불필요 + JSON 생성 강점) — Gemini 호출량 절약 겸 부하 분산
     script_text = call_agent(
         prompt=_writer_prompt(topic),
         agent_name="script-writer",
         max_tokens=16000,
+        prefer="groq",
     )
 
     # JSON 파싱

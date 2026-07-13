@@ -43,10 +43,34 @@ async def run_producer(data_dir: Path, date_str: str, ffmpeg_path: str) -> dict:
         print("  → 비디오 다운로드 중...")
         video_files = await _download_videos(script, tmp_path)
 
-        # 3. 각 씬을 mp4로 인코딩 (비디오 + 음성)
+        # 3. 오버레이 준비 — 상단 타이틀 + 좌측 누적 순위 리스트용 데이터
+        topic_title = ""
+        items_map = {}
+        ranking_size = 0
+        topic_file = work_dir / "topic.json"
+        if topic_file.exists():
+            try:
+                t = json.loads(topic_file.read_text(encoding="utf-8"))
+                topic_title = t.get("topic", "")
+                items_map = {i["rank"]: i["name"] for i in t.get("items", [])}
+                ranking_size = t.get("ranking_size", len(items_map))
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        scenes = script.get("scenes", [])
+        # 순위별 "공개 시점" = 그 순위가 등장하는 마지막 씬
+        # (1위 직전 긴장 씬도 rank=1일 수 있어, 마지막 등장 씬 전까지는 이름을 비워 스포일러 방지)
+        reveal_at = {}
+        for idx, s in enumerate(scenes):
+            if s.get("rank"):
+                reveal_at[s["rank"]] = idx
+
+        fontfile = _overlay_fontfile()
+
+        # 4. 각 씬을 mp4로 인코딩 (비디오 + 음성 + 오버레이)
         print("  → 씬별 영상 생성 중...")
         scene_videos = []
-        for scene in script.get("scenes", []):
+        for idx, scene in enumerate(scenes):
             scene_n = scene["n"]
             mp3_file = mp3_files.get(scene_n)
             video_file = video_files.get(scene_n)
@@ -54,11 +78,19 @@ async def run_producer(data_dir: Path, date_str: str, ffmpeg_path: str) -> dict:
             if not (mp3_file and video_file):
                 continue
 
+            revealed = {r for r, at in reveal_at.items() if at <= idx}
+            extra_vf = ""
+            if items_map and fontfile:
+                extra_vf = _build_scene_overlay(
+                    topic_title, items_map, ranking_size, revealed,
+                    scene.get("rank"), fontfile,
+                )
+
             # 입력(다운로드 원본)과 출력 파일명이 겹치지 않게 enc_ 접두어 사용
             scene_video = tmp_path / f"enc_{scene_n}.mp4"
             _encode_scene_video(
                 str(video_file), str(mp3_file), str(scene_video), ffmpeg_path,
-                rank=scene.get("rank"),
+                extra_vf=extra_vf,
             )
             scene_videos.append((scene_n, scene_video))
 
@@ -178,14 +210,37 @@ def _clean_caption(text: str) -> str:
     return text
 
 
+def _split_caption(text: str, max_len: int = 26) -> list:
+    """긴 나레이션을 짧은 자막 조각으로 분할 (문장 우선, 길면 공백 기준).
+
+    화면을 덮는 4줄짜리 벽 자막 대신 1~2줄씩 순차 표시하기 위함.
+    """
+    import re
+
+    sentences = re.split(r'(?<=[.!?…]) +', text.strip())
+    chunks = []
+    for s in sentences:
+        s = s.strip()
+        while len(s) > max_len:
+            cut = s.rfind(' ', 0, max_len)
+            if cut < 10:  # 자를 공백이 마땅치 않으면 강제 분할
+                cut = max_len
+            chunks.append(s[:cut].strip())
+            s = s[cut:].strip()
+        if s:
+            chunks.append(s)
+    return chunks or [text]
+
+
 def _build_srt(script: dict, scene_videos: list, ffmpeg_path: str, srt_path: Path) -> None:
-    """씬별 인코딩 결과의 실제 길이를 측정해 타이밍 정확한 SRT 자막 생성."""
+    """씬별 실제 길이 측정 + 나레이션을 문장 단위로 분할해 순차 표시되는 SRT 생성."""
     narrations = {s["n"]: _clean_caption(s["narration"]) for s in script.get("scenes", [])}
     planned = {s["n"]: float(s.get("duration_sec", 5)) for s in script.get("scenes", [])}
 
     lines = []
+    cue_no = 0
     current = 0.0
-    for idx, (scene_n, video_path) in enumerate(scene_videos, start=1):
+    for scene_n, video_path in scene_videos:
         duration = _media_duration(str(video_path), ffmpeg_path)
         if duration <= 0:
             # 측정 실패 시 대본의 계획 길이로 대체 (자막이 0초가 되는 사고 방지)
@@ -195,10 +250,19 @@ def _build_srt(script: dict, scene_videos: list, ffmpeg_path: str, srt_path: Pat
             current += duration
             continue
 
-        lines.append(str(idx))
-        lines.append(f"{_srt_time(current)} --> {_srt_time(current + duration)}")
-        lines.append(text)
-        lines.append("")
+        # 씬 길이를 조각별 글자수 비례로 배분 → 음성 진행과 자막이 대체로 동기화됨
+        chunks = _split_caption(text)
+        total_chars = sum(len(c) for c in chunks) or 1
+        chunk_start = current
+        for chunk in chunks:
+            chunk_dur = duration * len(chunk) / total_chars
+            cue_no += 1
+            lines.append(str(cue_no))
+            lines.append(f"{_srt_time(chunk_start)} --> {_srt_time(chunk_start + chunk_dur)}")
+            lines.append(chunk)
+            lines.append("")
+            chunk_start += chunk_dur
+
         current += duration
 
     srt_path.write_text("\n".join(lines), encoding="utf-8")
@@ -214,22 +278,103 @@ def _srt_time(seconds: float) -> str:
 
 
 def _overlay_fontfile() -> str:
-    """순위 숫자 오버레이용 폰트 파일 탐색 (Windows/리눅스)."""
+    """오버레이용 폰트 파일 탐색 — 주아체(둥근 숏츠 폰트) 우선."""
+    env_font = os.getenv("OVERLAY_FONTFILE", "")
     candidates = [
+        env_font,
+        "assets/fonts/Jua-Regular.ttf",                 # 프로젝트 동봉 (로컬/서버 공통)
+        "/usr/local/share/fonts/Jua-Regular.ttf",       # 서버 설치본
         "C:/Windows/Fonts/malgunbd.ttf",
-        "C:/Windows/Fonts/malgun.ttf",
         "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf",
-        "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     ]
     for c in candidates:
-        if Path(c).exists():
-            return c
+        if c and Path(c).exists():
+            return str(Path(c).resolve())
     return ""
 
 
-def _encode_scene_video(media_file: str, mp3_file: str, output_mp4: str, ffmpeg_path: str, rank=None) -> None:
-    """한 씬을 비디오/이미지 + 음성으로 mp4 인코딩. rank가 있으면 순위 숫자 오버레이."""
+def _wrap_text(text: str, width: int) -> list:
+    """공백 기준 그리디 줄바꿈."""
+    words = text.split()
+    lines, cur = [], ""
+    for w in words:
+        if cur and len(cur) + 1 + len(w) > width:
+            lines.append(cur)
+            cur = w
+        else:
+            cur = f"{cur} {w}".strip()
+    if cur:
+        lines.append(cur)
+    return lines or [text]
+
+
+# 순위별 색상 (경쟁 채널 스타일의 무지개 팔레트 — 1위가 가장 뜨거운 색)
+_RANK_COLORS = {
+    1: "0xFF5252",   # 빨강
+    2: "0xFFA726",   # 주황
+    3: "0xFFEB3B",   # 노랑
+    4: "0x9CCC65",   # 연두
+    5: "0x4FC3F7",   # 하늘
+    6: "0xBA68C8",   # 보라
+    7: "0xF48FB1",   # 분홍
+    8: "0x4DB6AC",   # 청록
+    9: "0xFF8A65",   # 코랄
+    10: "0xB0BEC5",  # 회백
+}
+
+
+def _build_scene_overlay(title: str, items: dict, ranking_size: int,
+                         revealed: set, current_rank, fontfile: str) -> str:
+    """상단 고정 타이틀 + 좌측 누적 순위 리스트 drawtext 필터 체인 생성.
+
+    - 타이틀: 반투명 박스 위 흰 글씨, 항상 표시 (중간 진입 시청자용 맥락)
+    - 리스트: 번호는 순위별 고유 색, 이름은 흰색. 공개된 순위만 이름 채움
+    - 현재 순위 줄은 글자를 키워 강조
+    """
+    ff = fontfile.replace(":", "\\:")
+
+    def esc(t: str) -> str:
+        # drawtext 텍스트는 작은따옴표로 감싸므로 따옴표만 무력화하면 안전
+        return t.replace("\\", "").replace("'", "’")
+
+    filters = []
+
+    # 상단 고정 타이틀 (최대 2줄)
+    for i, line in enumerate(_wrap_text(title, 15)[:2]):
+        filters.append(
+            f"drawtext=fontfile='{ff}':text='{esc(line)}':fontsize=56:fontcolor=white"
+            f":borderw=5:bordercolor=black:box=1:boxcolor=black@0.4:boxborderw=16"
+            f":x=(w-text_w)/2:y={64 + i * 86}"
+        )
+
+    # 좌측 누적 순위 리스트 (번호=순위색, 이름=흰색)
+    list_y_start = 290
+    line_height = 56
+    for r in range(1, ranking_size + 1):
+        y = list_y_start + (r - 1) * line_height
+        size = 44 if r == current_rank else 36  # 현재 순위 강조
+        num_color = _RANK_COLORS.get(r, "white")
+
+        filters.append(
+            f"drawtext=fontfile='{ff}':text='{esc(str(r))}.':fontsize={size}"
+            f":fontcolor={num_color}:borderw=5:bordercolor=black:x=36:y={y}"
+        )
+
+        name = items.get(r, "") if r in revealed else ""
+        if name:
+            if len(name) > 13:
+                name = name[:12] + "…"
+            filters.append(
+                f"drawtext=fontfile='{ff}':text='{esc(name)}':fontsize={size}"
+                f":fontcolor=white:borderw=5:bordercolor=black:x=118:y={y}"
+            )
+
+    return "," + ",".join(filters)
+
+
+def _encode_scene_video(media_file: str, mp3_file: str, output_mp4: str, ffmpeg_path: str, extra_vf: str = "") -> None:
+    """한 씬을 비디오/이미지 + 음성으로 mp4 인코딩. extra_vf로 오버레이 필터 추가."""
     # 미디어 파일이 .mp4면 비디오, .jpg면 이미지
     is_video = media_file.lower().endswith('.mp4')
 
@@ -240,15 +385,9 @@ def _encode_scene_video(media_file: str, mp3_file: str, output_mp4: str, ffmpeg_
     # scale+crop: 화면을 꽉 채우고 넘치는 부분은 잘라냄 (레터박스 없음)
     normalize_vf = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30"
 
-    # 순위 숫자 오버레이 (랭킹 포맷의 핵심 시각 요소 — 화면 상단 큰 숫자)
-    fontfile = _overlay_fontfile()
-    if rank is not None and fontfile:
-        ff_escaped = fontfile.replace(":", "\\:")
-        normalize_vf += (
-            f",drawtext=fontfile='{ff_escaped}':text='{rank}'"
-            ":fontsize=170:fontcolor=white:borderw=12:bordercolor=black@0.8"
-            ":x=(w-text_w)/2:y=160"
-        )
+    # 타이틀 + 누적 순위 리스트 오버레이
+    if extra_vf:
+        normalize_vf += extra_vf
 
     if is_video:
         # 비디오(무한 반복) + 나레이션 — 나레이션 길이에 정확히 맞춤

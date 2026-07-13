@@ -53,12 +53,21 @@ def run_researcher(data_dir: Path, run_id: str = None, recent_topics: list = Non
         "recent_topics": recent_topics,
     }
 
-    # Gemini + Google 검색 그라운딩 — 실제 검색 결과에 근거한 순위 데이터 수집
-    topic = call_agent(
-        prompt=_researcher_prompt(context),
-        agent_name="trend-researcher",
-        grounded=True,
-    )
+    # 1순위: 검색 기반 제공자 (Gemini 그라운딩 → Groq compound)
+    # 최후 폴백: 검색 없이 "불변 기록·수치 소재만" 보수 모드 (검증된 구 방식 — 회차를 날리는 것보단 낫다)
+    try:
+        topic = call_agent(
+            prompt=_researcher_prompt(context, grounded=True),
+            agent_name="trend-researcher",
+            grounded=True,
+        )
+    except Exception as e:
+        print(f"  ⚠️ 검색 기반 제공자 전부 실패({e}) — 보수 모드(불변 기록 소재)로 폴백")
+        topic = call_agent(
+            prompt=_researcher_prompt(context, grounded=False),
+            agent_name="trend-researcher",
+            grounded=False,
+        )
 
     # JSON 파싱 (그라운딩 모드는 JSON 강제가 안 되므로 블록 추출 폴백 필수)
     try:
@@ -82,8 +91,25 @@ def run_researcher(data_dir: Path, run_id: str = None, recent_topics: list = Non
     return topic_dict
 
 
-def _researcher_prompt(context: dict) -> str:
-    """리서처 에이전트의 고효율 프롬프트."""
+def _researcher_prompt(context: dict, grounded: bool = True) -> str:
+    """리서처 프롬프트 — grounded=False면 검색 없이 확실한 불변 기록만 쓰는 보수 모드."""
+    if grounded:
+        step3 = f"3. 최고점 소재 1개를 골라 **구글 검색으로 순위 데이터를 확인**하고 TOP {context['ranking_size']}를 완성하라."
+        fact_rules = """[사실 검증 규칙 — 가장 중요]
+- 각 항목의 fact(수치)와 순위는 반드시 검색 결과에 근거하라. 기억이 아니라 검색이 기준이다.
+- source에는 검색으로 확인한 실제 출처(매체/기관명)를 적어라.
+- 검색으로 확인하지 못한 항목은 목록에 넣지 말라 — 항목을 채우려고 추측하는 것은 금지.
+- fact에는 반드시 구체적 수치를 넣어라 (스코빌 지수, 미터, km/h, 판매량 등).
+- 모든 항목의 name/fact/source를 실제 내용으로 채워라. "..."나 빈 값은 절대 금지."""
+    else:
+        step3 = f"3. 최고점 소재 1개를 골라, 당신이 확실히 아는 데이터로만 TOP {context['ranking_size']}를 완성하라."
+        fact_rules = """[사실성 규칙 — 가장 중요 (검색 불가 모드)]
+- 확실히 아는 사실만 사용하라. 순위나 수치가 조금이라도 불확실한 소재는 후보에서 제외하라.
+- 시간이 지나도 변하지 않는 기록/수치 기반 소재만 허용 (예: 산 높이, 바다 깊이, 스코빌 지수).
+  최신 순위 변동이 있는 소재(구독자 수, 매출 순위 등)는 금지.
+- fact에는 반드시 구체적 수치를 넣어라.
+- 모든 항목의 name/fact/source를 실제 내용으로 채워라. "..."나 빈 값은 절대 금지."""
+
     return f"""당신은 랭킹 콘텐츠 소재 발굴 전문가다. 순위를 매길 수 있고, 1위가 궁금해지는 소재만 고른다.
 
 [채널 정보]
@@ -99,14 +125,9 @@ def _researcher_prompt(context: dict) -> str:
    - 대중성(0-5): 사전지식 없이 이해 가능한가?
    - 영상 확보성(0-5): 항목들이 음식/동물/자연/건축/탈것처럼 무료 스톡 영상이 존재하는 대상인가?
      (특정 인물/게임/브랜드 제품은 스톡이 없어 감점)
-3. 최고점 소재 1개를 골라 **구글 검색으로 순위 데이터를 확인**하고 TOP {context['ranking_size']}를 완성하라.
+{step3}
 
-[사실 검증 규칙 — 가장 중요]
-- 각 항목의 fact(수치)와 순위는 반드시 검색 결과에 근거하라. 기억이 아니라 검색이 기준이다.
-- source에는 검색으로 확인한 실제 출처(매체/기관명)를 적어라.
-- 검색으로 확인하지 못한 항목은 목록에 넣지 말라 — 항목을 채우려고 추측하는 것은 금지.
-- fact에는 반드시 구체적 수치를 넣어라 (스코빌 지수, 미터, km/h, 판매량 등).
-- 모든 항목의 name/fact/source를 실제 내용으로 채워라. "..."나 빈 값은 절대 금지.
+{fact_rules}
 
 [제약]
 - 정답이 없는 주관 순위 금지 (예: 가장 예쁜 연예인)
