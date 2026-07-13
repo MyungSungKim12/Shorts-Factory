@@ -83,6 +83,7 @@ def _writer_prompt(topic: dict) -> str:
 5. fact의 수치를 반드시 narration에 포함하라.
 6. cta: 댓글 유도형 ("여러분의 1위는?")
 7. 총 30~55초.
+8. rank는 순위 공개 씬에만 넣어라. hook·긴장 씬·CTA처럼 순위가 아닌 씬은 rank를 null로 하라 (0 금지).
 
 [메타데이터 규칙]
 - title: "TOP {topic['ranking_size']}" + 1위 궁금증 유발. 1위는 제목에 공개하지 말 것.

@@ -160,8 +160,9 @@ def _gemini_generate(model: str, prompt: str, max_tokens: int, api_key: str, gro
         status = e.response.status_code if e.response is not None else 0
         detail = e.response.text[:500] if e.response is not None else str(e)
         if status == 429:
-            if _is_daily_quota(detail):
-                raise _DailyQuotaError("일일 할당량 소진")
+            # 그라운딩(검색) 429는 혼잡이 아니라 할당량 문제 — 재시도 낭비 없이 즉시 제공자 전환
+            if grounded or _is_daily_quota(detail):
+                raise _DailyQuotaError("할당량 소진 (재시도 무의미)")
             raise _RetryableError("HTTP 429 (분당 한도/혼잡)")
         if status in (500, 503):
             raise _RetryableError(f"HTTP {status} (서버 혼잡)")
@@ -210,7 +211,8 @@ def _groq_generate(model: str, prompt: str, max_tokens: int, api_key: str, json_
     body = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": min(max_tokens, 32768),
+        # Groq 모델들의 max_tokens 상한은 8192 — 초과 시 400 에러
+        "max_tokens": min(max_tokens, 8192),
         "temperature": 0.7,
     }
     if json_mode:

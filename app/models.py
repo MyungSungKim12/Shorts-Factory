@@ -52,6 +52,14 @@ class Scene(BaseModel):
     visual: str = ""
     duration_sec: float = Field(gt=0, le=15)
 
+    @field_validator("rank", mode="before")
+    @classmethod
+    def _zero_is_none(cls, v):
+        # 모델이 비순위 씬(훅/긴장/CTA)에 0을 넣는 경우가 흔함 — 0은 "순위 없음"으로 정규화
+        if v in (0, "0", "", None):
+            return None
+        return v
+
 
 class ScriptContract(BaseModel):
     """작가 산출물 (script.json) 계약."""
