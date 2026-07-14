@@ -449,6 +449,36 @@ def _encode_scene_video(media_file: str, mp3_file: str, output_mp4: str, ffmpeg_
     _run_ffmpeg(cmd)
 
 
+def _channel_name() -> str:
+    """채널명 조회 (.env CHANNEL_NAME 우선, 없으면 config/channel.json)."""
+    name = os.getenv("CHANNEL_NAME", "").strip()
+    if name:
+        return name
+    cfg = Path("config/channel.json")
+    if cfg.exists():
+        try:
+            return json.loads(cfg.read_text(encoding="utf-8")).get("channel_name", "").strip()
+        except (json.JSONDecodeError, OSError):
+            pass
+    return ""
+
+
+def _opening_filter() -> str:
+    """첫 1.8초 채널명 오프닝 drawtext. 채널명·폰트 없으면 빈 문자열."""
+    name = _channel_name()
+    font = _overlay_fontfile()
+    if not name or not font:
+        return ""
+    ff = font.replace(":", "\\:")
+    safe = name.replace("\\", "").replace("'", "’").replace(":", "\\:")
+    # 화면 중앙에 크게, 반투명 박스 위. enable로 0~1.8초에만 표시.
+    return (
+        f"drawtext=fontfile='{ff}':text='{safe}':fontsize=72:fontcolor=white"
+        f":borderw=6:bordercolor=black:box=1:boxcolor=black@0.5:boxborderw=24"
+        f":x=(w-text_w)/2:y=(h-text_h)/2:enable='lt(t,1.8)'"
+    )
+
+
 def _concat_videos(scene_videos: list, output_mp4: str, ffmpeg_path: str, tmp_path: Path) -> None:
     """모든 씬을 연결해서 최종 mp4 생성."""
     # concat demuxer 파일 생성
@@ -478,10 +508,16 @@ def _concat_videos(scene_videos: list, output_mp4: str, ffmpeg_path: str, tmp_pa
         f"FontName={subtitle_font},FontSize=13,Bold=1,"
         "PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,MarginV=70"
     )
+    filters = []
     if (tmp_path / "subs.srt").exists():
-        vf = f"subtitles=subs.srt:force_style='{subtitle_style}'"
-    else:
-        vf = "null"
+        filters.append(f"subtitles=subs.srt:force_style='{subtitle_style}'")
+
+    # 오프닝 브랜딩 — 첫 1.8초 채널명 표시 (자막 타이밍 영향 없음, 전체 영상 t=0 기준)
+    opening = _opening_filter()
+    if opening:
+        filters.append(opening)
+
+    vf = ",".join(filters) if filters else "null"
 
     encode_opts = [
         "-c:v", "libx264",
