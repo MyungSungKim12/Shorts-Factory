@@ -53,16 +53,18 @@ def run_researcher(data_dir: Path, run_id: str = None, recent_topics: list = Non
         "recent_topics": recent_topics,
     }
 
-    # 1순위: 검색 기반 제공자 (Gemini 그라운딩 → Groq compound)
-    # 최후 폴백: 검색 없이 "불변 기록·수치 소재만" 보수 모드 (검증된 구 방식 — 회차를 날리는 것보단 낫다)
+    # 1순위: Gemini 검색 그라운딩 (할당량 있을 때만 성공 — 실제 검색으로 사실 확인)
+    # 폴백: 검색 없이 "불변 기록·수치 소재만" 보수 모드
+    #       (그라운딩 무료 할당량은 작아 대개 여기로 옴. 강한 모델+불변 기록이라 사실성 양호)
     try:
         topic = call_agent(
             prompt=_researcher_prompt(context, grounded=True),
             agent_name="trend-researcher",
             grounded=True,
         )
-    except Exception as e:
-        print(f"  ⚠️ 검색 기반 제공자 전부 실패({e}) — 보수 모드(불변 기록 소재)로 폴백")
+        print("  ✓ 검색 그라운딩으로 소재 조사")
+    except Exception:
+        print("  ℹ️ 그라운딩 할당량 없음 — 보수 모드(불변 기록 소재)로 진행")
         topic = call_agent(
             prompt=_researcher_prompt(context, grounded=False),
             agent_name="trend-researcher",

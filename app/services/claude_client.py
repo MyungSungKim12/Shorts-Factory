@@ -58,16 +58,17 @@ def call_agent(
         prompt: 에이전트에게 전달할 프롬프트
         agent_name: 에이전트 이름 (로깅용)
         max_tokens: 최대 응답 토큰 수
-        grounded: True면 웹 검색 기반 제공자만 사용 (Gemini 그라운딩 → Groq compound)
+        grounded: True면 Gemini 검색 그라운딩 시도 (할당량 있을 때만 성공, 없으면 상위에서 보수 모드로 폴백)
         prefer: 일반 호출 시 우선 제공자 ("gemini" | "groq")
 
     Returns:
         모델의 응답 텍스트 (JSON 문자열 또는 JSON 포함 텍스트)
     """
     if grounded:
+        # 검색 경로는 Gemini 그라운딩만 (Groq compound는 무료 티어에서 413으로 상시 실패해 제거).
+        # 그라운딩 할당량이 소진되면 이 호출은 실패하고, 리서처가 보수 모드로 폴백한다.
         providers = [
             ("gemini(검색)", lambda: _gemini_chain(prompt, max_tokens, agent_name, grounded=True)),
-            ("groq-compound(검색)", lambda: _groq_call(prompt, max_tokens, agent_name, grounded=True)),
         ]
     elif prefer == "groq":
         providers = [
@@ -177,19 +178,14 @@ def _gemini_generate(model: str, prompt: str, max_tokens: int, api_key: str, gro
 
 # ---------------------------------------------------------------- Groq
 
-def _groq_call(prompt: str, max_tokens: int, agent_name: str, grounded: bool = False) -> str:
+def _groq_call(prompt: str, max_tokens: int, agent_name: str) -> str:
     """Groq 호출 (OpenAI 호환 API). 무료 티어: gpt-oss-120b 일 1,000회/20만 토큰."""
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
         raise RuntimeError("GROQ_API_KEY 미설정 — console.groq.com에서 무료 발급")
 
-    if grounded:
-        # compound는 내장 웹 검색 지원 (JSON 강제 모드와 병용 불가 → 텍스트로 받고 파싱)
-        model = os.getenv("GROQ_GROUNDED_MODEL", "groq/compound")
-        json_mode = False
-    else:
-        model = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
-        json_mode = True
+    model = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+    json_mode = True
 
     last_error = "알 수 없는 오류"
     for attempt in range(len(_BACKOFF_SECONDS) + 1):

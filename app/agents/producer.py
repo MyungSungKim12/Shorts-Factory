@@ -324,11 +324,15 @@ _RANK_COLORS = {
 }
 
 
+# 상단 검은 띠 높이(px). 영상은 이 아래 (1920 - BANNER_H) 영역에 배치된다.
+BANNER_H = 320
+
+
 def _build_scene_overlay(title: str, items: dict, ranking_size: int,
                          revealed: set, current_rank, fontfile: str) -> str:
-    """상단 고정 타이틀 + 좌측 누적 순위 리스트 drawtext 필터 체인 생성.
+    """상단 검은 띠 타이틀 + 좌측 누적 순위 리스트 drawtext 필터 체인 생성.
 
-    - 타이틀: 반투명 박스 위 흰 글씨, 항상 표시 (중간 진입 시청자용 맥락)
+    - 타이틀: 상단 검은 띠(BANNER_H) 안 흰 글씨, 항상 표시 (배경과 무관하게 선명)
     - 리스트: 번호는 순위별 고유 색, 이름은 흰색. 공개된 순위만 이름 채움
     - 현재 순위 줄은 글자를 키워 강조
     """
@@ -340,25 +344,28 @@ def _build_scene_overlay(title: str, items: dict, ranking_size: int,
 
     filters = []
 
-    # 상단 고정 타이틀 (최대 2줄)
-    for i, line in enumerate(_wrap_text(title, 15)[:2]):
+    # 상단 검은 띠 안 타이틀 (최대 2줄) — 띠 안에서 세로 중앙 정렬
+    title_lines = _wrap_text(title, 15)[:2]
+    line_h = 82
+    block_h = len(title_lines) * line_h
+    top = (BANNER_H - block_h) // 2
+    for i, line in enumerate(title_lines):
         filters.append(
-            f"drawtext=fontfile='{ff}':text='{esc(line)}':fontsize=56:fontcolor=white"
-            f":borderw=5:bordercolor=black:box=1:boxcolor=black@0.4:boxborderw=16"
-            f":x=(w-text_w)/2:y={64 + i * 86}"
+            f"drawtext=fontfile='{ff}':text='{esc(line)}':fontsize=64:fontcolor=white"
+            f":borderw=4:bordercolor=black:x=(w-text_w)/2:y={top + i * line_h}"
         )
 
-    # 좌측 누적 순위 리스트 (번호=순위색, 이름=흰색)
-    list_y_start = 290
-    line_height = 56
+    # 좌측 누적 순위 리스트 (번호=순위색, 이름=흰색) — 검은 띠 바로 아래에서 시작, 크게
+    list_y_start = BANNER_H + 40
+    line_height = 78
     for r in range(1, ranking_size + 1):
         y = list_y_start + (r - 1) * line_height
-        size = 44 if r == current_rank else 36  # 현재 순위 강조
+        size = 62 if r == current_rank else 50  # 현재 순위 강조
         num_color = _RANK_COLORS.get(r, "white")
 
         filters.append(
             f"drawtext=fontfile='{ff}':text='{esc(str(r))}.':fontsize={size}"
-            f":fontcolor={num_color}:borderw=5:bordercolor=black:x=36:y={y}"
+            f":fontcolor={num_color}:borderw=6:bordercolor=black:x=44:y={y}"
         )
 
         name = items.get(r, "") if r in revealed else ""
@@ -367,7 +374,7 @@ def _build_scene_overlay(title: str, items: dict, ranking_size: int,
                 name = name[:12] + "…"
             filters.append(
                 f"drawtext=fontfile='{ff}':text='{esc(name)}':fontsize={size}"
-                f":fontcolor=white:borderw=5:bordercolor=black:x=118:y={y}"
+                f":fontcolor=white:borderw=6:bordercolor=black:x=150:y={y}"
             )
 
     return "," + ",".join(filters)
@@ -382,12 +389,17 @@ def _encode_scene_video(media_file: str, mp3_file: str, output_mp4: str, ffmpeg_
     tts_speed = os.getenv("TTS_SPEED", "1.2")
 
     # 모든 씬을 동일 규격(1080x1920/30fps/44.1kHz)으로 통일 — concat 싱크 어긋남 방지
-    # scale+crop: 화면을 꽉 채우고 넘치는 부분은 잘라냄 (레터박스 없음)
-    normalize_vf = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30"
-
-    # 타이틀 + 누적 순위 리스트 오버레이
     if extra_vf:
+        # 오버레이가 있으면: 영상을 상단 검은 띠(BANNER_H) 아래 영역에 채우고 위를 검게 패딩
+        vid_h = 1920 - BANNER_H
+        normalize_vf = (
+            f"scale=1080:{vid_h}:force_original_aspect_ratio=increase,"
+            f"crop=1080:{vid_h},pad=1080:1920:0:{BANNER_H}:black,fps=30"
+        )
         normalize_vf += extra_vf
+    else:
+        # 오버레이 없으면 화면 꽉 채움 (레터박스 없음)
+        normalize_vf = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30"
 
     if is_video:
         # 비디오(무한 반복) + 나레이션 — 나레이션 길이에 정확히 맞춤
