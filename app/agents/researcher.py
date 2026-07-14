@@ -6,6 +6,39 @@ from pathlib import Path
 from app.services.claude_client import call_agent
 from app.services.web_search import search_ranking_topics
 
+# 회차별 고정 카테고리 — 매일 4개 영상이 서로 다른 결로 나오고, 카테고리별 성과 비교(A/B)도 됨.
+# desc는 "무료 스톡(Pexels) 영상이 존재하는 대상"으로 유도하는 게 핵심.
+SLOT_CATEGORIES = {
+    1: {
+        "name": "동물/펫",
+        "desc": "강아지·고양이·아기동물·희귀동물·귀여운 동물의 순위. "
+                "전 연령이 좋아하고 공유가 잘 되는 대중적 소재.",
+        "examples": "가장 비싼 반려견 품종, 가장 큰 고양이 품종, 가장 오래 사는 동물, "
+                    "가장 빠른 동물, 가장 귀여운 아기동물",
+    },
+    2: {
+        "name": "여행/명소",
+        "desc": "가고 싶은 도시·해변·야경·랜드마크·이색 명소의 순위. "
+                "20~30대 버킷리스트 소구, 스톡 영상 풍부.",
+        "examples": "죽기 전 꼭 가봐야 할 여행지, 세계에서 가장 아름다운 해변, "
+                    "야경이 예쁜 도시, 이색적인 호텔",
+    },
+    3: {
+        "name": "역사",
+        "desc": "고대 문명·유적·왕조·역사적 사건·발명의 순위. "
+                "스토리성이 강해 체류시간 유리. 시각은 유적·유물·자연 등 일반 스톡으로 표현.",
+        "examples": "가장 오래된 문명, 역사상 가장 거대했던 제국, 세계 7대 불가사의, "
+                    "가장 오래된 건축물",
+    },
+    4: {
+        "name": "미스터리",
+        "desc": "미해결 사건·불가사의·기이한 현상·수수께끼의 순위. "
+                "궁금증 유발이 커 끝까지 보게 함. 분위기 있는 일반 스톡(안개·심해·우주 등)으로 표현.",
+        "examples": "아직도 못 푼 세계의 미스터리, 사라진 문명, 설명 불가능한 자연현상, "
+                    "미스터리한 심해 생물",
+    },
+}
+
 
 def _load_recent_topics(data_dir: Path, days: int = 14) -> list:
     """최근 업로드된 영상 제목을 DB에서 조회 (소재 중복 방지용)."""
@@ -47,11 +80,23 @@ def run_researcher(data_dir: Path, run_id: str = None, recent_topics: list = Non
     work_dir = data_dir / "work" / run_id
     work_dir.mkdir(parents=True, exist_ok=True)
 
+    # 회차(run_id 끝의 -N)로 카테고리 결정
+    slot = None
+    if "-" in run_id:
+        try:
+            slot = int(run_id.rsplit("-", 1)[1])
+        except ValueError:
+            slot = None
+    category = SLOT_CATEGORIES.get(slot)
+
     # 프롬프트에 전달할 컨텍스트
     context = {
         "ranking_size": 5,
         "recent_topics": recent_topics,
+        "category": category,
     }
+    if category:
+        print(f"  · 회차 {slot} 카테고리: {category['name']}")
 
     # 1순위: Gemini 검색 그라운딩 (할당량 있을 때만 성공 — 실제 검색으로 사실 확인)
     # 폴백: 검색 없이 "불변 기록·수치 소재만" 보수 모드
@@ -112,16 +157,27 @@ def _researcher_prompt(context: dict, grounded: bool = True) -> str:
 - fact에는 반드시 구체적 수치를 넣어라.
 - 모든 항목의 name/fact/source를 실제 내용으로 채워라. "..."나 빈 값은 절대 금지."""
 
+    category = context.get("category")
+    if category:
+        cat_block = (
+            f"- 카테고리: **{category['name']}** — {category['desc']}\n"
+            f"  반드시 이 카테고리 안에서 소재를 골라라. 예시: {category['examples']}"
+        )
+        cat_step1 = f"1. **{category['name']}** 카테고리 안에서 랭킹 소재 후보를 4개 이상 떠올려라."
+    else:
+        cat_block = "- 포맷: 주제 무관 랭킹"
+        cat_step1 = ("1. 랭킹 소재 후보를 4개 이상 떠올려라.\n"
+                     "   (예: 세계에서 가장 매운 고추, 가장 깊은 바다, 가장 빠른 동물 등)")
+
     return f"""당신은 랭킹 콘텐츠 소재 발굴 전문가다. 순위를 매길 수 있고, 1위가 궁금해지는 소재만 고른다.
 
 [채널 정보]
-- 포맷: TOP {context['ranking_size']} 랭킹 숏츠 (한국어, 주제 무관)
+- 포맷: TOP {context['ranking_size']} 랭킹 숏츠 (한국어)
+{cat_block}
 - 최근 14일 사용 소재(중복 금지): {context['recent_topics'] if context['recent_topics'] else '없음'}
 
 [작업]
-1. 랭킹 소재 후보를 4개 이상 떠올려라.
-   (예: 세계에서 가장 매운 고추 — 스코빌 지수, 가장 깊은 바다, 가장 빠른 동물 등
-   객관적 수치·기록이 존재하는 분야)
+{cat_step1}
 2. 각 후보를 점수화하라:
    - 1위 의외성(0-5): 사람들이 예상한 1위와 실제 1위가 다른가?
    - 대중성(0-5): 사전지식 없이 이해 가능한가?
