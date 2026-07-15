@@ -389,6 +389,14 @@ def _build_scene_overlay(title: str, items: dict, ranking_size: int,
         # drawtext 텍스트는 작은따옴표로 감싸므로 따옴표만 무력화하면 안전
         return t.replace("\\", "").replace("'", "’")
 
+    def short_name(t: str, limit: int = 12) -> str:
+        # 괄호 부연(예: "(이집트)") 제거 → 리스트를 짧고 깔끔하게
+        t = _re.sub(r'\s*[\(（].*?[\)）]', '', t).strip()
+        # 말줄임표는 주아체 글리프 없어 깨지므로 ".." 사용
+        if len(t) > limit:
+            t = t[:limit] + ".."
+        return t
+
     filters = []
 
     # 상단 검은 띠 안 타이틀 (최대 2줄) — 띠 안에서 세로 중앙 정렬
@@ -417,8 +425,7 @@ def _build_scene_overlay(title: str, items: dict, ranking_size: int,
 
         name = items.get(r, "") if r in revealed else ""
         if name:
-            if len(name) > 13:
-                name = name[:12] + "…"
+            name = short_name(name)
             filters.append(
                 f"drawtext=fontfile='{ff}':text='{esc(name)}':fontsize={size}"
                 f":fontcolor=white:borderw=6:bordercolor=black:x=150:y={y}"

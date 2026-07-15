@@ -34,16 +34,9 @@ def run_writer(data_dir: Path, date_str: str) -> dict:
         prefer="groq",
     )
 
-    # JSON 파싱
-    try:
-        script_dict = json.loads(script_text)
-    except json.JSONDecodeError:
-        import re
-        match = re.search(r'\{.*\}', script_text, re.DOTALL)
-        if match:
-            script_dict = json.loads(match.group())
-        else:
-            raise ValueError(f"작가 응답을 JSON으로 파싱할 수 없음:\n{script_text}")
+    # JSON 파싱 (견고 추출 — 코드펜스·후행 텍스트 제거)
+    from app.services.json_extract import extract_json
+    script_dict = extract_json(script_text)
 
     # 검증 게이트 — 역순 구조/길이 정합성/제목 길이 검사. 실패 시 파이프라인 중단.
     from app.models import validate_script

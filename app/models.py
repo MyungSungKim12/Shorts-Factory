@@ -79,12 +79,12 @@ class ScriptContract(BaseModel):
         if ranked and ranked != sorted(ranked, reverse=True):
             raise ValueError(f"순위 씬이 역순(N→1)이 아님: {ranked}")
 
-        # 씬 합계와 명시된 총 길이의 정합성 (±5초 허용)
+        # 실제 영상 길이는 씬 duration 합계로 결정됨. total_duration_sec는 표시용이라
+        # 불일치해도 실패시키지 않고 합계로 자동 보정 (모델의 사소한 계산 오차로 회차를 날리지 않음).
         total = sum(s.duration_sec for s in self.scenes)
-        if abs(total - self.total_duration_sec) > 5:
-            raise ValueError(
-                f"씬 duration 합계({total:.0f}초) ≠ total_duration_sec({self.total_duration_sec:.0f}초)"
-            )
+        if not 5 <= total <= 180:
+            raise ValueError(f"씬 duration 합계 {total:.0f}초 — 숏츠 범위(5~180초) 벗어남")
+        self.total_duration_sec = round(total, 1)
         return self
 
 

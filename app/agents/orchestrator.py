@@ -129,6 +129,17 @@ async def run_pipeline(data_dir: Path, ffmpeg_path: str, slot: int = None) -> di
         else:
             print(f"[4/4] 업로드 건너뜀: {upload_result.get('reason', '')}")
 
+        # 5. 분석가 — 기존 영상 성과 수집 + 카테고리별 리포트 갱신 (실패해도 파이프라인 성공 유지)
+        try:
+            print("[분석] 성과 리포트 갱신 중...")
+            from app.agents.analyst import run_analyst
+            report = run_analyst(data_dir)
+            run_log["stages"]["analyst"] = {"status": "success", "insight": report.get("insight", "")}
+            print(f"  ✓ {report.get('insight', '')}")
+        except Exception as e:
+            run_log["stages"]["analyst"] = {"status": "error", "error": str(e)}
+            print(f"  ⚠️ 분석가 실패(무시): {e}")
+
         # 메시지를 확정한 뒤 로그 저장 (저장 후 설정하면 파일에 빈 메시지가 남는 버그 방지)
         run_log["message"] = "파이프라인 완료"
         log_file = data_dir / "logs" / f"run-{run_id}.json"

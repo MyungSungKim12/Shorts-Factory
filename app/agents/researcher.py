@@ -116,16 +116,9 @@ def run_researcher(data_dir: Path, run_id: str = None, recent_topics: list = Non
             grounded=False,
         )
 
-    # JSON 파싱 (그라운딩 모드는 JSON 강제가 안 되므로 블록 추출 폴백 필수)
-    try:
-        topic_dict = json.loads(topic)
-    except json.JSONDecodeError:
-        import re
-        match = re.search(r'\{.*\}', topic, re.DOTALL)
-        if match:
-            topic_dict = json.loads(match.group())
-        else:
-            raise ValueError(f"리서처 응답을 JSON으로 파싱할 수 없음:\n{topic}")
+    # JSON 파싱 (그라운딩 모드는 JSON 강제가 안 돼 뒤에 인용·설명이 붙을 수 있음 → 견고 추출)
+    from app.services.json_extract import extract_json
+    topic_dict = extract_json(topic)
 
     # 검증 게이트 — 순위 완결성/자리표시자/출처 누락 검사. 실패 시 파이프라인 중단.
     from app.models import validate_topic
