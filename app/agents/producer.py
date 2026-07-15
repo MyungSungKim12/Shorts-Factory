@@ -9,7 +9,7 @@ from pathlib import Path
 from gtts import gTTS
 import requests
 
-from app.services.image_downloader import download_video, download_image
+from app.services.image_downloader import download_video, download_video_pixabay, download_image
 
 
 async def run_producer(data_dir: Path, date_str: str, ffmpeg_path: str) -> dict:
@@ -106,7 +106,7 @@ async def run_producer(data_dir: Path, date_str: str, ffmpeg_path: str) -> dict:
         output_mp4 = work_dir / "output.mp4"
         _concat_videos(scene_videos, str(output_mp4), ffmpeg_path, tmp_path)
 
-        # 5. 로그 저장
+        # 6. 로그 저장
         produce_log = {
             "date": date_str,
             "timestamp": datetime.now().isoformat(),
@@ -120,13 +120,42 @@ async def run_producer(data_dir: Path, date_str: str, ffmpeg_path: str) -> dict:
         return produce_log
 
 
+# 단위·기호 → TTS 발음용 한글. 자막에는 원본 기호가 그대로 보이고, 음성만 이 변환을 거친다.
+# (순서 중요: 제곱 단위를 먼저 처리해야 "제곱킬로미터"가 "킬로미터제곱"으로 깨지지 않음)
+import re as _re
+
+_TTS_UNIT_RULES = [
+    (_re.compile(r'km²|㎢|km2'), '제곱킬로미터'),
+    (_re.compile(r'm²|㎡|m2'), '제곱미터'),
+    (_re.compile(r'km³|km3'), '세제곱킬로미터'),
+    (_re.compile(r'm³|㎥|m3'), '세제곱미터'),
+    (_re.compile(r'(?<=\d)\s*km/h'), '킬로미터퍼아워'),
+    (_re.compile(r'(?<=\d)\s*km(?![a-zA-Z])'), '킬로미터'),
+    (_re.compile(r'(?<=\d)\s*cm(?![a-zA-Z])'), '센티미터'),
+    (_re.compile(r'(?<=\d)\s*mm(?![a-zA-Z])'), '밀리미터'),
+    (_re.compile(r'(?<=\d)\s*m(?![a-zA-Z²³])'), '미터'),
+    (_re.compile(r'(?<=\d)\s*kg(?![a-zA-Z])'), '킬로그램'),
+    (_re.compile(r'(?<=\d)\s*%'), '퍼센트'),
+    (_re.compile(r'(?<=\d)\s*℃'), '도'),
+    (_re.compile(r'²'), '제곱'),
+    (_re.compile(r'³'), '세제곱'),
+]
+
+
+def _tts_text(text: str) -> str:
+    """나레이션을 TTS가 정확히 읽도록 단위 기호를 한글로 치환 (음성 전용)."""
+    for pattern, repl in _TTS_UNIT_RULES:
+        text = pattern.sub(repl, text)
+    return text
+
+
 async def _generate_tts(script: dict, tmp_path: Path) -> dict:
-    """각 씬별로 TTS mp3 파일 생성 (한국어)."""
+    """각 씬별로 TTS mp3 파일 생성 (한국어). 단위 기호는 발음용 한글로 치환."""
     mp3_files = {}
 
     for scene in script.get("scenes", []):
         scene_n = scene["n"]
-        narration = scene["narration"]
+        narration = _tts_text(scene["narration"])
         mp3_file = tmp_path / f"scene_{scene_n}.mp3"
 
         # gTTS로 음성 생성 (한국어 고정)
@@ -139,29 +168,46 @@ async def _generate_tts(script: dict, tmp_path: Path) -> dict:
 
 
 async def _download_videos(script: dict, tmp_path: Path) -> dict:
-    """각 씬별 visual 키워드로 Pexels 비디오 다운로드."""
+    """각 씬별 visual 키워드로 비디오 확보.
+
+    폴백 순서: Pexels 비디오 → Pixabay 비디오 → Pexels 이미지 → 검은 배경.
+    (무료 소스 2곳을 다 뒤져 실제 영상 확보율을 최대화)
+    """
     video_files = {}
+    have_pixabay = bool(os.getenv("PIXABAY_API_KEY"))
 
     for scene in script.get("scenes", []):
         scene_n = scene["n"]
         visual_keyword = scene.get("visual", "background")
-
         video_file = tmp_path / f"scene_{scene_n}.mp4"
 
-        # Pexels 비디오 다운로드
+        # 1) Pexels 비디오
         try:
             await download_video(visual_keyword, str(video_file))
             video_files[scene_n] = video_file
-        except Exception as e:
-            print(f"  ⚠️ 씬 {scene_n} 비디오 다운로드 실패: {e}")
-            # 폴백: 이미지로 대체
-            image_file = tmp_path / f"scene_{scene_n}.jpg"
+            continue
+        except Exception:
+            pass
+
+        # 2) Pixabay 비디오
+        if have_pixabay:
             try:
-                await download_image(visual_keyword, str(image_file))
-                video_files[scene_n] = image_file
-            except:
-                _create_black_bg(image_file)
-                video_files[scene_n] = image_file
+                await download_video_pixabay(visual_keyword, str(video_file))
+                video_files[scene_n] = video_file
+                print(f"  · 씬 {scene_n}: Pixabay 비디오로 확보")
+                continue
+            except Exception:
+                pass
+
+        # 3) 이미지 폴백 → 4) 검은 배경
+        image_file = tmp_path / f"scene_{scene_n}.jpg"
+        try:
+            await download_image(visual_keyword, str(image_file))
+            print(f"  · 씬 {scene_n}: 비디오 없음 → 이미지로 대체")
+        except Exception:
+            _create_black_bg(image_file)
+            print(f"  ⚠️ 씬 {scene_n}: 소스 없음 → 검은 배경")
+        video_files[scene_n] = image_file
 
     return video_files
 
@@ -324,8 +370,9 @@ _RANK_COLORS = {
 }
 
 
-# 상단 검은 띠 높이(px). 영상은 이 아래 (1920 - BANNER_H) 영역에 배치된다.
-BANNER_H = 320
+# 상·하단 검은 띠 높이(px). 영상은 이 사이 (1920 - BANNER_H - BANNER_BOTTOM_H) 영역에 배치된다.
+BANNER_H = 320          # 상단: 타이틀 + 순위 리스트
+BANNER_BOTTOM_H = 300   # 하단: 자막 영역 (영상을 안 가림)
 
 
 def _build_scene_overlay(title: str, items: dict, ranking_size: int,
@@ -390,8 +437,8 @@ def _encode_scene_video(media_file: str, mp3_file: str, output_mp4: str, ffmpeg_
 
     # 모든 씬을 동일 규격(1080x1920/30fps/44.1kHz)으로 통일 — concat 싱크 어긋남 방지
     if extra_vf:
-        # 오버레이가 있으면: 영상을 상단 검은 띠(BANNER_H) 아래 영역에 채우고 위를 검게 패딩
-        vid_h = 1920 - BANNER_H
+        # 오버레이가 있으면: 영상을 상·하단 검은 띠 사이 영역에 채우고 위아래를 검게 패딩
+        vid_h = 1920 - BANNER_H - BANNER_BOTTOM_H
         normalize_vf = (
             f"scale=1080:{vid_h}:force_original_aspect_ratio=increase,"
             f"crop=1080:{vid_h},pad=1080:1920:0:{BANNER_H}:black,fps=30"
@@ -504,9 +551,12 @@ def _concat_videos(scene_videos: list, output_mp4: str, ffmpeg_path: str, tmp_pa
     # 씬들이 이미 1080x1920/30fps로 통일돼 있으므로 여기선 자막 굽기 + BGM 합성만
     # 폰트: Windows=Malgun Gothic, 리눅스 서버=NanumGothic (.env로 변경)
     subtitle_font = os.getenv("SUBTITLE_FONT", "Malgun Gothic")
+    # 자막을 하단 검은 띠 안에 배치 (MarginV는 하단에서의 거리 → 띠 중앙쯤).
+    # 1080x1920 기준 스타일이므로 폰트도 키움.
+    sub_margin = BANNER_BOTTOM_H // 3
     subtitle_style = (
-        f"FontName={subtitle_font},FontSize=13,Bold=1,"
-        "PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,MarginV=70"
+        f"FontName={subtitle_font},FontSize=18,Bold=1,"
+        f"PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=3,MarginV={sub_margin}"
     )
     filters = []
     if (tmp_path / "subs.srt").exists():

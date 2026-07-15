@@ -170,8 +170,8 @@ def _validate_video_file(video_file: Path) -> None:
     info = json.loads(result.stdout)
 
     duration = float(info.get("format", {}).get("duration", 0))
-    if not 5 <= duration < 60:
-        raise ValueError(f"영상 길이 {duration:.1f}초 — 숏츠 조건(5~60초) 위반")
+    if not 5 <= duration < 180:
+        raise ValueError(f"영상 길이 {duration:.1f}초 — 숏츠 조건(5~180초) 위반")
 
     video_stream = next((s for s in info.get("streams", []) if s.get("codec_type") == "video"), None)
     if not video_stream:

@@ -69,7 +69,8 @@ class ScriptContract(BaseModel):
     hook: str = ""
     scenes: list[Scene] = Field(min_length=3)
     cta: str = ""
-    total_duration_sec: float = Field(gt=0, le=60)
+    # 숏츠 상한은 180초 — 목표는 40~60초지만 초과해도 오류로 막지 않고 통과시킴
+    total_duration_sec: float = Field(gt=0, le=180)
 
     @model_validator(mode="after")
     def _structure_rules(self):

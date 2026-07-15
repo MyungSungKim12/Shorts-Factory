@@ -124,3 +124,54 @@ async def download_video(keyword: str, output_path: str, api_key: str = None) ->
 
     except requests.RequestException as e:
         raise RuntimeError(f"비디오 다운로드 실패: {e}")
+
+
+async def download_video_pixabay(keyword: str, output_path: str, api_key: str = None) -> str:
+    """Pixabay API로 세로형 비디오 다운로드 (Pexels 폴백용)."""
+    if api_key is None:
+        api_key = os.getenv("PIXABAY_API_KEY")
+    if not api_key:
+        raise ValueError("PIXABAY_API_KEY 환경변수가 없습니다")
+
+    try:
+        response = requests.get(
+            "https://pixabay.com/api/videos/",
+            params={"key": api_key, "q": keyword, "per_page": 3},
+            timeout=10,
+        )
+        response.raise_for_status()
+        hits = response.json().get("hits", [])
+
+        if not hits:
+            keyword_general = keyword.split()[0]
+            if keyword_general != keyword:
+                return await download_video_pixabay(keyword_general, output_path, api_key)
+            raise ValueError(f"Pixabay 검색 결과 없음: {keyword}")
+
+        # 세로형(height>width) 우선, 없으면 첫 결과. Pixabay는 large/medium/small 버전 제공
+        def pick(hit):
+            vids = hit.get("videos", {})
+            return vids.get("large") or vids.get("medium") or vids.get("small")
+
+        chosen = None
+        for hit in hits:
+            v = pick(hit)
+            if v and v.get("height", 0) >= v.get("width", 0):
+                chosen = v
+                break
+        if not chosen:
+            chosen = pick(hits[0])
+        if not chosen or not chosen.get("url"):
+            raise ValueError("Pixabay 비디오 URL 없음")
+
+        video_response = requests.get(chosen["url"], timeout=30)
+        video_response.raise_for_status()
+
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        with open(output_path, "wb") as f:
+            f.write(video_response.content)
+
+        return output_path
+
+    except requests.RequestException as e:
+        raise RuntimeError(f"Pixabay 비디오 다운로드 실패: {e}")
