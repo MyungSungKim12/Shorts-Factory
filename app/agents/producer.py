@@ -74,8 +74,11 @@ async def run_producer(data_dir: Path, date_str: str, ffmpeg_path: str) -> dict:
         fontfile = _overlay_fontfile()
 
         # 4. 각 씬을 mp4로 인코딩 (비디오 + 음성 + 오버레이)
+        #    첫 씬(훅)은 전체화면 + 큰 반전 문구 (순위 리스트 없음 → 자동템플릿 인상 완화, 시청 시작 유도).
+        #    2번째 씬부터 상단 타이틀 띠 + 좌측 누적 순위 리스트.
         print("  → 씬별 영상 생성 중...")
         scene_videos = []
+        hook_idx = 0  # 첫 씬을 훅으로 취급
         for idx, scene in enumerate(scenes):
             scene_n = scene["n"]
             mp3_file = mp3_files.get(scene_n)
@@ -84,28 +87,38 @@ async def run_producer(data_dir: Path, date_str: str, ffmpeg_path: str) -> dict:
             if not (mp3_file and video_file):
                 continue
 
-            revealed = {r for r, at in reveal_at.items() if at <= idx}
-            extra_vf = ""
-            if items_map and fontfile:
-                extra_vf = _build_scene_overlay(
-                    topic_title, items_map, ranking_size, revealed,
-                    scene.get("rank"), fontfile,
-                )
-
-            # 입력(다운로드 원본)과 출력 파일명이 겹치지 않게 enc_ 접두어 사용
             scene_video = tmp_path / f"enc_{scene_n}.mp4"
-            _encode_scene_video(
-                str(video_file), str(mp3_file), str(scene_video), ffmpeg_path,
-                extra_vf=extra_vf,
-            )
+            is_hook = (idx == hook_idx)
+
+            if is_hook and fontfile:
+                # 전체화면 훅: 순위 리스트 없이 큰 반전 문구만
+                hook_vf = _build_hook_overlay(scene.get("narration", ""), fontfile)
+                _encode_scene_video(
+                    str(video_file), str(mp3_file), str(scene_video), ffmpeg_path,
+                    extra_vf=hook_vf, fullscreen=True,
+                )
+            else:
+                revealed = {r for r, at in reveal_at.items() if at <= idx}
+                extra_vf = ""
+                if items_map and fontfile:
+                    extra_vf = _build_scene_overlay(
+                        topic_title, items_map, ranking_size, revealed,
+                        scene.get("rank"), fontfile,
+                    )
+                _encode_scene_video(
+                    str(video_file), str(mp3_file), str(scene_video), ffmpeg_path,
+                    extra_vf=extra_vf,
+                )
             scene_videos.append((scene_n, scene_video))
 
         if not scene_videos:
             raise RuntimeError("인코딩된 씬이 없습니다")
 
-        # 4. 자막 생성 (씬별 실제 길이 측정 → 타이밍 정확한 SRT)
+        # 4. 자막 생성 — 훅 씬은 큰 문구로 이미 표시되므로 하단 자막에서 제외
         print("  → 자막 생성 중...")
-        _build_srt(script, scene_videos, ffmpeg_path, tmp_path / "subs.srt")
+        hook_scene_n = scene_videos[0][0] if scene_videos else None
+        _build_srt(script, scene_videos, ffmpeg_path, tmp_path / "subs.srt",
+                   skip_scenes={hook_scene_n} if hook_scene_n else set())
 
         # 5. 씬들을 연결 + 자막 굽기
         print("  → 씬 연결 및 자막 합성 중...")
@@ -140,6 +153,8 @@ async def run_producer(data_dir: Path, date_str: str, ffmpeg_path: str) -> dict:
                 {"scene": n, **dl_meta.get(n, {})} for n, _ in scene_videos
             ],
             "fallback_scenes": sum(1 for m in dl_meta.values() if m.get("fallback")),
+            # 실험 태그 — 첫화면/훅 개편 전후 성과 비교용 (분석 시 참고)
+            "experiment": os.getenv("EXPERIMENT_TAG", "hook_v2_fullscreen"),
         }
         # 계획과 실제가 10초 이상 벌어지면 경고 (대본 길이 산정 개선 신호)
         if abs(actual_dur - planned_dur) > 10:
@@ -347,8 +362,13 @@ def _split_caption(text: str, max_len: int = 26) -> list:
     return chunks or [text]
 
 
-def _build_srt(script: dict, scene_videos: list, ffmpeg_path: str, srt_path: Path) -> None:
-    """씬별 실제 길이 측정 + 나레이션을 문장 단위로 분할해 순차 표시되는 SRT 생성."""
+def _build_srt(script: dict, scene_videos: list, ffmpeg_path: str, srt_path: Path,
+               skip_scenes: set = None) -> None:
+    """씬별 실제 길이 측정 + 나레이션을 문장 단위로 분할해 순차 표시되는 SRT 생성.
+
+    skip_scenes에 든 씬은 하단 자막을 넣지 않는다(시간은 진행) — 훅 씬은 큰 문구로 이미 표시되므로.
+    """
+    skip_scenes = skip_scenes or set()
     narrations = {s["n"]: _clean_caption(s["narration"]) for s in script.get("scenes", [])}
     planned = {s["n"]: float(s.get("duration_sec", 5)) for s in script.get("scenes", [])}
 
@@ -360,7 +380,7 @@ def _build_srt(script: dict, scene_videos: list, ffmpeg_path: str, srt_path: Pat
         if duration <= 0:
             # 측정 실패 시 대본의 계획 길이로 대체 (자막이 0초가 되는 사고 방지)
             duration = planned.get(scene_n, 5.0)
-        text = narrations.get(scene_n, "")
+        text = "" if scene_n in skip_scenes else narrations.get(scene_n, "")
         if not text:
             current += duration
             continue
@@ -444,6 +464,37 @@ BANNER_H = 320          # 상단: 타이틀 + 순위 리스트
 BANNER_BOTTOM_H = 300   # 하단: 자막 영역 (영상을 안 가림)
 
 
+def _build_hook_overlay(hook_text: str, fontfile: str) -> str:
+    """훅 씬용 전체화면 큰 문구 오버레이. 순위 리스트 없이 반전 문구만 화면 중앙에 크게.
+
+    시청 시작(Appeal)을 높이려는 첫 화면 — 자동템플릿 인상을 주는 띠·리스트를 첫 씬엔 안 쓴다.
+    """
+    ff = fontfile.replace(":", "\\:")
+
+    def esc(t: str) -> str:
+        return t.replace("\\", "").replace("'", "’")
+
+    # 훅 문장 전체를 표시하되, 길이에 따라 폰트·줄폭을 자동 조절 (문장 잘림 방지).
+    # 짧으면 크게, 길면 폭을 넓히고 폰트를 줄여서 3줄짜리 하드컷으로 문장이 끊기는 사고를 없앤다.
+    for width, fontsize, line_h in [(11, 88, 118), (14, 72, 98), (17, 60, 82), (20, 50, 70)]:
+        lines = _wrap_text(hook_text, width)
+        if len(lines) <= 4:
+            break
+    else:
+        lines = _wrap_text(hook_text, 20)  # 그래도 길면 그대로(잘리지 않게 전부 표시)
+
+    block_h = len(lines) * line_h
+    top = max(60, (1920 - block_h) // 2 - 100)  # 화면 중앙보다 살짝 위, 최소 여백 확보
+    filters = []
+    for i, line in enumerate(lines):
+        filters.append(
+            f"drawtext=fontfile='{ff}':text='{esc(line)}':fontsize={fontsize}:fontcolor=white"
+            f":borderw=7:bordercolor=black:box=1:boxcolor=black@0.45:boxborderw=20"
+            f":x=(w-text_w)/2:y={top + i * line_h}"
+        )
+    return "," + ",".join(filters)
+
+
 def _build_scene_overlay(title: str, items: dict, ranking_size: int,
                          revealed: set, current_rank, fontfile: str) -> str:
     """상단 검은 띠 타이틀 + 좌측 누적 순위 리스트 drawtext 필터 체인 생성.
@@ -503,8 +554,12 @@ def _build_scene_overlay(title: str, items: dict, ranking_size: int,
     return "," + ",".join(filters)
 
 
-def _encode_scene_video(media_file: str, mp3_file: str, output_mp4: str, ffmpeg_path: str, extra_vf: str = "") -> None:
-    """한 씬을 비디오/이미지 + 음성으로 mp4 인코딩. extra_vf로 오버레이 필터 추가."""
+def _encode_scene_video(media_file: str, mp3_file: str, output_mp4: str, ffmpeg_path: str,
+                        extra_vf: str = "", fullscreen: bool = False) -> None:
+    """한 씬을 비디오/이미지 + 음성으로 mp4 인코딩. extra_vf로 오버레이 필터 추가.
+
+    fullscreen=True면 상·하단 띠 없이 화면을 꽉 채운다 (훅 씬용).
+    """
     # 미디어 파일이 .mp4면 비디오, .jpg면 이미지
     is_video = media_file.lower().endswith('.mp4')
 
@@ -512,7 +567,7 @@ def _encode_scene_video(media_file: str, mp3_file: str, output_mp4: str, ffmpeg_
     tts_speed = os.getenv("TTS_SPEED", "1.2")
 
     # 모든 씬을 동일 규격(1080x1920/30fps/44.1kHz)으로 통일 — concat 싱크 어긋남 방지
-    if extra_vf:
+    if extra_vf and not fullscreen:
         # 오버레이가 있으면: 영상을 상·하단 검은 띠 사이 영역에 채우고 위아래를 검게 패딩
         vid_h = 1920 - BANNER_H - BANNER_BOTTOM_H
         normalize_vf = (
@@ -521,8 +576,10 @@ def _encode_scene_video(media_file: str, mp3_file: str, output_mp4: str, ffmpeg_
         )
         normalize_vf += extra_vf
     else:
-        # 오버레이 없으면 화면 꽉 채움 (레터박스 없음)
+        # 훅 씬(fullscreen) 또는 오버레이 없음: 화면 꽉 채움. 훅이면 그 위에 큰 문구.
         normalize_vf = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30"
+        if extra_vf and fullscreen:
+            normalize_vf += extra_vf
 
     if is_video:
         # 비디오(무한 반복) + 나레이션 — 나레이션 길이에 정확히 맞춤
