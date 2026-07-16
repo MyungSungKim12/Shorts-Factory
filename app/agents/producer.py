@@ -112,15 +112,18 @@ async def run_producer(data_dir: Path, date_str: str, ffmpeg_path: str) -> dict:
         output_mp4 = work_dir / "output.mp4"
         _concat_videos(scene_videos, str(output_mp4), ffmpeg_path, tmp_path)
 
-        # 6. 실제 완성 길이 측정 + 계획 대비 기록. 60초 초과면 여기서 중단(업로드 낭비 방지).
+        # 6. 실제 완성 길이 측정 + 계획 대비 기록. 숏츠 상한(180초) 초과만 중단.
+        #    60초를 살짝 넘겨도 정상 숏츠이므로 업로드한다 (영상을 날리지 않음).
         actual_dur = _media_duration(str(output_mp4), ffmpeg_path)
         planned_dur = float(script.get("total_duration_sec", 0))
-        max_sec = int(os.getenv("MAX_VIDEO_SEC", "60"))
+        max_sec = int(os.getenv("MAX_VIDEO_SEC", "180"))
         if actual_dur > max_sec:
             raise RuntimeError(
-                f"완성 영상 {actual_dur:.1f}초 > 한도 {max_sec}초 — 중단. "
-                f"(계획 {planned_dur:.0f}초, TTS가 계획보다 김 → 대본 축약 필요)"
+                f"완성 영상 {actual_dur:.1f}초 > 숏츠 상한 {max_sec}초 — 중단. "
+                f"(계획 {planned_dur:.0f}초, TTS가 비정상적으로 김 → 대본 축약 필요)"
             )
+        if actual_dur > 60:
+            print(f"  · 완성 {actual_dur:.0f}초 (목표 초과지만 숏츠 범위 내 → 업로드 진행)")
 
         # 7. 제작 로그 (실제 길이·계획 길이·씬별 소스·대본 해시)
         script_hash = _sha256(script_file.read_bytes())
