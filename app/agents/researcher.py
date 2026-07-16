@@ -15,6 +15,7 @@ SLOT_CATEGORIES = {
                 "전 연령이 좋아하고 공유가 잘 되는 대중적 소재.",
         "examples": "가장 비싼 반려견 품종, 가장 큰 고양이 품종, 가장 오래 사는 동물, "
                     "가장 빠른 동물, 가장 귀여운 아기동물",
+        "visual_fallback": "cute animal",   # 검색 실패 시 안전 대체 영상어
     },
     2: {
         "name": "여행/명소",
@@ -22,6 +23,7 @@ SLOT_CATEGORIES = {
                 "20~30대 버킷리스트 소구, 스톡 영상 풍부.",
         "examples": "죽기 전 꼭 가봐야 할 여행지, 세계에서 가장 아름다운 해변, "
                     "야경이 예쁜 도시, 이색적인 호텔",
+        "visual_fallback": "travel landscape",
     },
     3: {
         "name": "역사",
@@ -29,6 +31,7 @@ SLOT_CATEGORIES = {
                 "스토리성이 강해 체류시간 유리. 시각은 유적·유물·자연 등 일반 스톡으로 표현.",
         "examples": "가장 오래된 문명, 역사상 가장 거대했던 제국, 세계 7대 불가사의, "
                     "가장 오래된 건축물",
+        "visual_fallback": "ancient ruins",
     },
     4: {
         "name": "미스터리",
@@ -36,6 +39,7 @@ SLOT_CATEGORIES = {
                 "궁금증 유발이 커 끝까지 보게 함. 분위기 있는 일반 스톡(안개·심해·우주 등)으로 표현.",
         "examples": "아직도 못 푼 세계의 미스터리, 사라진 문명, 설명 불가능한 자연현상, "
                     "미스터리한 심해 생물",
+        "visual_fallback": "dark foggy atmosphere",
     },
 }
 
@@ -98,31 +102,42 @@ def run_researcher(data_dir: Path, run_id: str = None, recent_topics: list = Non
     if category:
         print(f"  · 회차 {slot} 카테고리: {category['name']}")
 
-    # 1순위: Gemini 검색 그라운딩 (할당량 있을 때만 성공 — 실제 검색으로 사실 확인)
-    # 폴백: 검색 없이 "불변 기록·수치 소재만" 보수 모드
-    #       (그라운딩 무료 할당량은 작아 대개 여기로 옴. 강한 모델+불변 기록이라 사실성 양호)
+    # 사실 검증 규칙(CLAUDE.md): 검증된 소재만 업로드. 검증 경로는 2가지뿐:
+    #   1) 그라운딩 검색 성공 → 검증 + 캐시에 저장 (grounded_search)
+    #   2) 그라운딩 실패 → 검증 캐시에서 재사용 (verified_cache)
+    #   둘 다 안 되면 회차 중단 (model_memory 업로드 금지)
+    from app.models import validate_topic
+    from app.services.fact_cache import save_verified, pick_cached, cache_size
+    from app.services.json_extract import extract_json
+
+    topic_dict = None
     try:
         topic = call_agent(
             prompt=_researcher_prompt(context, grounded=True),
             agent_name="trend-researcher",
             grounded=True,
         )
-        print("  ✓ 검색 그라운딩으로 소재 조사")
-    except Exception:
-        print("  ℹ️ 그라운딩 할당량 없음 — 보수 모드(불변 기록 소재)로 진행")
-        topic = call_agent(
-            prompt=_researcher_prompt(context, grounded=False),
-            agent_name="trend-researcher",
-            grounded=False,
-        )
+        topic_dict = validate_topic(extract_json(topic))
+        topic_dict["verification_method"] = "grounded_search"
+        topic_dict["verified_at"] = datetime.now().isoformat()
+        topic_dict = validate_topic(topic_dict)  # 방식 필드 반영해 재검증
+        save_verified(data_dir, slot, topic_dict)
+        print(f"  ✓ 검색 그라운딩으로 검증 (캐시 {cache_size(data_dir, slot)}건)")
+    except Exception as e:
+        print(f"  ℹ️ 그라운딩 검증 실패({str(e)[:60]}) — 검증 캐시에서 소재 찾기")
+        cached = pick_cached(data_dir, slot, recent_topics)
+        if cached:
+            topic_dict = validate_topic(cached)
+            print(f"  ✓ 검증 캐시 재사용: {topic_dict.get('topic', '')}")
+        else:
+            raise RuntimeError(
+                "검증 실패 + 캐시에 쓸 소재 없음 — 이 회차 중단 "
+                "(규칙상 미검증 소재는 업로드 불가). 그라운딩 할당량 회복 시 캐시가 채워짐"
+            )
 
-    # JSON 파싱 (그라운딩 모드는 JSON 강제가 안 돼 뒤에 인용·설명이 붙을 수 있음 → 견고 추출)
-    from app.services.json_extract import extract_json
-    topic_dict = extract_json(topic)
-
-    # 검증 게이트 — 순위 완결성/자리표시자/출처 누락 검사. 실패 시 파이프라인 중단.
-    from app.models import validate_topic
-    topic_dict = validate_topic(topic_dict)
+    # 업로드 가능 검증 방식인지 최종 확인 (방어)
+    if topic_dict.get("verification_method") not in ("grounded_search", "verified_cache"):
+        raise RuntimeError(f"미검증 소재({topic_dict.get('verification_method')}) — 업로드 불가")
 
     # topic.json 저장 (검증 통과분만 저장됨)
     topic_file = work_dir / "topic.json"
@@ -137,10 +152,10 @@ def _researcher_prompt(context: dict, grounded: bool = True) -> str:
         step3 = f"3. 최고점 소재 1개를 골라 **구글 검색으로 순위 데이터를 확인**하고 TOP {context['ranking_size']}를 완성하라."
         fact_rules = """[사실 검증 규칙 — 가장 중요]
 - 각 항목의 fact(수치)와 순위는 반드시 검색 결과에 근거하라. 기억이 아니라 검색이 기준이다.
-- source에는 검색으로 확인한 실제 출처(매체/기관명)를 적어라.
+- source에는 검색으로 확인한 실제 출처(매체/기관명), source_url에는 그 출처의 실제 URL을 적어라.
 - 검색으로 확인하지 못한 항목은 목록에 넣지 말라 — 항목을 채우려고 추측하는 것은 금지.
 - fact에는 반드시 구체적 수치를 넣어라 (스코빌 지수, 미터, km/h, 판매량 등).
-- 모든 항목의 name/fact/source를 실제 내용으로 채워라. "..."나 빈 값은 절대 금지."""
+- 모든 항목의 name/fact/source/source_url을 실제 내용으로 채워라. "..."나 빈 값은 절대 금지."""
     else:
         step3 = f"3. 최고점 소재 1개를 골라, 당신이 확실히 아는 데이터로만 TOP {context['ranking_size']}를 완성하라."
         fact_rules = """[사실성 규칙 — 가장 중요 (검색 불가 모드)]
@@ -192,8 +207,8 @@ def _researcher_prompt(context: dict, grounded: bool = True) -> str:
   "hook_angle": "1위는 청양고추의 400배",
   "target_keyword": "매운 고추 순위",
   "items": [
-    {{"rank": 5, "name": "하바네로", "fact": "스코빌 지수 최대 35만", "source": "스코빌 지수 공식 측정", "visual_keyword": "habanero pepper orange"}},
-    {{"rank": 4, "name": "고스트 페퍼", "fact": "스코빌 지수 약 100만, 2007년 기네스 기록", "source": "기네스 세계기록", "visual_keyword": "ghost pepper red"}}
+    {{"rank": 5, "name": "하바네로", "fact": "스코빌 지수 최대 35만", "source": "위키백과", "source_url": "https://ko.wikipedia.org/wiki/하바네로", "visual_keyword": "habanero pepper orange"}},
+    {{"rank": 4, "name": "고스트 페퍼", "fact": "스코빌 지수 약 100만, 2007년 기네스 기록", "source": "기네스 세계기록", "source_url": "https://www.guinnessworldrecords.com/", "visual_keyword": "ghost pepper red"}}
   ],
   "evidence": ["스코빌 지수라는 객관적 측정 기준 존재", "1위가 대중 예상과 다름"],
   "verification_note": "스코빌 지수는 공인된 측정값으로 신뢰도 높음"

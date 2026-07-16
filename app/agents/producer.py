@@ -1,10 +1,15 @@
 """영상 프로듀서 에이전트 — output.mp4 생성 (간단 버전)."""
+import hashlib
 import json
 import os
 import subprocess
 import tempfile
 from datetime import datetime
 from pathlib import Path
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
 
 from gtts import gTTS
 import requests
@@ -39,9 +44,10 @@ async def run_producer(data_dir: Path, date_str: str, ffmpeg_path: str) -> dict:
         print("  → TTS 음성 생성 중...")
         mp3_files = await _generate_tts(script, tmp_path)
 
-        # 2. 비디오 다운로드
+        # 2. 비디오 다운로드 (검색 실패 시 카테고리 안전어로 폴백)
         print("  → 비디오 다운로드 중...")
-        video_files = await _download_videos(script, tmp_path)
+        fallback_kw = _category_fallback(date_str)
+        video_files, dl_meta = await _download_videos(script, tmp_path, fallback_kw)
 
         # 3. 오버레이 준비 — 상단 타이틀 + 좌측 누적 순위 리스트용 데이터
         topic_title = ""
@@ -106,13 +112,35 @@ async def run_producer(data_dir: Path, date_str: str, ffmpeg_path: str) -> dict:
         output_mp4 = work_dir / "output.mp4"
         _concat_videos(scene_videos, str(output_mp4), ffmpeg_path, tmp_path)
 
-        # 6. 로그 저장
+        # 6. 실제 완성 길이 측정 + 계획 대비 기록. 60초 초과면 여기서 중단(업로드 낭비 방지).
+        actual_dur = _media_duration(str(output_mp4), ffmpeg_path)
+        planned_dur = float(script.get("total_duration_sec", 0))
+        max_sec = int(os.getenv("MAX_VIDEO_SEC", "60"))
+        if actual_dur > max_sec:
+            raise RuntimeError(
+                f"완성 영상 {actual_dur:.1f}초 > 한도 {max_sec}초 — 중단. "
+                f"(계획 {planned_dur:.0f}초, TTS가 계획보다 김 → 대본 축약 필요)"
+            )
+
+        # 7. 제작 로그 (실제 길이·계획 길이·씬별 소스·대본 해시)
+        script_hash = _sha256(script_file.read_bytes())
         produce_log = {
             "date": date_str,
             "timestamp": datetime.now().isoformat(),
             "output_file": str(output_mp4),
             "scenes_processed": len(scene_videos),
+            "planned_duration": planned_dur,
+            "actual_duration": round(actual_dur, 1),
+            "duration_gap": round(actual_dur - planned_dur, 1),
+            "script_sha256": script_hash,
+            "sources": [
+                {"scene": n, **dl_meta.get(n, {})} for n, _ in scene_videos
+            ],
+            "fallback_scenes": sum(1 for m in dl_meta.values() if m.get("fallback")),
         }
+        # 계획과 실제가 10초 이상 벌어지면 경고 (대본 길이 산정 개선 신호)
+        if abs(actual_dur - planned_dur) > 10:
+            print(f"  ⚠️ 계획({planned_dur:.0f}s)-실제({actual_dur:.0f}s) 차이 큼 — 대본 길이 산정 확인")
 
         log_file = work_dir / "produce_log.json"
         log_file.write_text(json.dumps(produce_log, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -167,49 +195,87 @@ async def _generate_tts(script: dict, tmp_path: Path) -> dict:
     return mp3_files
 
 
-async def _download_videos(script: dict, tmp_path: Path) -> dict:
-    """각 씬별 visual 키워드로 비디오 확보.
+def _category_fallback(run_id: str) -> str:
+    """run_id('20260716-1')의 회차로 카테고리 안전 검색어 반환. 없으면 일반어."""
+    from app.agents.researcher import SLOT_CATEGORIES
+    if "-" in run_id:
+        try:
+            slot = int(run_id.rsplit("-", 1)[1])
+            return SLOT_CATEGORIES.get(slot, {}).get("visual_fallback", "abstract background")
+        except ValueError:
+            pass
+    return "abstract background"
 
-    폴백 순서: Pexels 비디오 → Pixabay 비디오 → Pexels 이미지 → 검은 배경.
-    (무료 소스 2곳을 다 뒤져 실제 영상 확보율을 최대화)
+
+def _clean_visual_keyword(kw: str) -> str:
+    """서술형 검색어를 스톡 친화적으로 축약 (앞 3단어만, 부사·수식 제거).
+
+    예: 'afghan hound running with long silky hair blowing in the wind' → 'afghan hound running'
+    긴 문장은 스톡에서 0건 → 폴백을 유발하므로 핵심 명사구만 남긴다.
+    """
+    words = kw.split()
+    return " ".join(words[:3]) if len(words) > 3 else kw
+
+
+async def _download_videos(script: dict, tmp_path: Path, fallback_kw: str = "abstract background") -> dict:
+    """각 씬별로 비디오 확보. 씬 검색어 실패 시 카테고리 안전어(fallback_kw)로 재시도.
+
+    후보 검색어: [축약한 씬 visual, 카테고리 안전어] 순.
+    소스: 각 검색어에 대해 Pexels 비디오 → Pixabay 비디오 → Pexels 이미지.
+    전부 실패 시에만 검은 배경 (첫 단어 재검색 같은 위험한 일반화는 하지 않음).
     """
     video_files = {}
     have_pixabay = bool(os.getenv("PIXABAY_API_KEY"))
 
-    for scene in script.get("scenes", []):
-        scene_n = scene["n"]
-        visual_keyword = scene.get("visual", "background")
-        video_file = tmp_path / f"scene_{scene_n}.mp4"
-
-        # 1) Pexels 비디오
+    async def try_fetch(keyword, video_path, image_path):
+        """(경로, 제공자) 반환. 실패 시 (None, None)."""
         try:
-            await download_video(visual_keyword, str(video_file))
-            video_files[scene_n] = video_file
-            continue
+            await download_video(keyword, str(video_path))
+            return video_path, "pexels_video"
         except Exception:
             pass
-
-        # 2) Pixabay 비디오
         if have_pixabay:
             try:
-                await download_video_pixabay(visual_keyword, str(video_file))
-                video_files[scene_n] = video_file
-                print(f"  · 씬 {scene_n}: Pixabay 비디오로 확보")
-                continue
+                await download_video_pixabay(keyword, str(video_path))
+                return video_path, "pixabay_video"
             except Exception:
                 pass
-
-        # 3) 이미지 폴백 → 4) 검은 배경
-        image_file = tmp_path / f"scene_{scene_n}.jpg"
         try:
-            await download_image(visual_keyword, str(image_file))
-            print(f"  · 씬 {scene_n}: 비디오 없음 → 이미지로 대체")
+            await download_image(keyword, str(image_path))
+            return image_path, "pexels_image"
         except Exception:
-            _create_black_bg(image_file)
-            print(f"  ⚠️ 씬 {scene_n}: 소스 없음 → 검은 배경")
-        video_files[scene_n] = image_file
+            return None, None
 
-    return video_files
+    meta = {}  # scene_n → {primary, used, provider, fallback}
+    for scene in script.get("scenes", []):
+        scene_n = scene["n"]
+        video_file = tmp_path / f"scene_{scene_n}.mp4"
+        image_file = tmp_path / f"scene_{scene_n}.jpg"
+
+        primary = _clean_visual_keyword(scene.get("visual", "") or "")
+        candidates = [k for k in dict.fromkeys([primary, fallback_kw]) if k]  # 순서 유지 중복 제거
+
+        result = provider = used = None
+        for kw in candidates:
+            result, provider = await try_fetch(kw, video_file, image_file)
+            if result:
+                used = kw
+                break
+
+        if result:
+            video_files[scene_n] = result
+            meta[scene_n] = {"primary": primary, "used": used,
+                             "provider": provider, "fallback": used != primary}
+            if used != primary:
+                print(f"  · 씬 {scene_n}: '{primary}' 없음 → 안전어 '{fallback_kw}'로 확보")
+        else:
+            _create_black_bg(image_file)
+            video_files[scene_n] = image_file
+            meta[scene_n] = {"primary": primary, "used": None,
+                             "provider": "black_bg", "fallback": True}
+            print(f"  ⚠️ 씬 {scene_n}: 소스 없음 → 검은 배경")
+
+    return video_files, meta
 
 
 def _run_ffmpeg(cmd: list, cwd: str = None) -> None:

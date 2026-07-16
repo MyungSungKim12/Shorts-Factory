@@ -54,6 +54,17 @@ def run_uploader(data_dir: Path, date_str: str) -> dict:
         if today_count >= limit:
             return {"status": "skipped", "reason": f"일 업로드 한도({limit}건) 도달 — 내일 재시도"}
 
+        # 3-0. 사실 검증 규칙 확인 — 검증된 소재만 업로드 (model_memory 차단)
+        topic_file = work_dir / "topic.json"
+        vmethod = "model_memory"
+        if topic_file.exists():
+            try:
+                vmethod = json.loads(topic_file.read_text(encoding="utf-8")).get("verification_method", "model_memory")
+            except (json.JSONDecodeError, OSError):
+                pass
+        if vmethod not in ("grounded_search", "verified_cache"):
+            raise ValueError(f"미검증 소재(verification_method={vmethod}) — 규칙상 업로드 불가")
+
         # 3. 업로드 전 메타데이터 검증
         title = script.get("title", "").strip()
         if not title:
@@ -170,8 +181,10 @@ def _validate_video_file(video_file: Path) -> None:
     info = json.loads(result.stdout)
 
     duration = float(info.get("format", {}).get("duration", 0))
-    if not 5 <= duration < 180:
-        raise ValueError(f"영상 길이 {duration:.1f}초 — 숏츠 조건(5~180초) 위반")
+    # 랭킹 숏츠 목표 35~55초. 60초 초과는 완주율이 급락하므로 차단 (숏츠 상한 180과 별개).
+    max_sec = int(os.getenv("MAX_VIDEO_SEC", "60"))
+    if not 15 <= duration <= max_sec:
+        raise ValueError(f"영상 길이 {duration:.1f}초 — 허용 범위(15~{max_sec}초) 위반")
 
     video_stream = next((s for s in info.get("streams", []) if s.get("codec_type") == "video"), None)
     if not video_stream:

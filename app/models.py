@@ -8,11 +8,16 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 _PLACEHOLDERS = {"...", "항목명", "N/A", "없음", "unknown", "TBD"}
 
 
+# 업로드가 허용되는 검증 방식 (CLAUDE.md/AGENTS.md 절대 규칙: model_memory는 불가)
+UPLOADABLE_VERIFICATION = {"grounded_search", "verified_cache"}
+
+
 class RankItem(BaseModel):
     rank: int = Field(ge=1, le=10)
     name: str
     fact: str
     source: str
+    source_url: str = ""   # 출처 URL (내용 검증은 미뤄도 저장은 저렴)
     visual_keyword: str = ""
 
     @field_validator("name", "fact", "source")
@@ -33,6 +38,9 @@ class TopicContract(BaseModel):
     items: list[RankItem]
     evidence: list = []
     verification_note: str = ""
+    # 검증 방식: grounded_search | verified_cache | model_memory
+    verification_method: str = "model_memory"
+    verified_at: str = ""
 
     @model_validator(mode="after")
     def _ranks_complete(self):
@@ -43,6 +51,10 @@ class TopicContract(BaseModel):
                 f"순위 불완전: {ranks} — 1~{self.ranking_size}가 중복·누락 없이 있어야 함"
             )
         return self
+
+    def is_uploadable(self) -> bool:
+        """규칙상 업로드 허용 여부 — 검증되지 않은(model_memory) 소재는 불가."""
+        return self.verification_method in UPLOADABLE_VERIFICATION
 
 
 class Scene(BaseModel):

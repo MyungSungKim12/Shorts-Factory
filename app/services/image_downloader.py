@@ -38,9 +38,6 @@ async def download_image(keyword: str, output_path: str, api_key: str = None) ->
         photos = data.get("photos", [])
 
         if not photos:
-            keyword_general = keyword.split()[0]
-            if keyword_general != keyword:
-                return await download_image(keyword_general, output_path, api_key)
             raise ValueError(f"검색 결과 없음: {keyword}")
 
         photo = photos[0]
@@ -93,10 +90,8 @@ async def download_video(keyword: str, output_path: str, api_key: str = None) ->
         videos = data.get("videos", [])
 
         if not videos:
-            # 재시도: 키워드 일반화
-            keyword_general = keyword.split()[0]
-            if keyword_general != keyword:
-                return await download_video(keyword_general, output_path, api_key)
+            # 첫 단어 재검색은 "afghan hound"→"afghan"(사람/풍경)처럼 엉뚱한 결과를 부르므로 금지.
+            # 폴백은 호출부(_download_videos)가 카테고리 안전어로 명시 처리한다.
             raise ValueError(f"검색 결과 없음: {keyword}")
 
         video = videos[0]
@@ -143,9 +138,6 @@ async def download_video_pixabay(keyword: str, output_path: str, api_key: str = 
         hits = response.json().get("hits", [])
 
         if not hits:
-            keyword_general = keyword.split()[0]
-            if keyword_general != keyword:
-                return await download_video_pixabay(keyword_general, output_path, api_key)
             raise ValueError(f"Pixabay 검색 결과 없음: {keyword}")
 
         # 세로형(height>width) 우선, 없으면 첫 결과. Pixabay는 large/medium/small 버전 제공

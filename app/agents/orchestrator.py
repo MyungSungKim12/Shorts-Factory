@@ -1,5 +1,6 @@
 """오케스트레이터 — 전체 파이프라인 지휘."""
 import asyncio
+import hashlib
 import json
 from datetime import datetime
 from pathlib import Path
@@ -8,6 +9,25 @@ from app.agents.producer import run_producer
 from app.agents.researcher import run_researcher
 from app.agents.uploader import run_uploader
 from app.agents.writer import run_writer
+
+
+def _output_matches_script(work_dir: Path) -> bool:
+    """기존 output.mp4가 '현재 script.json'으로 만들어졌는지 해시로 확인.
+
+    produce_log.json에 기록된 script_sha256과 현재 script.json 해시를 비교.
+    다르면(대본 수정됨) 기존 영상은 폐기 대상 → False.
+    """
+    output = work_dir / "output.mp4"
+    script = work_dir / "script.json"
+    plog = work_dir / "produce_log.json"
+    if not (output.exists() and script.exists() and plog.exists()):
+        return False
+    try:
+        recorded = json.loads(plog.read_text(encoding="utf-8")).get("script_sha256", "")
+        current = hashlib.sha256(script.read_bytes()).hexdigest()
+        return bool(recorded) and recorded == current
+    except (json.JSONDecodeError, OSError):
+        return False
 
 
 def _next_slot(data_dir: Path, date_str: str) -> int:
@@ -105,12 +125,15 @@ async def run_pipeline(data_dir: Path, ffmpeg_path: str, slot: int = None) -> di
             }
             print(f"✓ 대본 생성: {script['title']} ({script.get('total_duration_sec')}초)")
 
-        # 3. 영상 프로듀서 (오늘 영상이 이미 있으면 건너뜀)
+        # 3. 영상 프로듀서 (영상이 있고 '그 영상을 만든 대본'과 현재 대본이 같을 때만 재사용)
         output_file = work_dir / "output.mp4"
-        if output_file.exists():
+        fresh = _output_matches_script(work_dir)
+        if output_file.exists() and fresh:
             run_log["stages"]["producer"] = {"status": "skipped", "output_file": str(output_file)}
-            print(f"[3/4] 프로듀서 건너뜀 (오늘 영상 이미 있음)")
+            print(f"[3/4] 프로듀서 건너뜀 (영상이 현재 대본과 일치)")
         else:
+            if output_file.exists() and not fresh:
+                print("[3/4] 대본 변경 감지(해시 불일치) — 기존 영상 폐기 후 재생성")
             print("[3/4] 영상 프로듀서 실행 중...")
             produce_log = await run_producer(data_dir, run_id, ffmpeg_path)
             run_log["stages"]["producer"] = {
