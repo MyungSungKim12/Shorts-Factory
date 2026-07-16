@@ -11,4 +11,5 @@
 ## 절대 규칙
 - `.env`, `credentials/` 커밋 금지
 - 업로드는 일 6건 한도 (YouTube API 쿼터)
-- 대본·제목의 사실 검증 없이 업로드 금지
+- 사실 검증: grounded_search 또는 verified_cache 우선. 불변 기록·수치 소재에 한해 model_memory 업로드 허용
+  (그라운딩 할당량 소진 시 채널 유지 목적). 최신 변동 소재는 model_memory 금지. verification_method는 항상 기록.

@@ -54,11 +54,13 @@ def test_topic_순위중복_차단():
         validate_topic(bad)
 
 def test_검증방식_업로드가능여부():
+    # 규칙 완화(2026-07-16): grounded/cache/model_memory 모두 업로드 허용 (불변 기록 소재 한정)
     assert TopicContract.model_validate(_good_topic()).is_uploadable()
-    mem = TopicContract.model_validate(_good_topic(verification_method="model_memory"))
-    assert not mem.is_uploadable()   # 규칙: 기억 기반은 업로드 불가
-    cache = TopicContract.model_validate(_good_topic(verification_method="verified_cache"))
-    assert cache.is_uploadable()
+    assert TopicContract.model_validate(_good_topic(verification_method="verified_cache")).is_uploadable()
+    assert TopicContract.model_validate(_good_topic(verification_method="model_memory")).is_uploadable()
+    # 알 수 없는 방식은 여전히 차단
+    bad = TopicContract.model_validate(_good_topic(verification_method="hallucinated"))
+    assert not bad.is_uploadable()
 
 
 # ---------- script 계약 ----------

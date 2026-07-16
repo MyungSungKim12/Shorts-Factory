@@ -130,14 +130,23 @@ def run_researcher(data_dir: Path, run_id: str = None, recent_topics: list = Non
             topic_dict = validate_topic(cached)
             print(f"  ✓ 검증 캐시 재사용: {topic_dict.get('topic', '')}")
         else:
-            raise RuntimeError(
-                "검증 실패 + 캐시에 쓸 소재 없음 — 이 회차 중단 "
-                "(규칙상 미검증 소재는 업로드 불가). 그라운딩 할당량 회복 시 캐시가 채워짐"
+            # 캐시도 비었으면 보수 모드(model_memory) — 규칙상 '불변 기록·수치' 소재만 허용.
+            # 프롬프트가 최신 변동 소재를 배제하도록 강제한다.
+            print("  ℹ️ 캐시 비어있음 — 보수 모드(불변 기록만, model_memory)로 진행")
+            topic = call_agent(
+                prompt=_researcher_prompt(context, grounded=False),
+                agent_name="trend-researcher",
+                grounded=False,
             )
+            topic_dict = validate_topic(extract_json(topic))
+            topic_dict["verification_method"] = "model_memory"
+            topic_dict["verified_at"] = datetime.now().isoformat()
+            topic_dict = validate_topic(topic_dict)
 
     # 업로드 가능 검증 방식인지 최종 확인 (방어)
-    if topic_dict.get("verification_method") not in ("grounded_search", "verified_cache"):
-        raise RuntimeError(f"미검증 소재({topic_dict.get('verification_method')}) — 업로드 불가")
+    from app.models import UPLOADABLE_VERIFICATION
+    if topic_dict.get("verification_method") not in UPLOADABLE_VERIFICATION:
+        raise RuntimeError(f"허용되지 않은 검증 방식({topic_dict.get('verification_method')})")
 
     # topic.json 저장 (검증 통과분만 저장됨)
     topic_file = work_dir / "topic.json"

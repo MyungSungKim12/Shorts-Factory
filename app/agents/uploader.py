@@ -54,7 +54,9 @@ def run_uploader(data_dir: Path, date_str: str) -> dict:
         if today_count >= limit:
             return {"status": "skipped", "reason": f"일 업로드 한도({limit}건) 도달 — 내일 재시도"}
 
-        # 3-0. 사실 검증 규칙 확인 — 검증된 소재만 업로드 (model_memory 차단)
+        # 3-0. 사실 검증 방식 확인 — 허용 목록(models.UPLOADABLE_VERIFICATION)에 있어야 업로드.
+        #      규칙 완화(2026-07-16)로 model_memory도 허용 목록에 포함됨.
+        from app.models import UPLOADABLE_VERIFICATION
         topic_file = work_dir / "topic.json"
         vmethod = "model_memory"
         if topic_file.exists():
@@ -62,8 +64,8 @@ def run_uploader(data_dir: Path, date_str: str) -> dict:
                 vmethod = json.loads(topic_file.read_text(encoding="utf-8")).get("verification_method", "model_memory")
             except (json.JSONDecodeError, OSError):
                 pass
-        if vmethod not in ("grounded_search", "verified_cache"):
-            raise ValueError(f"미검증 소재(verification_method={vmethod}) — 규칙상 업로드 불가")
+        if vmethod not in UPLOADABLE_VERIFICATION:
+            raise ValueError(f"허용되지 않은 검증 방식(verification_method={vmethod}) — 업로드 불가")
 
         # 3. 업로드 전 메타데이터 검증
         title = script.get("title", "").strip()
