@@ -231,18 +231,24 @@ def _srt_time(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
 
 
-def _write_srt(script: dict, scene_durations: dict[int, float], output: Path) -> None:
+def _write_srt(
+    script: dict,
+    scene_durations: dict[int, float],
+    audio_durations: dict[int, float],
+    output: Path,
+) -> None:
     lines = []
     cue = 0
     current = 0.0
     for scene in script.get("scenes", []):
-        duration = scene_durations[scene["n"]]
+        scene_duration = scene_durations[scene["n"]]
+        caption_duration = min(scene_duration, audio_durations[scene["n"]])
         chunks = _split_caption(scene["narration"])
         weights = [max(1, len(chunk)) for chunk in chunks]
         total_weight = sum(weights)
         cursor = current
         for chunk, weight in zip(chunks, weights):
-            chunk_duration = duration * weight / total_weight
+            chunk_duration = caption_duration * weight / total_weight
             cue += 1
             lines.extend([
                 str(cue),
@@ -251,8 +257,15 @@ def _write_srt(script: dict, scene_durations: dict[int, float], output: Path) ->
                 "",
             ])
             cursor += chunk_duration
-        current += duration
+        current += scene_duration
     output.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _subtitle_style(font: str) -> str:
+    return (
+        f"FontName={font},FontSize=16,Bold=1,PrimaryColour=&H00FFFFFF,"
+        "OutlineColour=&H00000000,Outline=3,Shadow=1,Alignment=2,MarginV=235"
+    )
 
 
 def _pick_bgm() -> Path | None:
@@ -273,10 +286,7 @@ def _finish_video(
     tmp_path: Path,
 ) -> None:
     font = os.getenv("SUBTITLE_FONT", "Malgun Gothic")
-    style = (
-        f"FontName={font},FontSize=20,Bold=1,PrimaryColour=&H00FFFFFF,"
-        "OutlineColour=&H00000000,Outline=4,Shadow=1,Alignment=2,MarginV=235"
-    )
+    style = _subtitle_style(font)
     video_filter = f"subtitles=subs.srt:force_style='{style}'"
     bgm = _pick_bgm()
     if bgm:
@@ -317,6 +327,7 @@ async def run_story_producer(
         tts_results = []
         narration_files = {}
         scene_durations = {}
+        audio_durations = {}
 
         safe_print("  → Neural2 스토리 나레이션 생성 중...")
         for scene in script.get("scenes", []):
@@ -325,6 +336,7 @@ async def run_story_producer(
             tts_results.append(result)
             narration_files[scene["n"]] = narration
             audio_duration = _duration(narration, ffmpeg_path)
+            audio_durations[scene["n"]] = audio_duration
             scene_durations[scene["n"]] = max(
                 float(scene["duration_sec"]), round(audio_duration + 0.2, 3)
             )
@@ -387,7 +399,7 @@ async def run_story_producer(
         concat_video = tmp_path / "story-concat.mp4"
         _concat_files(scene_videos, concat_video, ffmpeg_path, tmp_path)
         srt_path = tmp_path / "subs.srt"
-        _write_srt(script, scene_durations, srt_path)
+        _write_srt(script, scene_durations, audio_durations, srt_path)
 
         output_mp4 = work_dir / "output.mp4"
         _finish_video(concat_video, output_mp4, srt_path, ffmpeg_path, tmp_path)

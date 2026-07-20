@@ -66,6 +66,30 @@ def test_tts_summary_reports_mixed_provider():
     assert story_producer.summarize_tts(results)["provider"] == "mixed"
 
 
+def test_subtitles_end_with_actual_audio_instead_of_scene_padding(tmp_path):
+    script = {"scenes": [{
+        "n": 1,
+        "narration": "첫 문장입니다. 두 번째 문장입니다.",
+        "duration_sec": 8,
+    }]}
+    output = tmp_path / "subs.srt"
+
+    story_producer._write_srt(
+        script,
+        scene_durations={1: 8.0},
+        audio_durations={1: 6.0},
+        output=output,
+    )
+
+    subtitles = output.read_text(encoding="utf-8")
+    assert "00:00:06,000" in subtitles
+    assert "00:00:08,000" not in subtitles
+
+
+def test_story_subtitle_style_uses_smaller_font():
+    assert "FontSize=16" in story_producer._subtitle_style("Malgun Gothic")
+
+
 def test_producer_routes_story_without_entering_ranking_renderer(tmp_path, monkeypatch):
     seen = {}
 
