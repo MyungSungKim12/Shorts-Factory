@@ -21,6 +21,25 @@ def test_story_cta_falls_back_when_an_action_is_missing(value):
     assert fallback is True
 
 
+def test_caption_split_never_breaks_korean_word_mid_token():
+    chunks = story_producer._split_caption("1년에 300일 동안 번개가 칩니다.", max_len=8)
+    assert "300일" in " ".join(chunks).split()
+    assert all(chunk not in {"30", "0일"} for chunk in chunks)
+
+
+def test_caption_keeps_unspaced_long_token_whole():
+    token = "초장문공백없는한국어토큰"
+    assert story_producer._split_caption(token, max_len=5) == [token]
+
+
+def test_title_wrap_uses_at_most_two_lines_without_breaking_words():
+    title = "1년에 300일 동안 번개가 치는 호수의 비밀"
+    lines = story_producer._wrap_title(title, max_chars=12, max_lines=2)
+    assert len(lines) == 2
+    assert " ".join(lines) == title
+    assert "300일" in lines[0] or "300일" in lines[1]
+
+
 def test_each_story_beat_becomes_short_visual_shots():
     script = {"scenes": [{
         "n": 1,

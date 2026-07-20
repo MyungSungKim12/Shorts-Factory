@@ -238,18 +238,45 @@ def _attach_narration(
 
 def _split_caption(text: str, max_len: int = 22) -> list[str]:
     sentences = re.split(r"(?<=[.!?…])\s+", text.strip())
-    chunks = []
+    chunks: list[str] = []
     for sentence in sentences:
-        rest = sentence.strip()
-        while len(rest) > max_len:
-            cut = rest.rfind(" ", 0, max_len + 1)
-            if cut < 8:
-                cut = max_len
-            chunks.append(rest[:cut].strip())
-            rest = rest[cut:].strip()
-        if rest:
-            chunks.append(rest)
+        words = sentence.split()
+        current: list[str] = []
+        for word in words:
+            candidate = " ".join([*current, word])
+            if current and len(candidate) > max_len:
+                chunks.append(" ".join(current))
+                current = [word]
+            else:
+                current.append(word)
+        if current:
+            chunks.append(" ".join(current))
     return chunks or [text]
+
+
+def _wrap_title(text: str, max_chars: int = 18, max_lines: int = 2) -> list[str]:
+    """Wrap a title without ever splitting a word; overflow stays on the last line."""
+    words = text.split()
+    if not words:
+        return [text]
+
+    lines: list[str] = []
+    current: list[str] = []
+    for index, word in enumerate(words):
+        if len(lines) == max_lines - 1:
+            current.extend(words[index:])
+            break
+
+        candidate = " ".join([*current, word])
+        if current and len(candidate) > max_chars:
+            lines.append(" ".join(current))
+            current = [word]
+        else:
+            current.append(word)
+
+    if current:
+        lines.append(" ".join(current))
+    return lines[:max_lines]
 
 
 def _srt_time(seconds: float) -> str:
