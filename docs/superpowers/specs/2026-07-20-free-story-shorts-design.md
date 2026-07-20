@@ -129,7 +129,7 @@ TTS를 공급자 어댑터로 분리한다.
 1. 우선: Google Cloud Text-to-Speech `ko-KR-Neural2-C` 또는 사용자 선택 음성
 2. 폴백: 현재 gTTS
 
-Google Cloud Neural2는 월 100만 자 무료 구간이 있어 하루 1~2편 예상 사용량을 충분히 수용한다. 단, Google Cloud 결제 계정 연결 및 Text-to-Speech API 활성화가 필요하다. 키가 없거나 호출이 실패하면 업로드를 중단하지 않고 gTTS로 폴백하되, 샘플 로그에 실제 사용 공급자를 명확히 기록한다.
+Google Cloud Neural2는 월 100만 자 무료 구간이 있어 하루 1~2편 예상 사용량을 충분히 수용한다. 단, Google Cloud 결제 계정 연결 및 Text-to-Speech API 활성화가 필요하다. 로컬 인증은 서비스 계정 키 파일 대신 Application Default Credentials(ADC)를 사용한다. ADC 인증이 없거나 호출이 실패하면 업로드를 중단하지 않고 gTTS로 폴백하되, 샘플 로그에 실제 사용 공급자를 명확히 기록한다.
 
 자연스러움을 위해 다음 원칙을 적용한다.
 
@@ -187,7 +187,7 @@ Google Cloud Neural2는 월 100만 자 무료 구간이 있어 하루 1~2편 예
 
 ## 사용자에게 필요한 작업
 
-코드 전환과 gTTS 폴백 샘플 제작 전 필수 작업은 없다. 다만 Google Cloud Neural2의 자연스러운 보이스로 최종 샘플을 들으려면 사용자가 Google Cloud 프로젝트에서 Text-to-Speech API와 결제를 활성화하고 새 API 키를 로컬 `.env`에 넣어야 한다. 키는 대화나 Git에 공유하지 않는다. 키가 준비되기 전에는 업로드용 최종 샘플로 확정하지 않고 gTTS 폴백 영상만 기술 검증용으로 생성한다.
+코드 전환과 gTTS 폴백 샘플 제작 전 필수 작업은 없다. Google Cloud Neural2의 자연스러운 보이스로 최종 샘플을 만들기 위해서는 Text-to-Speech API와 결제를 활성화하고, 로컬에서는 `gcloud auth application-default login`과 quota project 설정으로 ADC를 준비한다. 서비스 계정 JSON 키는 만들거나 `.env`에 넣지 않는다. Oracle Cloud 서버 배포 단계에서는 장기 키 대신 Workload Identity Federation을 우선 검토하며, 서버 인증 방식은 샘플 승인 후 별도로 확정한다.
 
 샘플 승인 후에만 사용자가 다음을 결정한다.
 
