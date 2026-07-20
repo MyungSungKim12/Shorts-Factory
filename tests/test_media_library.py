@@ -1,0 +1,97 @@
+"""무료 미디어 후보 선별, 출처 기록, 중복 방지 테스트."""
+import asyncio
+
+from app.services import media_library
+from app.services.media_library import MediaCandidate, choose_candidate
+
+
+def candidate(media_id, width, height, provider="pexels_video", media_type="video", keyword="desert lake"):
+    return MediaCandidate(
+        provider=provider,
+        media_id=str(media_id),
+        source_url=f"https://source/{media_id}",
+        download_url=f"https://download/{media_id}",
+        width=width,
+        height=height,
+        media_type=media_type,
+        keyword=keyword,
+    )
+
+
+def test_portrait_unique_candidate_wins():
+    chosen = choose_candidate(
+        [candidate(1, 1920, 1080), candidate(2, 1080, 1920), candidate(3, 720, 1280)],
+        {"pexels_video:2"},
+    )
+    assert chosen.media_id == "3"
+
+
+def test_higher_resolution_wins_between_portrait_candidates():
+    chosen = choose_candidate([candidate(1, 720, 1280), candidate(2, 1080, 1920)], set())
+    assert chosen.media_id == "2"
+
+
+def test_all_duplicates_return_none():
+    assert choose_candidate([candidate(1, 1080, 1920)], {"pexels_video:1"}) is None
+
+
+def test_fetch_records_provenance_and_marks_id_used(tmp_path, monkeypatch):
+    picked = candidate(9, 1080, 1920)
+    monkeypatch.setattr(media_library, "_pexels_video_candidates", lambda keyword: [picked])
+    monkeypatch.setattr(media_library, "_pixabay_video_candidates", lambda keyword: [])
+    monkeypatch.setattr(media_library, "_pexels_photo_candidates", lambda keyword: [])
+
+    def fake_download(item, output):
+        output.write_bytes(b"video")
+
+    monkeypatch.setattr(media_library, "_download_candidate", fake_download)
+    used = set()
+    path, meta = asyncio.run(
+        media_library.fetch_story_media(["desert lake", "dry desert"], tmp_path / "shot", used)
+    )
+
+    assert path == tmp_path / "shot.mp4"
+    assert used == {"pexels_video:9"}
+    assert meta == {
+        "provider": "pexels_video",
+        "media_id": "9",
+        "source_url": "https://source/9",
+        "keyword": "desert lake",
+        "fallback": False,
+        "width": 1080,
+        "height": 1920,
+    }
+
+
+def test_fetch_uses_next_keyword_without_reusing_media(tmp_path, monkeypatch):
+    duplicate = candidate(1, 1080, 1920, keyword="first keyword")
+    fresh = candidate(2, 1080, 1920, keyword="second keyword")
+
+    def videos(keyword):
+        return [duplicate] if keyword == "first keyword" else [fresh]
+
+    monkeypatch.setattr(media_library, "_pexels_video_candidates", videos)
+    monkeypatch.setattr(media_library, "_pixabay_video_candidates", lambda keyword: [])
+    monkeypatch.setattr(media_library, "_pexels_photo_candidates", lambda keyword: [])
+    monkeypatch.setattr(media_library, "_download_candidate", lambda item, output: output.write_bytes(b"ok"))
+
+    path, meta = asyncio.run(
+        media_library.fetch_story_media(
+            ["first keyword", "second keyword"],
+            tmp_path / "fallback",
+            {"pexels_video:1"},
+        )
+    )
+    assert path.name == "fallback.mp4"
+    assert meta["media_id"] == "2"
+    assert meta["fallback"] is True
+
+
+def test_fetch_returns_black_metadata_when_no_source_exists(tmp_path, monkeypatch):
+    monkeypatch.setattr(media_library, "_pexels_video_candidates", lambda keyword: [])
+    monkeypatch.setattr(media_library, "_pixabay_video_candidates", lambda keyword: [])
+    monkeypatch.setattr(media_library, "_pexels_photo_candidates", lambda keyword: [])
+    path, meta = asyncio.run(media_library.fetch_story_media(["missing place"], tmp_path / "none", set()))
+    assert path is None
+    assert meta["provider"] == "black_bg"
+    assert meta["fallback"] is True
