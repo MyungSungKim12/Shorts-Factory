@@ -10,6 +10,8 @@ import time
 
 import requests
 
+from app.console import safe_print
+
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
@@ -87,7 +89,7 @@ def call_agent(
             return fn()
         except Exception as e:
             errors.append(f"{name}: {e}")
-            print(f"  ⚠️ [{agent_name}] 제공자 {name} 실패 → 다음 제공자로")
+            safe_print(f"  ⚠️ [{agent_name}] 제공자 {name} 실패 → 다음 제공자로")
 
     raise RuntimeError(f"모든 LLM 제공자 실패: {' | '.join(errors)}")
 
@@ -110,15 +112,15 @@ def _gemini_chain(prompt: str, max_tokens: int, agent_name: str, grounded: bool 
                 return _gemini_generate(model, prompt, max_tokens, api_key, grounded)
             except _SkipModelError as e:
                 last_error = str(e)
-                print(f"  ⚠️ [{agent_name}] {model} 사용 불가({e}) → 다음 모델로")
+                safe_print(f"  ⚠️ [{agent_name}] {model} 사용 불가({e}) → 다음 모델로")
                 break
             except _DailyQuotaError as e:
                 # 일일 한도는 오늘 안에 안 풀림 — Gemini 전체 포기, 즉시 다음 제공자로
-                print(f"  ⚠️ [{agent_name}] {model} 일일 한도 초과 → Gemini 중단, 제공자 전환")
+                safe_print(f"  ⚠️ [{agent_name}] {model} 일일 한도 초과 → Gemini 중단, 제공자 전환")
                 raise RuntimeError(f"Gemini 일일 한도 초과: {e}")
             except _RetryableError as e:
                 last_error = str(e)
-                print(f"  ⚠️ [{agent_name}] {model} {attempt + 1}차 실패: {e}")
+                safe_print(f"  ⚠️ [{agent_name}] {model} {attempt + 1}차 실패: {e}")
                 if attempt < len(_BACKOFF_SECONDS):
                     time.sleep(_BACKOFF_SECONDS[attempt])
 
@@ -126,7 +128,7 @@ def _gemini_chain(prompt: str, max_tokens: int, agent_name: str, grounded: bool 
 
 
 def _gemini_generate(model: str, prompt: str, max_tokens: int, api_key: str, grounded: bool) -> str:
-    url = f"{GEMINI_API_BASE}/{model}:generateContent?key={api_key}"
+    url = f"{GEMINI_API_BASE}/{model}:generateContent"
 
     generation_config = {"maxOutputTokens": max_tokens, "temperature": 0.7}
     body = {
@@ -140,7 +142,12 @@ def _gemini_generate(model: str, prompt: str, max_tokens: int, api_key: str, gro
         generation_config["response_mime_type"] = "application/json"
 
     try:
-        response = requests.post(url, json=body, timeout=120)
+        response = requests.post(
+            url,
+            headers={"x-goog-api-key": api_key},
+            json=body,
+            timeout=120,
+        )
         response.raise_for_status()
 
         result = response.json()
@@ -192,11 +199,11 @@ def _groq_call(prompt: str, max_tokens: int, agent_name: str) -> str:
         try:
             return _groq_generate(model, prompt, max_tokens, api_key, json_mode)
         except _DailyQuotaError as e:
-            print(f"  ⚠️ [{agent_name}] groq/{model} 일일 한도 초과 → 제공자 전환")
+            safe_print(f"  ⚠️ [{agent_name}] groq/{model} 일일 한도 초과 → 제공자 전환")
             raise RuntimeError(f"Groq 일일 한도 초과: {e}")
         except _RetryableError as e:
             last_error = str(e)
-            print(f"  ⚠️ [{agent_name}] groq/{model} {attempt + 1}차 실패: {e}")
+            safe_print(f"  ⚠️ [{agent_name}] groq/{model} {attempt + 1}차 실패: {e}")
             if attempt < len(_BACKOFF_SECONDS):
                 time.sleep(_BACKOFF_SECONDS[attempt])
 

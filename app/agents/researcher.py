@@ -3,6 +3,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+from app.console import safe_print
 from app.content_format import get_content_format
 from app.services.claude_client import call_agent
 from app.services.web_search import search_ranking_topics
@@ -109,7 +110,7 @@ def run_researcher(
         "category": category,
     }
     if category:
-        print(f"  · 회차 {slot} 카테고리: {category['name']}")
+        safe_print(f"  · 회차 {slot} 카테고리: {category['name']}")
 
     # 사실 검증 규칙(CLAUDE.md): 검증된 소재만 업로드. 검증 경로는 2가지뿐:
     #   1) 그라운딩 검색 성공 → 검증 + 캐시에 저장 (grounded_search)
@@ -136,20 +137,20 @@ def run_researcher(
         cache_slot = 0 if selected == "story" else slot
         if use_cache:
             save_verified(data_dir, cache_slot, topic_dict)
-            print(f"  ✓ 검색 그라운딩으로 검증 (캐시 {cache_size(data_dir, cache_slot)}건)")
+            safe_print(f"  ✓ 검색 그라운딩으로 검증 (캐시 {cache_size(data_dir, cache_slot)}건)")
         else:
-            print("  ✓ 검색 그라운딩으로 검증 (샘플 모드: 캐시 미사용)")
+            safe_print("  ✓ 검색 그라운딩으로 검증 (샘플 모드: 캐시 미사용)")
     except Exception as e:
-        print(f"  ℹ️ 그라운딩 검증 실패({str(e)[:60]}) — 검증 캐시에서 소재 찾기")
+        safe_print(f"  ℹ️ 그라운딩 검증 실패({str(e)[:60]}) — 검증 캐시에서 소재 찾기")
         cache_slot = 0 if selected == "story" else slot
         cached = pick_cached(data_dir, cache_slot, recent_topics) if use_cache else None
         if cached:
             topic_dict = validate_topic(cached, selected)
-            print(f"  ✓ 검증 캐시 재사용: {topic_dict.get('topic', '')}")
+            safe_print(f"  ✓ 검증 캐시 재사용: {topic_dict.get('topic', '')}")
         else:
             # 캐시도 비었으면 보수 모드(model_memory) — 규칙상 '불변 기록·수치' 소재만 허용.
             # 프롬프트가 최신 변동 소재를 배제하도록 강제한다.
-            print("  ℹ️ 캐시 비어있음 — 보수 모드(불변 기록만, model_memory)로 진행")
+            safe_print("  ℹ️ 캐시 비어있음 — 보수 모드(불변 기록만, model_memory)로 진행")
             topic = call_agent(
                 prompt=(
                     _story_researcher_prompt(context, grounded=False)

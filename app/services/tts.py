@@ -8,6 +8,8 @@ import google.auth
 from google.auth.transport.requests import AuthorizedSession
 from gtts import gTTS
 
+from app.console import safe_print
+
 
 @dataclass(frozen=True)
 class TTSResult:
@@ -73,7 +75,7 @@ def synthesize(
             _synthesize_google(text, output_path, voice, rate, pitch)
             return TTSResult(output_path, "google", voice, rate)
         except Exception as exc:
-            print(f"  ⚠️ Google TTS 실패, gTTS 폴백: {exc}")
+            safe_print(f"  ⚠️ Google TTS 실패, gTTS 폴백: {exc}")
 
     _synthesize_gtts(text, output_path)
     return TTSResult(output_path, "gtts", "ko", 1.0)
