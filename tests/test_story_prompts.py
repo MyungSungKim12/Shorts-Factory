@@ -54,13 +54,16 @@ def test_research_prompt_requires_sources_and_visual_plan():
 
 def test_writer_prompt_contains_retention_beats():
     prompt = writer._story_writer_prompt(_topic())
-    assert "60~75초" in prompt
+    assert "완성 영상 목표는 60~75초" in prompt
+    assert "duration_sec 합계는 반드시 60~65초" in prompt
     assert "7~10개" in prompt
     assert "12~15초" in prompt
     assert "25~30초" in prompt
     assert "45~50초" in prompt
     assert '"visuals"' in prompt
     assert "인사" in prompt
+    assert "exact:" in prompt
+    assert "Wikimedia Commons" in prompt
 
 
 def test_writer_routes_story_format_and_saves_validated_json(tmp_path, monkeypatch):

@@ -49,6 +49,15 @@ def test_video_filter_is_full_frame_vertical():
     assert "zoompan" not in vf
 
 
+def test_exact_landscape_image_can_preserve_full_composition():
+    vf = story_producer.visual_filter("blood-falls.jpg", duration=3.0, preserve_full=True)
+    assert "force_original_aspect_ratio=decrease" in vf
+    assert "boxblur" in vf
+    assert "overlay" in vf
+    assert "pad=1080:1920" not in vf
+    assert "zoompan" in vf
+
+
 def test_tts_summary_reports_mixed_provider():
     results = [
         type("R", (), {"provider": "google", "voice": "ko-KR-Neural2-C", "speaking_rate": 1.05})(),

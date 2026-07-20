@@ -67,7 +67,7 @@ def _story_writer_prompt(topic: dict) -> str:
         f"- {item['beat']}: {', '.join(item['keywords'])}"
         for item in topic.get("visual_plan", [])
     )
-    return f"""당신은 한국어 유튜브 Shorts 스토리 작가다. 하나의 검증된 소재를 60~75초 동안 설명해 끝까지 보게 만든다.
+    return f"""당신은 한국어 유튜브 Shorts 스토리 작가다. 하나의 검증된 소재를 설명해 끝까지 보게 만든다. 완성 영상 목표는 60~75초다.
 
 [소재]
 주제: {topic['topic']}
@@ -79,7 +79,7 @@ def _story_writer_prompt(topic: dict) -> str:
 {visual_plan}
 
 [잔존 구조]
-- 7~10개 씬으로 작성하고 duration_sec 합계는 반드시 60~75초다.
+- 7~10개 씬으로 작성하고 duration_sec 합계는 반드시 60~65초다. Neural2 실제 발화가 계획보다 길어질 여유를 남긴다.
 - 0~3초 hook: 인사, 채널명, 로고, 주제 소개 없이 결과나 모순부터 말한다.
 - 10초 안에 작은 답 하나를 주되 최종 원리는 남겨 둔다.
 - 12~15초, 25~30초, 45~50초 부근에 새 질문, 검증 수치, 시각 전환 중 하나를 둔다.
@@ -89,6 +89,7 @@ def _story_writer_prompt(topic: dict) -> str:
 
 [화면 규칙]
 - 각 씬 visuals는 무료 Pexels/Pixabay에서 찾을 수 있는 구체적인 영어 검색어 2~3개다.
+- 희귀 장소·고유 구조물의 실제 모습이 필요한 검색어는 `exact: Blood Falls Antarctica`처럼 exact: 접두사를 붙인다. 이 검색어는 허용 라이선스와 저작자 정보를 기록하는 Wikimedia Commons 이미지를 우선한다.
 - visuals에는 추상어만 쓰지 말고 장소, 지형, 구조물, 동물 같은 실제 대상을 쓴다.
 - narration은 자연스럽게 이어지는 한국어 1~3문장이다.
 - emphasis는 화면에서 강조할 짧은 핵심어 또는 숫자 0~4개다.

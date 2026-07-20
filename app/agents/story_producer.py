@@ -11,6 +11,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
+from app.console import safe_print
 from app.services.media_library import fetch_story_media
 from app.services.tts import TTSResult, synthesize
 
@@ -47,10 +48,21 @@ def build_shot_plan(script: dict) -> list[dict]:
     return shots
 
 
-def visual_filter(media_file: str, duration: float) -> str:
+def visual_filter(media_file: str, duration: float, preserve_full: bool = False) -> str:
     """세로 전체화면 영상 또는 정지 이미지 모션 필터를 만든다."""
     if str(media_file).lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
         frames = max(1, round(duration * 30))
+        if preserve_full:
+            return (
+                "[0:v]split=2[bgsrc][fgsrc];"
+                "[bgsrc]scale=1080:1920:force_original_aspect_ratio=increase,"
+                "crop=1080:1920,boxblur=luma_radius=28:luma_power=2[bg];"
+                "[fgsrc]scale=1080:1920:force_original_aspect_ratio=decrease[fg];"
+                "[bg][fg]overlay=(W-w)/2:(H-h)/2,"
+                "zoompan=z='min(zoom+0.0003,1.03)':"
+                "x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+                f"d={frames}:s=1080x1920:fps=30,format=yuv420p[vout]"
+            )
         return (
             "scale=1200:2134:force_original_aspect_ratio=increase,"
             "crop=1200:2134,"
@@ -140,15 +152,29 @@ def _create_fallback_image(path: Path, scene_n: int) -> None:
     image.save(path, quality=92)
 
 
-def _encode_visual(media: Path, output: Path, duration: float, ffmpeg_path: str) -> None:
+def _encode_visual(
+    media: Path,
+    output: Path,
+    duration: float,
+    ffmpeg_path: str,
+    preserve_full: bool = False,
+) -> None:
     is_image = media.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
     cmd = [ffmpeg_path]
     if is_image:
         cmd += ["-loop", "1", "-i", str(media)]
     else:
         cmd += ["-stream_loop", "-1", "-i", str(media)]
+    cmd += ["-an"]
+    if preserve_full and is_image:
+        cmd += [
+            "-filter_complex", visual_filter(str(media), duration, preserve_full),
+            "-map", "[vout]",
+        ]
+    else:
+        cmd += ["-vf", visual_filter(str(media), duration, preserve_full)]
     cmd += [
-        "-an", "-vf", visual_filter(str(media), duration), "-t", f"{duration:.3f}",
+        "-t", f"{duration:.3f}",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "25",
         "-pix_fmt", "yuv420p", "-r", "30", "-y", str(output),
     ]
@@ -292,7 +318,7 @@ async def run_story_producer(
         narration_files = {}
         scene_durations = {}
 
-        print("  → Neural2 스토리 나레이션 생성 중...")
+        safe_print("  → Neural2 스토리 나레이션 생성 중...")
         for scene in script.get("scenes", []):
             narration = tmp_path / f"narration-{scene['n']:02d}.mp3"
             result = synthesize(_tts_text(scene["narration"]), narration)
@@ -309,7 +335,7 @@ async def run_story_producer(
                 f"실제 나레이션 기준 {total_duration:.1f}초로 75초 초과 — 대본 축약 필요"
             )
 
-        print("  → 무료 미디어 선별 및 2~4초 샷 생성 중...")
+        safe_print("  → 무료 미디어 선별 및 2~4초 샷 생성 중...")
         used_ids: set[str] = set()
         sources = []
         scene_videos = []
@@ -331,7 +357,13 @@ async def run_story_producer(
                     media = tmp_path / f"fallback-{global_shot_n:03d}.jpg"
                     _create_fallback_image(media, scene["n"])
                 clip = tmp_path / f"shot-{global_shot_n:03d}.mp4"
-                _encode_visual(media, clip, shot["duration_sec"], ffmpeg_path)
+                _encode_visual(
+                    media,
+                    clip,
+                    shot["duration_sec"],
+                    ffmpeg_path,
+                    preserve_full=metadata.get("provider") == "wikimedia_image",
+                )
                 visual_clips.append(clip)
                 sources.append({
                     "scene": scene["n"],

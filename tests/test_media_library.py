@@ -37,6 +37,7 @@ def test_all_duplicates_return_none():
 
 def test_fetch_records_provenance_and_marks_id_used(tmp_path, monkeypatch):
     picked = candidate(9, 1080, 1920)
+    monkeypatch.setattr(media_library, "_wikimedia_image_candidates", lambda keyword: [])
     monkeypatch.setattr(media_library, "_pexels_video_candidates", lambda keyword: [picked])
     monkeypatch.setattr(media_library, "_pixabay_video_candidates", lambda keyword: [])
     monkeypatch.setattr(media_library, "_pexels_photo_candidates", lambda keyword: [])
@@ -66,6 +67,7 @@ def test_fetch_records_provenance_and_marks_id_used(tmp_path, monkeypatch):
 def test_fetch_uses_next_keyword_without_reusing_media(tmp_path, monkeypatch):
     duplicate = candidate(1, 1080, 1920, keyword="first keyword")
     fresh = candidate(2, 1080, 1920, keyword="second keyword")
+    monkeypatch.setattr(media_library, "_wikimedia_image_candidates", lambda keyword: [])
 
     def videos(keyword):
         return [duplicate] if keyword == "first keyword" else [fresh]
@@ -88,6 +90,7 @@ def test_fetch_uses_next_keyword_without_reusing_media(tmp_path, monkeypatch):
 
 
 def test_fetch_returns_black_metadata_when_no_source_exists(tmp_path, monkeypatch):
+    monkeypatch.setattr(media_library, "_wikimedia_image_candidates", lambda keyword: [])
     monkeypatch.setattr(media_library, "_pexels_video_candidates", lambda keyword: [])
     monkeypatch.setattr(media_library, "_pixabay_video_candidates", lambda keyword: [])
     monkeypatch.setattr(media_library, "_pexels_photo_candidates", lambda keyword: [])
@@ -95,3 +98,58 @@ def test_fetch_returns_black_metadata_when_no_source_exists(tmp_path, monkeypatc
     assert path is None
     assert meta["provider"] == "black_bg"
     assert meta["fallback"] is True
+
+
+def test_exact_keyword_prefers_licensed_wikimedia_image(tmp_path, monkeypatch):
+    exact = MediaCandidate(
+        provider="wikimedia_image",
+        media_id="File:Blood Falls.jpg",
+        source_url="https://commons.wikimedia.org/wiki/File:Blood_Falls.jpg",
+        download_url="https://upload.wikimedia.org/blood-falls.jpg",
+        width=1600,
+        height=1200,
+        media_type="image",
+        keyword="Blood Falls Antarctica",
+        license="CC BY-SA 4.0",
+        attribution="Jane Scientist",
+    )
+    generic = candidate(88, 1080, 1920)
+    monkeypatch.setattr(media_library, "_wikimedia_image_candidates", lambda keyword: [exact])
+    monkeypatch.setattr(media_library, "_pexels_video_candidates", lambda keyword: [generic])
+    monkeypatch.setattr(media_library, "_pixabay_video_candidates", lambda keyword: [])
+    monkeypatch.setattr(media_library, "_pexels_photo_candidates", lambda keyword: [])
+    monkeypatch.setattr(media_library, "_download_candidate", lambda item, output: output.write_bytes(b"image"))
+
+    path, meta = asyncio.run(media_library.fetch_story_media(
+        ["exact: Blood Falls Antarctica", "antarctica glacier"],
+        tmp_path / "exact-shot",
+        set(),
+    ))
+    assert path.suffix == ".jpg"
+    assert meta["provider"] == "wikimedia_image"
+    assert meta["license"] == "CC BY-SA 4.0"
+    assert meta["attribution"] == "Jane Scientist"
+
+
+def test_wikimedia_download_sends_identifying_user_agent(tmp_path, monkeypatch):
+    exact = MediaCandidate(
+        provider="wikimedia_image", media_id="File:Blood Falls.jpg",
+        source_url="https://commons.wikimedia.org/wiki/File:Blood_Falls.jpg",
+        download_url="https://upload.wikimedia.org/blood-falls.jpg",
+        width=1600, height=1200, media_type="image", keyword="Blood Falls Antarctica",
+        license="Public domain", attribution="US Antarctic Program",
+    )
+    captured = {}
+
+    class Response:
+        content = b"image"
+        def raise_for_status(self):
+            return None
+
+    def fake_get(url, **kwargs):
+        captured.update(kwargs)
+        return Response()
+
+    monkeypatch.setattr(media_library.requests, "get", fake_get)
+    media_library._download_candidate(exact, tmp_path / "image.jpg")
+    assert "ShortsFactory" in captured["headers"]["User-Agent"]
