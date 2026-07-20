@@ -37,7 +37,7 @@
 }
 ```
 
-SQLite에서 같은 필터 기준으로 `COUNT(*)`를 구하고 `ORDER BY uploaded_at DESC LIMIT ? OFFSET ?`로 현재 페이지만 조회한다. DB가 없으면 빈 배열과 0건 페이징 정보를 반환한다.
+SQLite에서 `status = 'uploaded'`인 현재 유효 영상만 대상으로 `COUNT(*)`를 구하고 `ORDER BY uploaded_at DESC, video_id DESC LIMIT ? OFFSET ?`로 현재 페이지만 조회한다. `replaced`·삭제 처리된 기록은 활성 영상 목록에서 제외한다. DB가 없으면 빈 배열과 0건 페이징 정보를 반환한다.
 
 ### `GET /api/history`
 
@@ -85,10 +85,11 @@ SQLite에서 같은 필터 기준으로 `COUNT(*)`를 구하고 `ORDER BY upload
 
 ## 커밋과 푸시
 
-- 백엔드 현재 브랜치 `codex/free-story-shorts-implementation`에는 기존 스토리/CTA/운영 변경과 모니터링 API 변경을 모두 포함해 푸시한다.
+- 백엔드 현재 브랜치 `codex/free-story-shorts-implementation`에 모니터링 API를 구현·검증한 뒤 백엔드 `main`에 병합하고 `origin/main`으로 푸시한다. 기존 스토리/CTA/운영 변경도 함께 기본 브랜치에 반영된다.
 - 프론트엔드 `main`은 작업 전 깨끗한 상태를 확인하고 모니터링 UI 변경만 커밋·푸시한다.
 - 각 저장소는 커밋 전 diff를 검토하고 관련 파일만 명시적으로 스테이징한다.
-- GitHub CLI가 없으므로 PR은 자동 생성하지 않고 두 원격 브랜치 푸시까지만 수행한다.
+- 백엔드와 프론트엔드 모두 원격 `main` 푸시까지 수행해 GitHub 기본 화면과 연결된 배포에 실제 반영되게 한다.
+- `.env`, `credentials/`, `data/`, 로컬 분석·임시 폴더는 "전체 파일" 커밋 대상에서 제외한다.
 
 ## 원복
 
