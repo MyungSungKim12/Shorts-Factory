@@ -67,6 +67,7 @@ def test_writer_prompt_contains_retention_beats():
     assert "인사" in prompt
     assert "exact:" in prompt
     assert "Wikimedia Commons" in prompt
+    assert "close 본문에는 \"\uad6c독\"과 \"좋아요\"를 절대 넣지 마라" in prompt
 
 
 def test_writer_routes_story_format_and_saves_validated_json(tmp_path, monkeypatch):

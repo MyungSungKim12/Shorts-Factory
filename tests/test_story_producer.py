@@ -21,6 +21,36 @@ def test_story_cta_falls_back_when_an_action_is_missing(value):
     assert fallback is True
 
 
+def test_cta_plan_does_not_append_when_last_scene_already_reads_same_cta():
+    cta = "이 신비로운 자연의 비밀이 흥미로우셨다면 구독과 좋아요 부탁드립니다."
+    script = {
+        "cta": cta,
+        "scenes": [{
+            "n": 7,
+            "role": "close",
+            "narration": f"데스밸리의 돌들입니다. {cta}",
+        }],
+    }
+
+    plan = story_producer.build_story_cta_plan(script)
+
+    assert plan["text"] == cta
+    assert plan["embedded_in_body"] is True
+    assert plan["append"] is False
+
+
+def test_cta_plan_appends_when_close_has_no_subscription_request():
+    script = {
+        "cta": "이번 이야기가 더 궁금하다면 구독과 좋아요 부탁드립니다.",
+        "scenes": [{"n": 7, "role": "close", "narration": "대자연이 만든 결과였습니다."}],
+    }
+
+    plan = story_producer.build_story_cta_plan(script)
+
+    assert plan["embedded_in_body"] is False
+    assert plan["append"] is True
+
+
 def test_caption_split_never_breaks_korean_word_mid_token():
     chunks = story_producer._split_caption("1년에 300일 동안 번개가 칩니다.", max_len=8)
     assert "300일" in " ".join(chunks).split()

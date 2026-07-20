@@ -36,6 +36,22 @@ def normalize_story_cta(value: str | None) -> tuple[str, bool]:
     return text, False
 
 
+def build_story_cta_plan(script: dict) -> dict:
+    """Keep exactly one CTA, even when the model already put it in the close scene."""
+    text, fallback_used = normalize_story_cta(script.get("cta"))
+    scenes = script.get("scenes") or []
+    close_narration = (scenes[-1].get("narration") or "") if scenes else ""
+    embedded = text in close_narration or (
+        "구독" in close_narration and "좋아요" in close_narration
+    )
+    return {
+        "text": text,
+        "fallback_used": fallback_used,
+        "embedded_in_body": embedded,
+        "append": not embedded,
+    }
+
+
 def build_cta_timing(body_duration: float, audio_duration: float) -> dict[str, float]:
     """본문 직후 CTA를 배치하고 최종 Shorts 길이 범위를 검증한다."""
     start = round(float(body_duration), 3)
@@ -493,6 +509,7 @@ async def run_story_producer(
         tmp_path = Path(tmpdir)
         tts_results = []
         narration_files = {}
+        scene_tts_results = {}
         scene_durations = {}
         audio_durations = {}
 
@@ -506,6 +523,7 @@ async def run_story_producer(
             narration = tmp_path / f"narration-{scene['n']:02d}.mp3"
             result = synthesize(_tts_text(scene["narration"]), narration)
             tts_results.append(result)
+            scene_tts_results[scene["n"]] = result
             narration_files[scene["n"]] = narration
             audio_duration = _duration(narration, ffmpeg_path)
             audio_durations[scene["n"]] = audio_duration
@@ -514,11 +532,16 @@ async def run_story_producer(
             )
 
         body_duration = sum(scene_durations.values())
-        cta_text, cta_fallback = normalize_story_cta(script.get("cta"))
-        cta_narration = tmp_path / "narration-cta.mp3"
-        cta_result = synthesize(_tts_text(cta_text), cta_narration)
-        tts_results.append(cta_result)
-        cta_audio_duration = _duration(cta_narration, ffmpeg_path)
+        cta_plan = build_story_cta_plan(script)
+        cta_text = cta_plan["text"]
+        cta_result = None
+        cta_narration = None
+        cta_audio_duration = 0.0
+        if cta_plan["append"]:
+            cta_narration = tmp_path / "narration-cta.mp3"
+            cta_result = synthesize(_tts_text(cta_text), cta_narration)
+            tts_results.append(cta_result)
+            cta_audio_duration = _duration(cta_narration, ffmpeg_path)
         story_timing = build_story_timing(
             intro_audio_duration, body_duration, cta_audio_duration
         )
@@ -601,24 +624,25 @@ async def run_story_producer(
         )
         scene_videos.insert(0, intro_video)
 
-        cta_visual = tmp_path / "cta-visual.mp4"
-        _encode_visual(
-            last_media,
-            cta_visual,
-            cta_audio_duration,
-            ffmpeg_path,
-            preserve_full=last_metadata.get("provider") == "wikimedia_image",
-            darken=True,
-        )
-        cta_video = tmp_path / "scene-cta.mp4"
-        _attach_narration(
-            cta_visual,
-            cta_narration,
-            cta_video,
-            cta_audio_duration,
-            ffmpeg_path,
-        )
-        scene_videos.append(cta_video)
+        if cta_plan["append"]:
+            cta_visual = tmp_path / "cta-visual.mp4"
+            _encode_visual(
+                last_media,
+                cta_visual,
+                cta_audio_duration,
+                ffmpeg_path,
+                preserve_full=last_metadata.get("provider") == "wikimedia_image",
+                darken=True,
+            )
+            cta_video = tmp_path / "scene-cta.mp4"
+            _attach_narration(
+                cta_visual,
+                cta_narration,
+                cta_video,
+                cta_audio_duration,
+                ffmpeg_path,
+            )
+            scene_videos.append(cta_video)
 
         concat_video = tmp_path / "story-concat.mp4"
         _concat_files(scene_videos, concat_video, ffmpeg_path, tmp_path)
@@ -637,7 +661,7 @@ async def run_story_producer(
                 "text": cta_text,
                 "start": story_timing["cta_start"],
                 "end": story_timing["cta_end"],
-            },
+            } if cta_plan["append"] else None,
         )
         title_overlay = tmp_path / "title-overlay.png"
         title_metadata = _create_title_overlay(script["title"], title_overlay)
@@ -647,6 +671,7 @@ async def run_story_producer(
             concat_video, output_mp4, srt_path, title_overlay, ffmpeg_path, tmp_path
         )
         actual_duration = _duration(output_mp4, ffmpeg_path)
+        cta_log_result = cta_result or scene_tts_results[script["scenes"][-1]["n"]]
 
     produce_log = {
         "date": run_id,
@@ -672,11 +697,12 @@ async def run_story_producer(
         "cta": {
             "text": cta_text,
             "audio_duration": round(cta_audio_duration, 3),
-            "fallback_used": cta_fallback,
+            "fallback_used": cta_plan["fallback_used"],
+            "embedded_in_body": cta_plan["embedded_in_body"],
             "tts": {
-                "provider": cta_result.provider,
-                "voice": cta_result.voice,
-                "speaking_rate": cta_result.speaking_rate,
+                "provider": cta_log_result.provider,
+                "voice": cta_log_result.voice,
+                "speaking_rate": cta_log_result.speaking_rate,
             },
             "visual_source": last_metadata,
         },
