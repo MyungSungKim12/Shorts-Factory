@@ -6,7 +6,12 @@ from app.content_format import get_content_format
 from app.services.claude_client import call_agent
 
 
-def run_writer(data_dir: Path, date_str: str, content_format: str | None = None) -> dict:
+def run_writer(
+    data_dir: Path,
+    date_str: str,
+    content_format: str | None = None,
+    work_root: str = "work",
+) -> dict:
     """
     topic.json을 받아 script.json을 생성한다.
 
@@ -17,7 +22,7 @@ def run_writer(data_dir: Path, date_str: str, content_format: str | None = None)
     Returns:
         script.json 스키마 dict
     """
-    work_dir = data_dir / "work" / date_str
+    work_dir = data_dir / work_root / date_str
     topic_file = work_dir / "topic.json"
 
     if not topic_file.exists():

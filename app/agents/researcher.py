@@ -70,6 +70,8 @@ def run_researcher(
     run_id: str = None,
     recent_topics: list = None,
     content_format: str | None = None,
+    work_root: str = "work",
+    use_cache: bool = True,
 ) -> dict:
     """
     랭킹 소재를 발굴하고 순위 데이터를 수집한다.
@@ -88,7 +90,7 @@ def run_researcher(
 
     if run_id is None:
         run_id = datetime.now().strftime("%Y%m%d")
-    work_dir = data_dir / "work" / run_id
+    work_dir = data_dir / work_root / run_id
     work_dir.mkdir(parents=True, exist_ok=True)
 
     # 회차(run_id 끝의 -N)로 카테고리 결정
@@ -132,12 +134,15 @@ def run_researcher(
         raw_topic["verified_at"] = datetime.now().isoformat()
         topic_dict = validate_topic(raw_topic, selected)
         cache_slot = 0 if selected == "story" else slot
-        save_verified(data_dir, cache_slot, topic_dict)
-        print(f"  ✓ 검색 그라운딩으로 검증 (캐시 {cache_size(data_dir, cache_slot)}건)")
+        if use_cache:
+            save_verified(data_dir, cache_slot, topic_dict)
+            print(f"  ✓ 검색 그라운딩으로 검증 (캐시 {cache_size(data_dir, cache_slot)}건)")
+        else:
+            print("  ✓ 검색 그라운딩으로 검증 (샘플 모드: 캐시 미사용)")
     except Exception as e:
         print(f"  ℹ️ 그라운딩 검증 실패({str(e)[:60]}) — 검증 캐시에서 소재 찾기")
         cache_slot = 0 if selected == "story" else slot
-        cached = pick_cached(data_dir, cache_slot, recent_topics)
+        cached = pick_cached(data_dir, cache_slot, recent_topics) if use_cache else None
         if cached:
             topic_dict = validate_topic(cached, selected)
             print(f"  ✓ 검증 캐시 재사용: {topic_dict.get('topic', '')}")

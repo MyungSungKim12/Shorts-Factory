@@ -135,3 +135,22 @@ def test_orchestrator_passes_selected_format_to_researcher_and_writer(tmp_path, 
     result = asyncio.run(orchestrator.run_pipeline(tmp_path, "ffmpeg", slot=1))
     assert seen == {"researcher": "story", "writer": "story", "producer": "story"}
     assert result["content_format"] == "story"
+
+
+def test_sample_researcher_skips_sqlite_cache(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        researcher,
+        "call_agent",
+        lambda **kwargs: json.dumps(_topic(), ensure_ascii=False),
+    )
+    result = researcher.run_researcher(
+        tmp_path,
+        "isolated",
+        recent_topics=[],
+        content_format="story",
+        work_root="samples",
+        use_cache=False,
+    )
+    assert result["verification_method"] == "grounded_search"
+    assert (tmp_path / "samples" / "isolated" / "topic.json").exists()
+    assert not (tmp_path / "videos.sqlite").exists()
