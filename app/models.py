@@ -3,6 +3,8 @@
 agents/*.md의 "입출력 계약" 섹션에 대한 단일 코드 구현.
 검증 실패 = ValueError 발생 = 파이프라인 중단 (불량 영상이 업로드되는 것보다 하루 쉬는 게 낫다).
 """
+from typing import Literal
+
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 _PLACEHOLDERS = {"...", "항목명", "N/A", "없음", "unknown", "TBD"}
@@ -102,11 +104,113 @@ class ScriptContract(BaseModel):
         return self
 
 
-def validate_topic(data: dict) -> dict:
+class StoryFact(BaseModel):
+    claim: str
+    value: str
+    source: str
+    source_url: str
+
+    @field_validator("claim", "value", "source")
+    @classmethod
+    def _not_placeholder(cls, v: str) -> str:
+        value = (v or "").strip()
+        if not value or value in _PLACEHOLDERS:
+            raise ValueError("빈 값 또는 자리표시자 — 실제 내용 필수")
+        return value
+
+    @field_validator("source_url")
+    @classmethod
+    def _source_url_required(cls, v: str) -> str:
+        value = (v or "").strip()
+        if not value.startswith(("https://", "http://")):
+            raise ValueError("사실마다 HTTP(S) 출처 URL이 필요함")
+        return value
+
+
+class StoryVisualPlan(BaseModel):
+    beat: str = Field(min_length=2)
+    keywords: list[str] = Field(min_length=2, max_length=5)
+
+    @field_validator("keywords")
+    @classmethod
+    def _keywords_are_concrete(cls, values: list[str]) -> list[str]:
+        cleaned = [(value or "").strip() for value in values]
+        if any(not value or value in _PLACEHOLDERS for value in cleaned):
+            raise ValueError("visual keyword는 실제 검색어여야 함")
+        return cleaned
+
+
+class StoryTopicContract(BaseModel):
+    """단일 소재 스토리 리서처 산출물 계약."""
+    format: Literal["story"] = "story"
+    topic: str = Field(min_length=5)
+    category: Literal["place_nature", "history_structure", "animal_survival"]
+    hook_angle: str = Field(min_length=5)
+    target_keyword: str = Field(min_length=2)
+    core_question: str = Field(min_length=5)
+    facts: list[StoryFact] = Field(min_length=1)
+    visual_plan: list[StoryVisualPlan] = Field(min_length=1)
+    verification_method: str
+    verified_at: str = Field(min_length=5)
+
+    def is_uploadable(self) -> bool:
+        return self.verification_method in UPLOADABLE_VERIFICATION
+
+
+class StoryScene(BaseModel):
+    n: int = Field(ge=1)
+    role: Literal["hook", "context", "problem", "mechanism", "payoff", "close"]
+    narration: str = Field(min_length=2)
+    visuals: list[str] = Field(min_length=2, max_length=3)
+    duration_sec: float = Field(ge=2, le=15)
+    emphasis: list[str] = Field(default_factory=list, max_length=4)
+
+    @field_validator("visuals")
+    @classmethod
+    def _visuals_are_searchable(cls, values: list[str]) -> list[str]:
+        cleaned = [(value or "").strip() for value in values]
+        if any(not value or value in _PLACEHOLDERS for value in cleaned):
+            raise ValueError("씬마다 실제 visual 검색어가 필요함")
+        return cleaned
+
+
+class StoryScriptContract(BaseModel):
+    """60~75초 단일 소재 스토리 대본 계약."""
+    format: Literal["story"] = "story"
+    title: str = Field(min_length=5, max_length=100)
+    description: str = ""
+    tags: list[str] = Field(default_factory=list)
+    hook: str = Field(min_length=5)
+    scenes: list[StoryScene] = Field(min_length=7, max_length=10)
+    cta: str = ""
+    total_duration_sec: float = Field(ge=60, le=75)
+
+    @model_validator(mode="after")
+    def _story_structure(self):
+        numbers = [scene.n for scene in self.scenes]
+        expected = list(range(1, len(self.scenes) + 1))
+        if numbers != expected:
+            raise ValueError(f"씬 번호가 연속적이지 않음: {numbers}")
+        if self.scenes[0].role != "hook":
+            raise ValueError("첫 씬 role은 hook이어야 함")
+        if self.scenes[-1].role != "close":
+            raise ValueError("마지막 씬 role은 close여야 함")
+        total = round(sum(scene.duration_sec for scene in self.scenes), 1)
+        if not 60 <= total <= 75:
+            raise ValueError(f"씬 duration 합계 {total:.1f}초 — story 목표(60~75초) 벗어남")
+        self.total_duration_sec = total
+        return self
+
+
+def validate_topic(data: dict, content_format: str | None = None) -> dict:
     """topic.json 검증 — 실패 시 ValueError."""
-    return TopicContract.model_validate(data).model_dump()
+    selected = content_format or data.get("format") or "ranking"
+    model = StoryTopicContract if selected == "story" else TopicContract
+    return model.model_validate(data).model_dump()
 
 
-def validate_script(data: dict) -> dict:
+def validate_script(data: dict, content_format: str | None = None) -> dict:
     """script.json 검증 — 실패 시 ValueError."""
-    return ScriptContract.model_validate(data).model_dump()
+    selected = content_format or data.get("format") or "ranking"
+    model = StoryScriptContract if selected == "story" else ScriptContract
+    return model.model_validate(data).model_dump()
