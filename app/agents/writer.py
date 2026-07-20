@@ -79,12 +79,12 @@ def _story_writer_prompt(topic: dict) -> str:
 {visual_plan}
 
 [잔존 구조]
-- 7~10개 씬으로 작성하고 duration_sec 합계는 반드시 60~65초다. Neural2 실제 발화가 계획보다 길어질 여유를 남긴다.
+- 7~10개 씬으로 작성하고 duration_sec 합계는 반드시 57~62초다. 뒤에 3~4초 CTA가 붙고 Neural2 실제 발화가 계획보다 길어질 여유를 남긴다.
 - 0~3초 hook: 인사, 채널명, 로고, 주제 소개 없이 결과나 모순부터 말한다.
 - 10초 안에 작은 답 하나를 주되 최종 원리는 남겨 둔다.
 - 12~15초, 25~30초, 45~50초 부근에 새 질문, 검증 수치, 시각 전환 중 하나를 둔다.
 - 흐름은 hook → context → problem → mechanism → payoff → close다.
-- 마지막 close는 첫 문장을 회수하며 CTA는 필요할 때만 한 문장으로 쓴다.
+- 마지막 close는 첫 문장을 회수한다. CTA는 주제와 자연스럽게 연결된 한 문장으로 쓰고 반드시 "구독"과 "좋아요"를 모두 포함한다.
 - 검증된 사실 이외의 수치, 인과관계, 고유명사를 만들지 않는다.
 
 [화면 규칙]
@@ -111,8 +111,8 @@ def _story_writer_prompt(topic: dict) -> str:
       "emphasis": ["비가 없는데", "마르지 않는다"]
     }}
   ],
-  "cta": "",
-  "total_duration_sec": 66
+  "cta": "이런 자연의 비밀이 더 궁금하다면, 구독과 좋아요 부탁드립니다.",
+  "total_duration_sec": 60
 }}
 
 허용 role은 hook, context, problem, mechanism, payoff, close뿐이다. 첫 씬은 hook, 마지막 씬은 close로 하고 씬 번호를 1부터 연속으로 매겨라.

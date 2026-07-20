@@ -175,7 +175,7 @@ class StoryScene(BaseModel):
 
 
 class StoryScriptContract(BaseModel):
-    """60~75초 단일 소재 스토리 대본 계약."""
+    """CTA 여유를 포함한 57~75초 단일 소재 스토리 본문 계약."""
     format: Literal["story"] = "story"
     title: str = Field(min_length=5, max_length=100)
     description: str = ""
@@ -183,7 +183,7 @@ class StoryScriptContract(BaseModel):
     hook: str = Field(min_length=5)
     scenes: list[StoryScene] = Field(min_length=7, max_length=10)
     cta: str = ""
-    total_duration_sec: float = Field(ge=60, le=75)
+    total_duration_sec: float = Field(ge=57, le=75)
 
     @model_validator(mode="after")
     def _story_structure(self):
@@ -196,8 +196,8 @@ class StoryScriptContract(BaseModel):
         if self.scenes[-1].role != "close":
             raise ValueError("마지막 씬 role은 close여야 함")
         total = round(sum(scene.duration_sec for scene in self.scenes), 1)
-        if not 60 <= total <= 75:
-            raise ValueError(f"씬 duration 합계 {total:.1f}초 — story 목표(60~75초) 벗어남")
+        if not 57 <= total <= 75:
+            raise ValueError(f"씬 duration 합계 {total:.1f}초 — story 본문 목표(57~75초) 벗어남")
         self.total_duration_sec = total
         return self
 

@@ -39,7 +39,8 @@ def _script():
             "visuals": ["desert lake aerial", "desert water closeup"],
             "duration_sec": 8, "emphasis": ["호수"],
         } for n in range(1, 9)],
-        "cta": "", "total_duration_sec": 64,
+        "cta": "이런 자연의 비밀이 더 궁금하다면, 구독과 좋아요 부탁드립니다.",
+        "total_duration_sec": 64,
     }
 
 
@@ -55,7 +56,9 @@ def test_research_prompt_requires_sources_and_visual_plan():
 def test_writer_prompt_contains_retention_beats():
     prompt = writer._story_writer_prompt(_topic())
     assert "완성 영상 목표는 60~75초" in prompt
-    assert "duration_sec 합계는 반드시 60~65초" in prompt
+    assert "duration_sec 합계는 반드시 57~62초" in prompt
+    assert "구독" in prompt
+    assert "좋아요" in prompt
     assert "7~10개" in prompt
     assert "12~15초" in prompt
     assert "25~30초" in prompt

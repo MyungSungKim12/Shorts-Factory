@@ -16,6 +16,17 @@ from app.services.media_library import fetch_story_media
 from app.services.tts import TTSResult, synthesize
 
 
+DEFAULT_STORY_CTA = "이런 이야기가 더 궁금하다면, 구독과 좋아요 부탁드립니다."
+
+
+def normalize_story_cta(value: str | None) -> tuple[str, bool]:
+    """주제 맞춤 CTA가 두 행동을 모두 포함하지 않으면 안전한 기본 문구를 쓴다."""
+    text = (value or "").strip()
+    if "구독" not in text or "좋아요" not in text:
+        return DEFAULT_STORY_CTA, True
+    return text, False
+
+
 def _scene_shots(scene: dict, duration: float | None = None) -> list[dict]:
     visuals = [value.strip() for value in scene.get("visuals", []) if value.strip()]
     if not visuals:

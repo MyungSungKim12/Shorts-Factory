@@ -1,8 +1,24 @@
 """스토리 샷 계획, 렌더링 필터, 프로듀서 라우팅 테스트."""
 import asyncio
+import pytest
 
 from app.agents import producer
 from app.agents import story_producer
+
+
+def test_story_cta_keeps_topic_aware_copy_with_both_actions():
+    value, fallback = story_producer.normalize_story_cta(
+        "이런 자연의 비밀이 더 궁금하다면 구독과 좋아요 부탁드립니다."
+    )
+    assert value.startswith("이런 자연의 비밀")
+    assert fallback is False
+
+
+@pytest.mark.parametrize("value", ["", "다음 이야기도 구독해 주세요.", "좋아요 부탁드립니다."])
+def test_story_cta_falls_back_when_an_action_is_missing(value):
+    normalized, fallback = story_producer.normalize_story_cta(value)
+    assert normalized == "이런 이야기가 더 궁금하다면, 구독과 좋아요 부탁드립니다."
+    assert fallback is True
 
 
 def test_each_story_beat_becomes_short_visual_shots():
