@@ -48,7 +48,7 @@ def main():
     data_dir = Path(os.getenv("DATA_DIR", "./data"))
     ffmpeg_path = os.getenv("FFMPEG_PATH", "ffmpeg")
 
-    # 회차: cron이 인자로 지정 (12시=1, 15시=2, 18시=3). 없으면 자동 선택.
+    # 회차: cron이 인자로 지정 (11시=1, 17시=2, 21시=3). 없으면 자동 선택.
     slot = int(sys.argv[1]) if len(sys.argv) > 1 else None
 
     cleanup_old_work(data_dir, int(os.getenv("WORK_RETENTION_DAYS", "7")))

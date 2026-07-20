@@ -8,7 +8,7 @@ from app.content_format import get_content_format
 from app.services.claude_client import call_agent
 from app.services.web_search import search_ranking_topics
 
-# 회차별 고정 카테고리 — 매일 4개 영상이 서로 다른 결로 나오고, 카테고리별 성과 비교(A/B)도 됨.
+# 회차별 고정 카테고리 — 매일 3개 영상이 서로 다른 결로 나오고, 카테고리별 성과 비교(A/B)도 됨.
 # desc는 "무료 스톡(Pexels) 영상이 존재하는 대상"으로 유도하는 게 핵심.
 SLOT_CATEGORIES = {
     1: {
