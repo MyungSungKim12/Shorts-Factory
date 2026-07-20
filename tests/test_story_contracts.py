@@ -85,6 +85,18 @@ def test_story_contract_accepts_body_duration_reserved_for_cta():
     assert validate_script(data)["total_duration_sec"] == 57
 
 
+def test_story_contract_accepts_shorter_body_reserved_for_spoken_intro():
+    data = story_script()
+    durations = [7, 7, 7, 8, 8, 8, 8]
+    data["scenes"] = data["scenes"][:7]
+    for scene, duration in zip(data["scenes"], durations):
+        scene["duration_sec"] = duration
+    data["scenes"][-1]["role"] = "close"
+    data["total_duration_sec"] = 53
+
+    assert validate_script(data)["total_duration_sec"] == 53
+
+
 def test_story_rejects_missing_source_url():
     data = story_topic()
     data["facts"][0]["source_url"] = ""

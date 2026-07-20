@@ -47,6 +47,30 @@ def build_cta_timing(body_duration: float, audio_duration: float) -> dict[str, f
     return {"start": start, "end": end, "total_duration": end}
 
 
+def build_story_timing(
+    intro_audio_duration: float,
+    body_duration: float,
+    cta_audio_duration: float,
+    padding: float = 0.15,
+) -> dict[str, float]:
+    """Place the spoken title before the body and validate the final Shorts length."""
+    intro_duration = round(float(intro_audio_duration) + float(padding), 3)
+    body_start = intro_duration
+    cta_start = round(body_start + float(body_duration), 3)
+    cta_end = round(cta_start + float(cta_audio_duration), 3)
+    if cta_end < 60:
+        raise RuntimeError(f"인트로·CTA 포함 최종 길이 {cta_end:.1f}초로 60초 미만")
+    if cta_end > 75:
+        raise RuntimeError(f"인트로·CTA 포함 최종 길이 {cta_end:.1f}초로 75초 초과")
+    return {
+        "intro_duration": intro_duration,
+        "body_start": body_start,
+        "cta_start": cta_start,
+        "cta_end": cta_end,
+        "total_duration": cta_end,
+    }
+
+
 def _scene_shots(scene: dict, duration: float | None = None) -> list[dict]:
     visuals = [value.strip() for value in scene.get("visuals", []) if value.strip()]
     if not visuals:
@@ -351,10 +375,20 @@ def _write_srt(
     audio_durations: dict[int, float],
     output: Path,
     cta: dict | None = None,
+    intro: dict | None = None,
 ) -> None:
     lines = []
     cue = 0
     current = 0.0
+    if intro:
+        cue += 1
+        lines.extend([
+            str(cue),
+            f"{_srt_time(0)} --> {_srt_time(intro['audio_end'])}",
+            intro["text"],
+            "",
+        ])
+        current = float(intro["body_start"])
     for scene in script.get("scenes", []):
         scene_duration = scene_durations[scene["n"]]
         caption_duration = min(scene_duration, audio_durations[scene["n"]])
@@ -460,6 +494,11 @@ async def run_story_producer(
         scene_durations = {}
         audio_durations = {}
 
+        intro_narration = tmp_path / "narration-intro.mp3"
+        intro_result = synthesize(_tts_text(script["title"]), intro_narration)
+        tts_results.append(intro_result)
+        intro_audio_duration = _duration(intro_narration, ffmpeg_path)
+
         safe_print("  → Neural2 스토리 나레이션 생성 중...")
         for scene in script.get("scenes", []):
             narration = tmp_path / f"narration-{scene['n']:02d}.mp3"
@@ -478,7 +517,9 @@ async def run_story_producer(
         cta_result = synthesize(_tts_text(cta_text), cta_narration)
         tts_results.append(cta_result)
         cta_audio_duration = _duration(cta_narration, ffmpeg_path)
-        cta_timing = build_cta_timing(body_duration, cta_audio_duration)
+        story_timing = build_story_timing(
+            intro_audio_duration, body_duration, cta_audio_duration
+        )
 
         safe_print("  → 무료 미디어 선별 및 2~4초 샷 생성 중...")
         used_ids: set[str] = set()
@@ -487,6 +528,8 @@ async def run_story_producer(
         global_shot_n = 0
         last_media = None
         last_metadata = {}
+        first_media = None
+        first_metadata = {}
         for scene in script.get("scenes", []):
             shots = _scene_shots(scene, scene_durations[scene["n"]])
             visual_clips = []
@@ -503,6 +546,9 @@ async def run_story_producer(
                 if media is None:
                     media = tmp_path / f"fallback-{global_shot_n:03d}.jpg"
                     _create_fallback_image(media, scene["n"])
+                if first_media is None:
+                    first_media = media
+                    first_metadata = metadata
                 last_media = media
                 last_metadata = metadata
                 clip = tmp_path / f"shot-{global_shot_n:03d}.mp4"
@@ -533,8 +579,26 @@ async def run_story_producer(
             )
             scene_videos.append(scene_video)
 
-        if last_media is None:
+        if first_media is None or last_media is None:
             raise RuntimeError("CTA 엔딩에 재사용할 마지막 시각 소스가 없습니다")
+        intro_visual = tmp_path / "intro-visual.mp4"
+        _encode_visual(
+            first_media,
+            intro_visual,
+            story_timing["intro_duration"],
+            ffmpeg_path,
+            preserve_full=first_metadata.get("provider") == "wikimedia_image",
+        )
+        intro_video = tmp_path / "scene-intro.mp4"
+        _attach_narration(
+            intro_visual,
+            intro_narration,
+            intro_video,
+            story_timing["intro_duration"],
+            ffmpeg_path,
+        )
+        scene_videos.insert(0, intro_video)
+
         cta_visual = tmp_path / "cta-visual.mp4"
         _encode_visual(
             last_media,
@@ -562,7 +626,16 @@ async def run_story_producer(
             scene_durations,
             audio_durations,
             srt_path,
-            cta={"text": cta_text, **cta_timing},
+            intro={
+                "text": script["title"],
+                "audio_end": intro_audio_duration,
+                "body_start": story_timing["body_start"],
+            },
+            cta={
+                "text": cta_text,
+                "start": story_timing["cta_start"],
+                "end": story_timing["cta_end"],
+            },
         )
         title_overlay = tmp_path / "title-overlay.png"
         title_metadata = _create_title_overlay(script["title"], title_overlay)
@@ -583,6 +656,17 @@ async def run_story_producer(
         "script_sha256": hashlib.sha256(script_file.read_bytes()).hexdigest(),
         "tts": summarize_tts(tts_results),
         "layout": {**STORY_LAYOUT, "title": title_metadata},
+        "intro": {
+            "text": script["title"],
+            "audio_duration": round(intro_audio_duration, 3),
+            "duration": story_timing["intro_duration"],
+            "tts": {
+                "provider": intro_result.provider,
+                "voice": intro_result.voice,
+                "speaking_rate": intro_result.speaking_rate,
+            },
+            "visual_source": first_metadata,
+        },
         "cta": {
             "text": cta_text,
             "audio_duration": round(cta_audio_duration, 3),

@@ -158,6 +158,22 @@ def test_cta_timing_uses_measured_audio_after_body():
     assert timing == {"start": 68.5, "end": 71.7, "total_duration": 71.7}
 
 
+def test_story_timing_places_spoken_title_before_body_and_cta():
+    timing = story_producer.build_story_timing(3.0, 58.0, 4.0, padding=0.15)
+    assert timing == {
+        "intro_duration": 3.15,
+        "body_start": 3.15,
+        "cta_start": 61.15,
+        "cta_end": 65.15,
+        "total_duration": 65.15,
+    }
+
+
+def test_story_timing_rejects_total_over_75_seconds():
+    with pytest.raises(RuntimeError, match="75"):
+        story_producer.build_story_timing(4.0, 68.0, 4.0)
+
+
 def test_cta_timing_rejects_final_video_over_75_seconds():
     with pytest.raises(RuntimeError, match="75초 초과"):
         story_producer.build_cta_timing(73.0, 3.0)
@@ -183,6 +199,26 @@ def test_story_srt_appends_cta_for_exact_audio_window(tmp_path):
     subtitles = output.read_text(encoding="utf-8")
     assert "00:00:06,000 --> 00:00:09,200" in subtitles
     assert "구독과 좋아요 부탁드립니다." in subtitles
+
+
+def test_story_srt_starts_with_title_and_shifts_body(tmp_path):
+    script = {"title": "Spoken story title", "scenes": [{
+        "n": 1, "narration": "Body narration", "duration_sec": 6,
+    }]}
+    output = tmp_path / "subs.srt"
+
+    story_producer._write_srt(
+        script,
+        scene_durations={1: 6.0},
+        audio_durations={1: 5.5},
+        output=output,
+        intro={"text": script["title"], "audio_end": 3.0, "body_start": 3.15},
+    )
+
+    subtitles = output.read_text(encoding="utf-8")
+    assert "00:00:00,000 --> 00:00:03,000" in subtitles
+    assert "Spoken story title" in subtitles
+    assert "00:00:03,150" in subtitles
 
 
 def test_cta_visual_filter_adds_dark_overlay():

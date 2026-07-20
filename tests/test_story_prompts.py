@@ -56,7 +56,7 @@ def test_research_prompt_requires_sources_and_visual_plan():
 def test_writer_prompt_contains_retention_beats():
     prompt = writer._story_writer_prompt(_topic())
     assert "완성 영상 목표는 60~75초" in prompt
-    assert "duration_sec 합계는 반드시 57~62초" in prompt
+    assert "duration_sec 합계는 반드시 53~58초" in prompt
     assert "구독" in prompt
     assert "좋아요" in prompt
     assert "7~10개" in prompt
