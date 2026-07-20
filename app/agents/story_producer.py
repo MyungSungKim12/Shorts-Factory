@@ -27,6 +27,17 @@ def normalize_story_cta(value: str | None) -> tuple[str, bool]:
     return text, False
 
 
+def build_cta_timing(body_duration: float, audio_duration: float) -> dict[str, float]:
+    """본문 직후 CTA를 배치하고 최종 Shorts 길이 범위를 검증한다."""
+    start = round(float(body_duration), 3)
+    end = round(start + float(audio_duration), 3)
+    if end < 60:
+        raise RuntimeError(f"CTA 포함 최종 길이 {end:.1f}초로 60초 미만")
+    if end > 75:
+        raise RuntimeError(f"CTA 포함 최종 길이 {end:.1f}초로 75초 초과")
+    return {"start": start, "end": end, "total_duration": end}
+
+
 def _scene_shots(scene: dict, duration: float | None = None) -> list[dict]:
     visuals = [value.strip() for value in scene.get("visuals", []) if value.strip()]
     if not visuals:
@@ -59,8 +70,14 @@ def build_shot_plan(script: dict) -> list[dict]:
     return shots
 
 
-def visual_filter(media_file: str, duration: float, preserve_full: bool = False) -> str:
+def visual_filter(
+    media_file: str,
+    duration: float,
+    preserve_full: bool = False,
+    darken: bool = False,
+) -> str:
     """세로 전체화면 영상 또는 정지 이미지 모션 필터를 만든다."""
+    overlay = ",drawbox=color=black@0.35:t=fill" if darken else ""
     if str(media_file).lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
         frames = max(1, round(duration * 30))
         if preserve_full:
@@ -72,18 +89,18 @@ def visual_filter(media_file: str, duration: float, preserve_full: bool = False)
                 "[bg][fg]overlay=(W-w)/2:(H-h)/2,"
                 "zoompan=z='min(zoom+0.0003,1.03)':"
                 "x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
-                f"d={frames}:s=1080x1920:fps=30,format=yuv420p[vout]"
+                f"d={frames}:s=1080x1920:fps=30{overlay},format=yuv420p[vout]"
             )
         return (
             "scale=1200:2134:force_original_aspect_ratio=increase,"
             "crop=1200:2134,"
             "zoompan=z='min(zoom+0.0008,1.08)':"
             "x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
-            f"d={frames}:s=1080x1920:fps=30,format=yuv420p"
+            f"d={frames}:s=1080x1920:fps=30{overlay},format=yuv420p"
         )
     return (
         "scale=1080:1920:force_original_aspect_ratio=increase,"
-        "crop=1080:1920,fps=30,format=yuv420p"
+        f"crop=1080:1920,fps=30{overlay},format=yuv420p"
     )
 
 
@@ -169,6 +186,7 @@ def _encode_visual(
     duration: float,
     ffmpeg_path: str,
     preserve_full: bool = False,
+    darken: bool = False,
 ) -> None:
     is_image = media.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
     cmd = [ffmpeg_path]
@@ -179,11 +197,11 @@ def _encode_visual(
     cmd += ["-an"]
     if preserve_full and is_image:
         cmd += [
-            "-filter_complex", visual_filter(str(media), duration, preserve_full),
+            "-filter_complex", visual_filter(str(media), duration, preserve_full, darken),
             "-map", "[vout]",
         ]
     else:
-        cmd += ["-vf", visual_filter(str(media), duration, preserve_full)]
+        cmd += ["-vf", visual_filter(str(media), duration, preserve_full, darken)]
     cmd += [
         "-t", f"{duration:.3f}",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "25",
@@ -247,6 +265,7 @@ def _write_srt(
     scene_durations: dict[int, float],
     audio_durations: dict[int, float],
     output: Path,
+    cta: dict | None = None,
 ) -> None:
     lines = []
     cue = 0
@@ -269,6 +288,14 @@ def _write_srt(
             ])
             cursor += chunk_duration
         current += scene_duration
+    if cta:
+        cue += 1
+        lines.extend([
+            str(cue),
+            f"{_srt_time(cta['start'])} --> {_srt_time(cta['end'])}",
+            cta["text"],
+            "",
+        ])
     output.write_text("\n".join(lines), encoding="utf-8")
 
 
@@ -352,17 +379,21 @@ async def run_story_producer(
                 float(scene["duration_sec"]), round(audio_duration + 0.2, 3)
             )
 
-        total_duration = sum(scene_durations.values())
-        if total_duration > 75:
-            raise RuntimeError(
-                f"실제 나레이션 기준 {total_duration:.1f}초로 75초 초과 — 대본 축약 필요"
-            )
+        body_duration = sum(scene_durations.values())
+        cta_text, cta_fallback = normalize_story_cta(script.get("cta"))
+        cta_narration = tmp_path / "narration-cta.mp3"
+        cta_result = synthesize(_tts_text(cta_text), cta_narration)
+        tts_results.append(cta_result)
+        cta_audio_duration = _duration(cta_narration, ffmpeg_path)
+        cta_timing = build_cta_timing(body_duration, cta_audio_duration)
 
         safe_print("  → 무료 미디어 선별 및 2~4초 샷 생성 중...")
         used_ids: set[str] = set()
         sources = []
         scene_videos = []
         global_shot_n = 0
+        last_media = None
+        last_metadata = {}
         for scene in script.get("scenes", []):
             shots = _scene_shots(scene, scene_durations[scene["n"]])
             visual_clips = []
@@ -379,6 +410,8 @@ async def run_story_producer(
                 if media is None:
                     media = tmp_path / f"fallback-{global_shot_n:03d}.jpg"
                     _create_fallback_image(media, scene["n"])
+                last_media = media
+                last_metadata = metadata
                 clip = tmp_path / f"shot-{global_shot_n:03d}.mp4"
                 _encode_visual(
                     media,
@@ -407,10 +440,37 @@ async def run_story_producer(
             )
             scene_videos.append(scene_video)
 
+        if last_media is None:
+            raise RuntimeError("CTA 엔딩에 재사용할 마지막 시각 소스가 없습니다")
+        cta_visual = tmp_path / "cta-visual.mp4"
+        _encode_visual(
+            last_media,
+            cta_visual,
+            cta_audio_duration,
+            ffmpeg_path,
+            preserve_full=last_metadata.get("provider") == "wikimedia_image",
+            darken=True,
+        )
+        cta_video = tmp_path / "scene-cta.mp4"
+        _attach_narration(
+            cta_visual,
+            cta_narration,
+            cta_video,
+            cta_audio_duration,
+            ffmpeg_path,
+        )
+        scene_videos.append(cta_video)
+
         concat_video = tmp_path / "story-concat.mp4"
         _concat_files(scene_videos, concat_video, ffmpeg_path, tmp_path)
         srt_path = tmp_path / "subs.srt"
-        _write_srt(script, scene_durations, audio_durations, srt_path)
+        _write_srt(
+            script,
+            scene_durations,
+            audio_durations,
+            srt_path,
+            cta={"text": cta_text, **cta_timing},
+        )
 
         output_mp4 = work_dir / "output.mp4"
         _finish_video(concat_video, output_mp4, srt_path, ffmpeg_path, tmp_path)
@@ -425,6 +485,17 @@ async def run_story_producer(
         "actual_duration": round(actual_duration, 1),
         "script_sha256": hashlib.sha256(script_file.read_bytes()).hexdigest(),
         "tts": summarize_tts(tts_results),
+        "cta": {
+            "text": cta_text,
+            "audio_duration": round(cta_audio_duration, 3),
+            "fallback_used": cta_fallback,
+            "tts": {
+                "provider": cta_result.provider,
+                "voice": cta_result.voice,
+                "speaking_rate": cta_result.speaking_rate,
+            },
+            "visual_source": last_metadata,
+        },
         "sources": sources,
         "fallback_shots": sum(1 for item in sources if item.get("fallback")),
         "experiment": "story_v1_retention",

@@ -106,6 +106,44 @@ def test_story_subtitle_style_uses_smaller_font():
     assert "FontSize=16" in story_producer._subtitle_style("Malgun Gothic")
 
 
+def test_cta_timing_uses_measured_audio_after_body():
+    timing = story_producer.build_cta_timing(68.5, 3.2)
+    assert timing == {"start": 68.5, "end": 71.7, "total_duration": 71.7}
+
+
+def test_cta_timing_rejects_final_video_over_75_seconds():
+    with pytest.raises(RuntimeError, match="75초 초과"):
+        story_producer.build_cta_timing(73.0, 3.0)
+
+
+def test_cta_timing_rejects_final_video_under_60_seconds():
+    with pytest.raises(RuntimeError, match="60초 미만"):
+        story_producer.build_cta_timing(55.0, 3.0)
+
+
+def test_story_srt_appends_cta_for_exact_audio_window(tmp_path):
+    script = {"scenes": [{"n": 1, "narration": "본문입니다.", "duration_sec": 6}]}
+    output = tmp_path / "subs.srt"
+
+    story_producer._write_srt(
+        script,
+        scene_durations={1: 6.0},
+        audio_durations={1: 5.5},
+        output=output,
+        cta={"text": "구독과 좋아요 부탁드립니다.", "start": 6.0, "end": 9.2},
+    )
+
+    subtitles = output.read_text(encoding="utf-8")
+    assert "00:00:06,000 --> 00:00:09,200" in subtitles
+    assert "구독과 좋아요 부탁드립니다." in subtitles
+
+
+def test_cta_visual_filter_adds_dark_overlay():
+    vf = story_producer.visual_filter("shot.mp4", duration=3.2, darken=True)
+    assert "drawbox" in vf
+    assert "black@0.35" in vf
+
+
 def test_producer_routes_story_without_entering_ranking_renderer(tmp_path, monkeypatch):
     seen = {}
 
