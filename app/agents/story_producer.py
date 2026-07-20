@@ -123,18 +123,18 @@ def visual_filter(
                 "[bg][fg]overlay=(W-w)/2:(H-h)/2,"
                 "zoompan=z='min(zoom+0.0003,1.03)':"
                 "x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
-                f"d={frames}:s=1080x1330:fps=30{overlay}{pad},format=yuv420p[vout]"
+                f"d={frames}:s=1080x1330:fps=30{overlay}{pad},setsar=1,format=yuv420p[vout]"
             )
         return (
             "scale=1200:1478:force_original_aspect_ratio=increase,"
             "crop=1200:1478,"
             "zoompan=z='min(zoom+0.0008,1.08)':"
             "x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
-            f"d={frames}:s=1080x1330:fps=30{overlay}{pad},format=yuv420p"
+            f"d={frames}:s=1080x1330:fps=30{overlay}{pad},setsar=1,format=yuv420p"
         )
     return (
         "scale=1080:1330:force_original_aspect_ratio=increase,"
-        f"crop=1080:1330,fps=30{overlay}{pad},format=yuv420p"
+        f"crop=1080:1330,fps=30{overlay}{pad},setsar=1,format=yuv420p"
     )
 
 
@@ -421,7 +421,7 @@ def _write_srt(
 def _subtitle_style(font: str) -> str:
     return (
         f"FontName={font},FontSize=16,Bold=1,PrimaryColour=&H00FFFFFF,"
-        "OutlineColour=&H00000000,Outline=3,Shadow=1,Alignment=2,MarginV=110"
+        "OutlineColour=&H00000000,Outline=3,Shadow=1,Alignment=2,MarginV=55"
     )
 
 
@@ -445,7 +445,7 @@ def _finish_video(
 ) -> None:
     font = os.getenv("SUBTITLE_FONT", "Malgun Gothic")
     style = _subtitle_style(font)
-    video_filter = f"subtitles=subs.srt:force_style='{style}'"
+    video_filter = f"setsar=1,subtitles=subs.srt:force_style='{style}'"
     bgm = _pick_bgm()
     if bgm:
         volume = os.getenv("BGM_VOLUME", "0.08")
@@ -453,7 +453,8 @@ def _finish_video(
             ffmpeg_path, "-i", str(concat_video), "-stream_loop", "-1", "-i", str(bgm),
             "-i", str(title_overlay),
             "-filter_complex",
-            f"[0:v]{video_filter}[subbed];[subbed][2:v]overlay=0:0[vout];"
+            f"[0:v]{video_filter}[subbed];[2:v]setsar=1[title];"
+            f"[subbed][title]overlay=0:0[vout];"
             f"[1:a]volume={volume}[bg];"
             "[bg][0:a]sidechaincompress=threshold=0.02:ratio=8[ducked];"
             "[0:a][ducked]amix=inputs=2:duration=first:dropout_transition=2[aout]",
@@ -463,7 +464,8 @@ def _finish_video(
         cmd = [
             ffmpeg_path, "-i", str(concat_video), "-i", str(title_overlay),
             "-filter_complex",
-            f"[0:v]{video_filter}[subbed];[subbed][1:v]overlay=0:0[vout]",
+            f"[0:v]{video_filter}[subbed];[1:v]setsar=1[title];"
+            f"[subbed][title]overlay=0:0[vout]",
             "-map", "[vout]", "-map", "0:a:0",
         ]
     cmd += [

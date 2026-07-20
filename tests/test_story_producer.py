@@ -75,6 +75,7 @@ def test_still_image_filter_has_motion_without_ranking_bands():
     assert "zoompan" in vf
     assert "1080x1330" in vf
     assert "pad=1080:1920:0:260:black" in vf
+    assert "setsar=1" in vf
 
 
 def test_video_filter_is_full_frame_vertical():
@@ -82,6 +83,7 @@ def test_video_filter_is_full_frame_vertical():
     assert "scale=1080:1330" in vf
     assert "crop=1080:1330" in vf
     assert "pad=1080:1920:0:260:black" in vf
+    assert "setsar=1" in vf
     assert "zoompan" not in vf
 
 
@@ -125,7 +127,32 @@ def test_subtitles_end_with_actual_audio_instead_of_scene_padding(tmp_path):
 def test_story_subtitle_style_uses_smaller_font():
     style = story_producer._subtitle_style("Malgun Gothic")
     assert "FontSize=16" in style
-    assert "MarginV=110" in style
+    assert "MarginV=55" in style
+
+
+def test_finish_video_normalizes_both_overlay_aspect_ratios(tmp_path, monkeypatch):
+    seen = {}
+
+    monkeypatch.setattr(story_producer, "_pick_bgm", lambda: None)
+    monkeypatch.setattr(
+        story_producer,
+        "_run_ffmpeg",
+        lambda cmd, cwd=None: seen.update(cmd=cmd, cwd=cwd),
+    )
+
+    story_producer._finish_video(
+        tmp_path / "concat.mp4",
+        tmp_path / "output.mp4",
+        tmp_path / "subs.srt",
+        tmp_path / "title.png",
+        "ffmpeg",
+        tmp_path,
+    )
+
+    filters = seen["cmd"][seen["cmd"].index("-filter_complex") + 1]
+    assert "[0:v]setsar=1,subtitles=" in filters
+    assert "[1:v]setsar=1[title]" in filters
+    assert "[subbed][title]overlay=0:0" in filters
 
 
 def test_story_layout_reserves_fixed_title_and_subtitle_bands():
