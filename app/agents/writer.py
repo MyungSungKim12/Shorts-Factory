@@ -2,10 +2,11 @@
 import json
 from pathlib import Path
 
+from app.content_format import get_content_format
 from app.services.claude_client import call_agent
 
 
-def run_writer(data_dir: Path, date_str: str) -> dict:
+def run_writer(data_dir: Path, date_str: str, content_format: str | None = None) -> dict:
     """
     topic.json을 받아 script.json을 생성한다.
 
@@ -25,10 +26,12 @@ def run_writer(data_dir: Path, date_str: str) -> dict:
     # topic.json 로드
     topic = json.loads(topic_file.read_text(encoding="utf-8"))
 
+    selected = get_content_format(content_format)
+
     # Claude를 통해 작가 에이전트 실행
     # 작가는 Groq 우선 (검색 불필요 + JSON 생성 강점) — Gemini 호출량 절약 겸 부하 분산
     script_text = call_agent(
-        prompt=_writer_prompt(topic),
+        prompt=_story_writer_prompt(topic) if selected == "story" else _writer_prompt(topic),
         agent_name="script-writer",
         max_tokens=16000,
         prefer="groq",
@@ -40,13 +43,74 @@ def run_writer(data_dir: Path, date_str: str) -> dict:
 
     # 검증 게이트 — 역순 구조/길이 정합성/제목 길이 검사. 실패 시 파이프라인 중단.
     from app.models import validate_script
-    script_dict = validate_script(script_dict)
+    script_dict = validate_script(script_dict, selected)
 
     # script.json 저장 (검증 통과분만 저장됨)
     script_file = work_dir / "script.json"
     script_file.write_text(json.dumps(script_dict, ensure_ascii=False, indent=2), encoding="utf-8")
 
     return script_dict
+
+
+def _story_writer_prompt(topic: dict) -> str:
+    """검증된 사실만으로 단일 소재 스토리 대본을 만드는 프롬프트."""
+    facts = "\n".join(
+        f"- {fact['claim']}: {fact['value']} (출처: {fact['source']}, {fact['source_url']})"
+        for fact in topic.get("facts", [])
+    )
+    visual_plan = "\n".join(
+        f"- {item['beat']}: {', '.join(item['keywords'])}"
+        for item in topic.get("visual_plan", [])
+    )
+    return f"""당신은 한국어 유튜브 Shorts 스토리 작가다. 하나의 검증된 소재를 60~75초 동안 설명해 끝까지 보게 만든다.
+
+[소재]
+주제: {topic['topic']}
+첫 모순: {topic.get('hook_angle', '')}
+핵심 질문: {topic.get('core_question', '')}
+검증된 사실:
+{facts}
+추천 시각 자료:
+{visual_plan}
+
+[잔존 구조]
+- 7~10개 씬으로 작성하고 duration_sec 합계는 반드시 60~75초다.
+- 0~3초 hook: 인사, 채널명, 로고, 주제 소개 없이 결과나 모순부터 말한다.
+- 10초 안에 작은 답 하나를 주되 최종 원리는 남겨 둔다.
+- 12~15초, 25~30초, 45~50초 부근에 새 질문, 검증 수치, 시각 전환 중 하나를 둔다.
+- 흐름은 hook → context → problem → mechanism → payoff → close다.
+- 마지막 close는 첫 문장을 회수하며 CTA는 필요할 때만 한 문장으로 쓴다.
+- 검증된 사실 이외의 수치, 인과관계, 고유명사를 만들지 않는다.
+
+[화면 규칙]
+- 각 씬 visuals는 무료 Pexels/Pixabay에서 찾을 수 있는 구체적인 영어 검색어 2~3개다.
+- visuals에는 추상어만 쓰지 말고 장소, 지형, 구조물, 동물 같은 실제 대상을 쓴다.
+- narration은 자연스럽게 이어지는 한국어 1~3문장이다.
+- emphasis는 화면에서 강조할 짧은 핵심어 또는 숫자 0~4개다.
+
+[JSON만 출력]
+{{
+  "format": "story",
+  "title": "100자 이하 제목",
+  "description": "검증 내용과 출처를 요약한 설명",
+  "tags": ["태그1", "태그2", "태그3"],
+  "hook": "첫 3초 문장",
+  "scenes": [
+    {{
+      "n": 1,
+      "role": "hook",
+      "narration": "결과 또는 모순을 먼저 말하는 문장",
+      "visuals": ["desert lake aerial", "cracked desert ground"],
+      "duration_sec": 7.5,
+      "emphasis": ["비가 없는데", "마르지 않는다"]
+    }}
+  ],
+  "cta": "",
+  "total_duration_sec": 66
+}}
+
+허용 role은 hook, context, problem, mechanism, payoff, close뿐이다. 첫 씬은 hook, 마지막 씬은 close로 하고 씬 번호를 1부터 연속으로 매겨라.
+"""
 
 
 def _writer_prompt(topic: dict) -> str:

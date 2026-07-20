@@ -5,6 +5,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+from app.content_format import get_content_format
 from app.agents.producer import run_producer
 from app.agents.researcher import run_researcher
 from app.agents.uploader import run_uploader
@@ -65,6 +66,7 @@ async def run_pipeline(data_dir: Path, ffmpeg_path: str, slot: int = None) -> di
     Returns:
         run_log dict (각 단계 결과)
     """
+    content_format = get_content_format()
     date_str = datetime.now().strftime("%Y%m%d")
     if slot is None:
         slot = _next_slot(data_dir, date_str)
@@ -76,6 +78,7 @@ async def run_pipeline(data_dir: Path, ffmpeg_path: str, slot: int = None) -> di
     run_log = {
         "date": run_id,
         "timestamp": datetime.now().isoformat(),
+        "content_format": content_format,
         "stages": {},
         "success": True,
         "message": "",
@@ -89,14 +92,16 @@ async def run_pipeline(data_dir: Path, ffmpeg_path: str, slot: int = None) -> di
         topic = None
         if topic_file.exists():
             try:
-                topic = validate_topic(json.loads(topic_file.read_text(encoding="utf-8")))
+                topic = validate_topic(
+                    json.loads(topic_file.read_text(encoding="utf-8")), content_format
+                )
                 run_log["stages"]["researcher"] = {"status": "skipped", "topic": topic.get("topic", "")}
                 print(f"[1/4] 리서처 건너뜀 (오늘 소재 이미 있음: {topic.get('topic', '')})")
             except Exception as e:
                 print(f"[1/4] 기존 topic.json 검증 실패({e}) — 재생성")
         if topic is None:
             print("[1/4] 트렌드 리서처 실행 중...")
-            topic = run_researcher(data_dir, run_id)
+            topic = run_researcher(data_dir, run_id, content_format=content_format)
             run_log["stages"]["researcher"] = {
                 "status": "success",
                 "topic": topic.get("topic", ""),
@@ -109,14 +114,16 @@ async def run_pipeline(data_dir: Path, ffmpeg_path: str, slot: int = None) -> di
         script = None
         if script_file.exists():
             try:
-                script = validate_script(json.loads(script_file.read_text(encoding="utf-8")))
+                script = validate_script(
+                    json.loads(script_file.read_text(encoding="utf-8")), content_format
+                )
                 run_log["stages"]["writer"] = {"status": "skipped", "title": script.get("title", "")}
                 print(f"[2/4] 작가 건너뜀 (오늘 대본 이미 있음: {script.get('title', '')})")
             except Exception as e:
                 print(f"[2/4] 기존 script.json 검증 실패({e}) — 재생성")
         if script is None:
             print("[2/4] 대본 작가 실행 중...")
-            script = run_writer(data_dir, run_id)
+            script = run_writer(data_dir, run_id, content_format=content_format)
             run_log["stages"]["writer"] = {
                 "status": "success",
                 "title": script.get("title", ""),

@@ -3,6 +3,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+from app.content_format import get_content_format
 from app.services.claude_client import call_agent
 from app.services.web_search import search_ranking_topics
 
@@ -64,7 +65,12 @@ def _load_recent_topics(data_dir: Path, days: int = 14) -> list:
     return [r[0] for r in rows]
 
 
-def run_researcher(data_dir: Path, run_id: str = None, recent_topics: list = None) -> dict:
+def run_researcher(
+    data_dir: Path,
+    run_id: str = None,
+    recent_topics: list = None,
+    content_format: str | None = None,
+) -> dict:
     """
     랭킹 소재를 발굴하고 순위 데이터를 수집한다.
 
@@ -76,6 +82,7 @@ def run_researcher(data_dir: Path, run_id: str = None, recent_topics: list = Non
     Returns:
         topic.json 스키마 dict
     """
+    selected = get_content_format(content_format)
     if recent_topics is None:
         recent_topics = _load_recent_topics(data_dir)
 
@@ -113,35 +120,43 @@ def run_researcher(data_dir: Path, run_id: str = None, recent_topics: list = Non
     topic_dict = None
     try:
         topic = call_agent(
-            prompt=_researcher_prompt(context, grounded=True),
+            prompt=(
+                _story_researcher_prompt(context, grounded=True)
+                if selected == "story" else _researcher_prompt(context, grounded=True)
+            ),
             agent_name="trend-researcher",
             grounded=True,
         )
-        topic_dict = validate_topic(extract_json(topic))
-        topic_dict["verification_method"] = "grounded_search"
-        topic_dict["verified_at"] = datetime.now().isoformat()
-        topic_dict = validate_topic(topic_dict)  # 방식 필드 반영해 재검증
-        save_verified(data_dir, slot, topic_dict)
-        print(f"  ✓ 검색 그라운딩으로 검증 (캐시 {cache_size(data_dir, slot)}건)")
+        raw_topic = extract_json(topic)
+        raw_topic["verification_method"] = "grounded_search"
+        raw_topic["verified_at"] = datetime.now().isoformat()
+        topic_dict = validate_topic(raw_topic, selected)
+        cache_slot = 0 if selected == "story" else slot
+        save_verified(data_dir, cache_slot, topic_dict)
+        print(f"  ✓ 검색 그라운딩으로 검증 (캐시 {cache_size(data_dir, cache_slot)}건)")
     except Exception as e:
         print(f"  ℹ️ 그라운딩 검증 실패({str(e)[:60]}) — 검증 캐시에서 소재 찾기")
-        cached = pick_cached(data_dir, slot, recent_topics)
+        cache_slot = 0 if selected == "story" else slot
+        cached = pick_cached(data_dir, cache_slot, recent_topics)
         if cached:
-            topic_dict = validate_topic(cached)
+            topic_dict = validate_topic(cached, selected)
             print(f"  ✓ 검증 캐시 재사용: {topic_dict.get('topic', '')}")
         else:
             # 캐시도 비었으면 보수 모드(model_memory) — 규칙상 '불변 기록·수치' 소재만 허용.
             # 프롬프트가 최신 변동 소재를 배제하도록 강제한다.
             print("  ℹ️ 캐시 비어있음 — 보수 모드(불변 기록만, model_memory)로 진행")
             topic = call_agent(
-                prompt=_researcher_prompt(context, grounded=False),
+                prompt=(
+                    _story_researcher_prompt(context, grounded=False)
+                    if selected == "story" else _researcher_prompt(context, grounded=False)
+                ),
                 agent_name="trend-researcher",
                 grounded=False,
             )
-            topic_dict = validate_topic(extract_json(topic))
-            topic_dict["verification_method"] = "model_memory"
-            topic_dict["verified_at"] = datetime.now().isoformat()
-            topic_dict = validate_topic(topic_dict)
+            raw_topic = extract_json(topic)
+            raw_topic["verification_method"] = "model_memory"
+            raw_topic["verified_at"] = datetime.now().isoformat()
+            topic_dict = validate_topic(raw_topic, selected)
 
     # 업로드 가능 검증 방식인지 최종 확인 (방어)
     from app.models import UPLOADABLE_VERIFICATION
@@ -153,6 +168,60 @@ def run_researcher(data_dir: Path, run_id: str = None, recent_topics: list = Non
     topic_file.write_text(json.dumps(topic_dict, ensure_ascii=False, indent=2), encoding="utf-8")
 
     return topic_dict
+
+
+def _story_researcher_prompt(context: dict, grounded: bool = True) -> str:
+    """무료 스톡으로 표현 가능한 단일 소재를 사실 검증하는 스토리 프롬프트."""
+    verification = (
+        "검색 결과를 근거로 최소 2개의 공공기관·대학·박물관·학술기관 출처를 교차 확인하라."
+        if grounded else
+        "시간이 지나도 바뀌지 않는 불변 사실만 사용하고, 확실한 공식 출처 URL을 아는 소재만 선택하라."
+    )
+    recent = context.get("recent_topics") or []
+    return f"""당신은 실재 장소·자연현상·역사 구조물·동물 생존 원리를 조사하는 한국어 Shorts 리서처다.
+
+[목표]
+- 하나의 강한 질문으로 60~75초 설명이 가능한 소재 1개를 고른다.
+- Pexels/Pixabay 무료 스톡에서 실제 대상과 주변 환경을 여러 장면으로 찾을 수 있어야 한다.
+- 우선 비율은 실재 장소·자연현상 70%, 역사 구조물 20%, 동물 생존 10%다.
+- 최근 사용 소재와 중복하지 않는다: {recent if recent else '없음'}
+
+[금지]
+- 최신 뉴스, 실시간 순위, 연예인, 기업 실적, 스포츠 결과처럼 변하는 소재
+- 영화·방송·CCTV처럼 저작권 영상이 필요한 소재
+- 검색으로 확인하지 못한 수치나 인과관계 추측
+
+[사실 검증]
+{verification}
+- 각 facts 항목에 claim, value, 실제 기관명 source, 직접 확인 가능한 source_url을 기록한다.
+- 검색을 사용했으면 verification_method는 grounded_search다.
+- visual_plan에는 스토리 비트별 구체적인 영어 검색어를 2~3개 쓴다.
+
+[JSON만 출력]
+{{
+  "format": "story",
+  "topic": "사막 한가운데 호수가 마르지 않는 이유",
+  "category": "place_nature",
+  "hook_angle": "비가 거의 오지 않는데 호수는 남아 있다",
+  "target_keyword": "desert lake",
+  "core_question": "물은 어디에서 공급되는가",
+  "facts": [
+    {{
+      "claim": "검증된 주장",
+      "value": "검증된 설명 또는 수치",
+      "source": "공공기관 또는 학술기관명",
+      "source_url": "https://기관의-직접-출처"
+    }}
+  ],
+  "visual_plan": [
+    {{"beat": "hook", "keywords": ["desert lake aerial", "cracked desert shore"]}}
+  ],
+  "verification_method": "grounded_search",
+  "verified_at": "검색 완료 시각"
+}}
+
+category는 place_nature, history_structure, animal_survival 중 하나만 사용하라.
+"""
 
 
 def _researcher_prompt(context: dict, grounded: bool = True) -> str:
