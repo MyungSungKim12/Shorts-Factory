@@ -73,14 +73,15 @@ def test_long_beat_adds_shots_instead_of_exceeding_four_seconds():
 def test_still_image_filter_has_motion_without_ranking_bands():
     vf = story_producer.visual_filter("shot.jpg", duration=3.0)
     assert "zoompan" in vf
-    assert "1080x1920" in vf
-    assert "pad=1080:1920" not in vf
+    assert "1080x1330" in vf
+    assert "pad=1080:1920:0:260:black" in vf
 
 
 def test_video_filter_is_full_frame_vertical():
     vf = story_producer.visual_filter("shot.mp4", duration=3.0)
-    assert "scale=1080:1920" in vf
-    assert "crop=1080:1920" in vf
+    assert "scale=1080:1330" in vf
+    assert "crop=1080:1330" in vf
+    assert "pad=1080:1920:0:260:black" in vf
     assert "zoompan" not in vf
 
 
@@ -89,7 +90,7 @@ def test_exact_landscape_image_can_preserve_full_composition():
     assert "force_original_aspect_ratio=decrease" in vf
     assert "boxblur" in vf
     assert "overlay" in vf
-    assert "pad=1080:1920" not in vf
+    assert "pad=1080:1920:0:260:black" in vf
     assert "zoompan" in vf
 
 
@@ -122,7 +123,34 @@ def test_subtitles_end_with_actual_audio_instead_of_scene_padding(tmp_path):
 
 
 def test_story_subtitle_style_uses_smaller_font():
-    assert "FontSize=16" in story_producer._subtitle_style("Malgun Gothic")
+    style = story_producer._subtitle_style("Malgun Gothic")
+    assert "FontSize=16" in style
+    assert "MarginV=110" in style
+
+
+def test_story_layout_reserves_fixed_title_and_subtitle_bands():
+    assert story_producer.STORY_LAYOUT == {
+        "canvas_width": 1080,
+        "canvas_height": 1920,
+        "top_band": 260,
+        "video_height": 1330,
+        "bottom_band": 330,
+    }
+
+
+def test_title_overlay_is_full_canvas_and_at_most_two_lines(tmp_path):
+    output = tmp_path / "title.png"
+    metadata = story_producer._create_title_overlay(
+        "A surprisingly long fixed story title for shorts", output
+    )
+
+    from PIL import Image
+
+    with Image.open(output) as image:
+        assert image.size == (1080, 1920)
+        assert image.mode == "RGBA"
+    assert metadata["line_count"] <= 2
+    assert metadata["font_size"] >= 34
 
 
 def test_cta_timing_uses_measured_audio_after_body():

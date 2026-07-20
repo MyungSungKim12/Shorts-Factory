@@ -9,7 +9,7 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 from app.console import safe_print
 from app.services.media_library import fetch_story_media
@@ -17,6 +17,15 @@ from app.services.tts import TTSResult, synthesize
 
 
 DEFAULT_STORY_CTA = "이런 이야기가 더 궁금하다면, 구독과 좋아요 부탁드립니다."
+
+
+STORY_LAYOUT = {
+    "canvas_width": 1080,
+    "canvas_height": 1920,
+    "top_band": 260,
+    "video_height": 1330,
+    "bottom_band": 330,
+}
 
 
 def normalize_story_cta(value: str | None) -> tuple[str, bool]:
@@ -78,29 +87,30 @@ def visual_filter(
 ) -> str:
     """세로 전체화면 영상 또는 정지 이미지 모션 필터를 만든다."""
     overlay = ",drawbox=color=black@0.35:t=fill" if darken else ""
+    pad = ",pad=1080:1920:0:260:black"
     if str(media_file).lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
         frames = max(1, round(duration * 30))
         if preserve_full:
             return (
                 "[0:v]split=2[bgsrc][fgsrc];"
-                "[bgsrc]scale=1080:1920:force_original_aspect_ratio=increase,"
-                "crop=1080:1920,boxblur=luma_radius=28:luma_power=2[bg];"
-                "[fgsrc]scale=1080:1920:force_original_aspect_ratio=decrease[fg];"
+                "[bgsrc]scale=1080:1330:force_original_aspect_ratio=increase,"
+                "crop=1080:1330,boxblur=luma_radius=28:luma_power=2[bg];"
+                "[fgsrc]scale=1080:1330:force_original_aspect_ratio=decrease[fg];"
                 "[bg][fg]overlay=(W-w)/2:(H-h)/2,"
                 "zoompan=z='min(zoom+0.0003,1.03)':"
                 "x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
-                f"d={frames}:s=1080x1920:fps=30{overlay},format=yuv420p[vout]"
+                f"d={frames}:s=1080x1330:fps=30{overlay}{pad},format=yuv420p[vout]"
             )
         return (
-            "scale=1200:2134:force_original_aspect_ratio=increase,"
-            "crop=1200:2134,"
+            "scale=1200:1478:force_original_aspect_ratio=increase,"
+            "crop=1200:1478,"
             "zoompan=z='min(zoom+0.0008,1.08)':"
             "x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
-            f"d={frames}:s=1080x1920:fps=30{overlay},format=yuv420p"
+            f"d={frames}:s=1080x1330:fps=30{overlay}{pad},format=yuv420p"
         )
     return (
-        "scale=1080:1920:force_original_aspect_ratio=increase,"
-        f"crop=1080:1920,fps=30{overlay},format=yuv420p"
+        "scale=1080:1330:force_original_aspect_ratio=increase,"
+        f"crop=1080:1330,fps=30{overlay}{pad},format=yuv420p"
     )
 
 
@@ -279,6 +289,54 @@ def _wrap_title(text: str, max_chars: int = 18, max_lines: int = 2) -> list[str]
     return lines[:max_lines]
 
 
+def _title_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    configured = os.getenv("SUBTITLE_FONT_FILE")
+    candidates = [
+        configured,
+        "C:/Windows/Fonts/malgunbd.ttf",
+        "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    ]
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file():
+            return ImageFont.truetype(candidate, size=size)
+    return ImageFont.load_default()
+
+
+def _create_title_overlay(title: str, output: Path) -> dict[str, int]:
+    """Create a transparent full-canvas PNG with a fixed title in the top band."""
+    lines = _wrap_title(title, max_chars=18, max_lines=2)
+    text = "\n".join(lines)
+    image = Image.new("RGBA", (1080, 1920), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+
+    selected_size = 34
+    selected_font = _title_font(selected_size)
+    for size in range(58, 33, -2):
+        font = _title_font(size)
+        bbox = draw.multiline_textbbox((0, 0), text, font=font, spacing=10, align="center")
+        if bbox[2] - bbox[0] <= 980 and bbox[3] - bbox[1] <= 220:
+            selected_size = size
+            selected_font = font
+            break
+
+    draw.multiline_text(
+        (540, STORY_LAYOUT["top_band"] / 2),
+        text,
+        font=selected_font,
+        fill=(255, 255, 255, 255),
+        anchor="mm",
+        align="center",
+        spacing=10,
+        stroke_width=2,
+        stroke_fill=(0, 0, 0, 255),
+    )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    image.save(output)
+    return {"line_count": len(lines), "font_size": selected_size}
+
+
 def _srt_time(seconds: float) -> str:
     hours = int(seconds // 3600)
     minutes = int((seconds % 3600) // 60)
@@ -329,7 +387,7 @@ def _write_srt(
 def _subtitle_style(font: str) -> str:
     return (
         f"FontName={font},FontSize=16,Bold=1,PrimaryColour=&H00FFFFFF,"
-        "OutlineColour=&H00000000,Outline=3,Shadow=1,Alignment=2,MarginV=235"
+        "OutlineColour=&H00000000,Outline=3,Shadow=1,Alignment=2,MarginV=110"
     )
 
 
@@ -347,6 +405,7 @@ def _finish_video(
     concat_video: Path,
     output: Path,
     srt_path: Path,
+    title_overlay: Path,
     ffmpeg_path: str,
     tmp_path: Path,
 ) -> None:
@@ -358,14 +417,21 @@ def _finish_video(
         volume = os.getenv("BGM_VOLUME", "0.08")
         cmd = [
             ffmpeg_path, "-i", str(concat_video), "-stream_loop", "-1", "-i", str(bgm),
+            "-i", str(title_overlay),
             "-filter_complex",
-            f"[0:v]{video_filter}[vout];[1:a]volume={volume}[bg];"
+            f"[0:v]{video_filter}[subbed];[subbed][2:v]overlay=0:0[vout];"
+            f"[1:a]volume={volume}[bg];"
             "[bg][0:a]sidechaincompress=threshold=0.02:ratio=8[ducked];"
             "[0:a][ducked]amix=inputs=2:duration=first:dropout_transition=2[aout]",
             "-map", "[vout]", "-map", "[aout]",
         ]
     else:
-        cmd = [ffmpeg_path, "-i", str(concat_video), "-vf", video_filter]
+        cmd = [
+            ffmpeg_path, "-i", str(concat_video), "-i", str(title_overlay),
+            "-filter_complex",
+            f"[0:v]{video_filter}[subbed];[subbed][1:v]overlay=0:0[vout]",
+            "-map", "[vout]", "-map", "0:a:0",
+        ]
     cmd += [
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "25",
         "-c:a", "aac", "-b:a", "128k", "-pix_fmt", "yuv420p",
@@ -498,9 +564,13 @@ async def run_story_producer(
             srt_path,
             cta={"text": cta_text, **cta_timing},
         )
+        title_overlay = tmp_path / "title-overlay.png"
+        title_metadata = _create_title_overlay(script["title"], title_overlay)
 
         output_mp4 = work_dir / "output.mp4"
-        _finish_video(concat_video, output_mp4, srt_path, ffmpeg_path, tmp_path)
+        _finish_video(
+            concat_video, output_mp4, srt_path, title_overlay, ffmpeg_path, tmp_path
+        )
         actual_duration = _duration(output_mp4, ffmpeg_path)
 
     produce_log = {
@@ -512,6 +582,7 @@ async def run_story_producer(
         "actual_duration": round(actual_duration, 1),
         "script_sha256": hashlib.sha256(script_file.read_bytes()).hexdigest(),
         "tts": summarize_tts(tts_results),
+        "layout": {**STORY_LAYOUT, "title": title_metadata},
         "cta": {
             "text": cta_text,
             "audio_duration": round(cta_audio_duration, 3),
