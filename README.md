@@ -122,3 +122,28 @@ npm run dev
 - YouTube는 **재사용 콘텐츠/대량 생산 스팸**에 수익화 제한을 건다. → 대본·편집에 고유 가치(정보, 스토리)를 넣는 것이 에이전트 프롬프트의 핵심 목표.
 - API 키·OAuth 토큰은 `.env`로 관리하고 절대 커밋하지 않는다.
 - 업로드 쿼터: YouTube API 기본 일 10,000 → 업로드 1건당 1,600 소모 → **일 최대 6건**.
+
+---
+
+## 8. 스토리형 Shorts 샘플
+
+단일 소재를 60~75초 동안 설명하는 스토리형 포맷은 기존 랭킹 포맷과 분리되어 있다. 샘플 명령은 리서처 → 작가 → 프로듀서까지만 실행하며 업로더, `data/work/`, SQLite, cron을 변경하지 않는다.
+
+```powershell
+gcloud auth application-default login
+gcloud auth application-default set-quota-project shorts-factory-502004
+$env:CONTENT_FORMAT='story'
+$env:TTS_PROVIDER='google'
+python scripts\generate_sample.py --sample-id story-v1
+```
+
+결과는 `data/samples/story-v1/` 아래의 `topic.json`, `script.json`, `produce_log.json`, `validation.json`, `output.mp4`에 저장된다. Google 음성 호출에 실패하면 제작 로그에 실제 공급자를 기록하고 gTTS로 폴백한다.
+
+운영 설정을 현재 방식으로 원복하려면 다음 두 값을 사용한다.
+
+```dotenv
+CONTENT_FORMAT=ranking
+TTS_PROVIDER=gtts
+```
+
+샘플 승인 전에는 운영 스케줄과 자동 업로드 설정을 바꾸지 않는다.
