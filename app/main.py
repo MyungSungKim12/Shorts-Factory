@@ -6,7 +6,7 @@ from datetime import date
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, BackgroundTasks, Header, HTTPException
+from fastapi import FastAPI, BackgroundTasks, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.agents.orchestrator import run_pipeline
@@ -29,6 +29,18 @@ app.add_middleware(
 _pipeline_running = False
 
 
+def _pagination(page: int, page_size: int, total_items: int) -> dict:
+    total_pages = (total_items + page_size - 1) // page_size if total_items else 0
+    return {
+        "page": page,
+        "page_size": page_size,
+        "total_items": total_items,
+        "total_pages": total_pages,
+        "has_previous": page > 1 and total_pages > 0,
+        "has_next": page < total_pages,
+    }
+
+
 @app.get("/api/health")
 def health():
     return {"status": "ok", "running": _pipeline_running}
@@ -46,19 +58,28 @@ def pipeline_status():
 
 
 @app.get("/api/videos")
-def list_videos():
+def list_videos(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=50),
+):
     """업로드된 영상 목록 (업로더가 기록한 SQLite 조회)."""
     import sqlite3
 
     db_file = DATA_DIR / "videos.sqlite"
     if not db_file.exists():
-        return {"videos": []}
+        return {"videos": [], "pagination": _pagination(page, page_size, 0)}
 
     db = sqlite3.connect(db_file)
     try:
+        total_items = db.execute(
+            "SELECT COUNT(*) FROM videos WHERE status = 'uploaded'"
+        ).fetchone()[0]
+        offset = (page - 1) * page_size
         rows = db.execute(
             "SELECT video_id, date, title, status, uploaded_at FROM videos "
-            "ORDER BY uploaded_at DESC LIMIT 50"
+            "WHERE status = 'uploaded' "
+            "ORDER BY uploaded_at DESC, video_id DESC LIMIT ? OFFSET ?",
+            (page_size, offset),
         ).fetchall()
     finally:
         db.close()
@@ -71,24 +92,37 @@ def list_videos():
                 "url": f"https://youtube.com/shorts/{r[0]}",
             }
             for r in rows
-        ]
+        ],
+        "pagination": _pagination(page, page_size, total_items),
     }
 
 
 @app.get("/api/history")
-def run_history():
+def run_history(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=50),
+):
     """최근 14일 파이프라인 실행 이력."""
     logs_dir = DATA_DIR / "logs"
     if not logs_dir.exists():
-        return {"runs": []}
+        return {"runs": [], "pagination": _pagination(page, page_size, 0)}
 
     runs = []
-    for f in sorted(logs_dir.glob("run-*.json"), reverse=True)[:30]:
+    for f in logs_dir.glob("run-*.json"):
         try:
             runs.append(json.loads(f.read_text(encoding="utf-8")))
         except (json.JSONDecodeError, OSError):
             continue
-    return {"runs": runs}
+    runs.sort(
+        key=lambda run: (str(run.get("timestamp", "")), str(run.get("date", ""))),
+        reverse=True,
+    )
+    total_items = len(runs)
+    offset = (page - 1) * page_size
+    return {
+        "runs": runs[offset:offset + page_size],
+        "pagination": _pagination(page, page_size, total_items),
+    }
 
 
 @app.get("/api/report")
