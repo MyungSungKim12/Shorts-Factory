@@ -7,6 +7,7 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
+from app.content_format import get_content_format
 
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
@@ -17,7 +18,13 @@ import requests
 from app.services.image_downloader import download_video, download_video_pixabay, download_image
 
 
-async def run_producer(data_dir: Path, date_str: str, ffmpeg_path: str) -> dict:
+async def run_producer(
+    data_dir: Path,
+    date_str: str,
+    ffmpeg_path: str,
+    content_format: str | None = None,
+    work_root: str = "work",
+) -> dict:
     """
     script.json을 받아 output.mp4를 생성한다 (간단 버전).
 
@@ -29,7 +36,12 @@ async def run_producer(data_dir: Path, date_str: str, ffmpeg_path: str) -> dict:
     Returns:
         produce_log.json dict
     """
-    work_dir = data_dir / "work" / date_str
+    selected = get_content_format(content_format)
+    if selected == "story":
+        from app.agents.story_producer import run_story_producer
+        return await run_story_producer(data_dir, date_str, ffmpeg_path, work_root=work_root)
+
+    work_dir = data_dir / work_root / date_str
     script_file = work_dir / "script.json"
 
     if not script_file.exists():

@@ -1,0 +1,72 @@
+"""스토리 샷 계획, 렌더링 필터, 프로듀서 라우팅 테스트."""
+import asyncio
+
+from app.agents import producer
+from app.agents import story_producer
+
+
+def test_each_story_beat_becomes_short_visual_shots():
+    script = {"scenes": [{
+        "n": 1,
+        "role": "hook",
+        "narration": "비가 없는데 물이 남아 있습니다.",
+        "visuals": ["desert lake aerial", "cracked desert ground"],
+        "duration_sec": 8,
+        "emphasis": ["물이 남아 있습니다"],
+    }]}
+    shots = story_producer.build_shot_plan(script)
+    assert len(shots) == 2
+    assert all(2 <= shot["duration_sec"] <= 4 for shot in shots)
+    assert {shot["keyword"] for shot in shots} == {
+        "desert lake aerial", "cracked desert ground"
+    }
+    assert [shot["shot_n"] for shot in shots] == [1, 2]
+
+
+def test_long_beat_adds_shots_instead_of_exceeding_four_seconds():
+    script = {"scenes": [{
+        "n": 3, "role": "mechanism", "narration": "긴 설명",
+        "visuals": ["underground water", "desert spring"],
+        "duration_sec": 15, "emphasis": [],
+    }]}
+    shots = story_producer.build_shot_plan(script)
+    assert len(shots) == 4
+    assert all(shot["duration_sec"] <= 4 for shot in shots)
+    assert abs(sum(shot["duration_sec"] for shot in shots) - 15) < 0.01
+
+
+def test_still_image_filter_has_motion_without_ranking_bands():
+    vf = story_producer.visual_filter("shot.jpg", duration=3.0)
+    assert "zoompan" in vf
+    assert "1080x1920" in vf
+    assert "pad=1080:1920" not in vf
+
+
+def test_video_filter_is_full_frame_vertical():
+    vf = story_producer.visual_filter("shot.mp4", duration=3.0)
+    assert "scale=1080:1920" in vf
+    assert "crop=1080:1920" in vf
+    assert "zoompan" not in vf
+
+
+def test_tts_summary_reports_mixed_provider():
+    results = [
+        type("R", (), {"provider": "google", "voice": "ko-KR-Neural2-C", "speaking_rate": 1.05})(),
+        type("R", (), {"provider": "gtts", "voice": "ko", "speaking_rate": 1.0})(),
+    ]
+    assert story_producer.summarize_tts(results)["provider"] == "mixed"
+
+
+def test_producer_routes_story_without_entering_ranking_renderer(tmp_path, monkeypatch):
+    seen = {}
+
+    async def fake_story(data_dir, run_id, ffmpeg_path, work_root="work"):
+        seen.update(run_id=run_id, work_root=work_root)
+        return {"format": "story", "output_file": "sample.mp4"}
+
+    monkeypatch.setattr(story_producer, "run_story_producer", fake_story)
+    result = asyncio.run(producer.run_producer(
+        tmp_path, "sample-1", "ffmpeg", content_format="story", work_root="samples"
+    ))
+    assert result["format"] == "story"
+    assert seen == {"run_id": "sample-1", "work_root": "samples"}

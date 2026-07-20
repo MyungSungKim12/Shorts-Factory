@@ -124,6 +124,7 @@ def test_orchestrator_passes_selected_format_to_researcher_and_writer(tmp_path, 
         return {"title": "스토리 영상 제목", "scenes": [], "total_duration_sec": 64}
 
     async def fake_producer(*args, **kwargs):
+        seen["producer"] = kwargs.get("content_format")
         return {"output_file": str(tmp_path / "output.mp4"), "actual_duration": 64}
 
     monkeypatch.setattr(orchestrator, "run_researcher", fake_researcher)
@@ -132,5 +133,5 @@ def test_orchestrator_passes_selected_format_to_researcher_and_writer(tmp_path, 
     monkeypatch.setattr(orchestrator, "run_uploader", lambda *args: {"status": "skipped", "reason": "test"})
 
     result = asyncio.run(orchestrator.run_pipeline(tmp_path, "ffmpeg", slot=1))
-    assert seen == {"researcher": "story", "writer": "story"}
+    assert seen == {"researcher": "story", "writer": "story", "producer": "story"}
     assert result["content_format"] == "story"

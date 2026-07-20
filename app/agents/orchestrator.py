@@ -142,7 +142,9 @@ async def run_pipeline(data_dir: Path, ffmpeg_path: str, slot: int = None) -> di
             if output_file.exists() and not fresh:
                 print("[3/4] 대본 변경 감지(해시 불일치) — 기존 영상 폐기 후 재생성")
             print("[3/4] 영상 프로듀서 실행 중...")
-            produce_log = await run_producer(data_dir, run_id, ffmpeg_path)
+            produce_log = await run_producer(
+                data_dir, run_id, ffmpeg_path, content_format=content_format
+            )
             run_log["stages"]["producer"] = {
                 "status": "success",
                 "output_file": produce_log.get("output_file", ""),
