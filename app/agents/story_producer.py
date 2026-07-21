@@ -112,15 +112,7 @@ def _shot_duration_range(role: str) -> tuple[float, float]:
 
 
 def _spoken_intro(title: str) -> str:
-    normalized = re.sub(r"[?!。]+$", "", str(title)).strip()
-    normalized = re.sub(r"(?:의\s*)?(?:비밀|이유|진실)$", "", normalized).strip()
-    words = normalized.split()
-    selected = []
-    for word in words:
-        if selected and len(" ".join(selected + [word])) > 22:
-            break
-        selected.append(word)
-    return " ".join(selected) or normalized[:22]
+    return re.sub(r"[?!。]+$", "", str(title)).strip()
 
 
 def _scene_shots(scene: dict, duration: float | None = None) -> list[dict]:

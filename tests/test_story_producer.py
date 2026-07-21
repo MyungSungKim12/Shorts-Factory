@@ -108,11 +108,16 @@ def test_retention_shot_ranges_are_role_specific():
     assert story_producer._shot_duration_range("close") == (2.5, 3.5)
 
 
-def test_spoken_intro_keeps_one_short_topic_phrase():
+def test_spoken_intro_keeps_the_complete_topic_phrase():
     assert (
         story_producer._spoken_intro("300일 동안 번개가 멈추지 않는 마을의 비밀")
-        == "300일 동안 번개가 멈추지 않는 마을"
+        == "300일 동안 번개가 멈추지 않는 마을의 비밀"
     )
+
+
+def test_spoken_intro_never_cuts_a_title_mid_phrase():
+    title = "딸기우유 빛깔 호수가 분홍빛을 유지하는 신비로운 이유"
+    assert story_producer._spoken_intro(title) == title
 
 
 def test_still_image_filter_has_motion_without_ranking_bands():
