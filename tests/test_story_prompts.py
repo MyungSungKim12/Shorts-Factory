@@ -187,7 +187,10 @@ def test_orchestrator_passes_selected_format_to_researcher_and_writer(tmp_path, 
 
     def fake_writer(data_dir, run_id, content_format=None):
         seen["writer"] = content_format
-        return {"title": "스토리 영상 제목", "scenes": [], "total_duration_sec": 64}
+        return {
+            "title": "스토리 영상 제목", "scenes": [], "total_duration_sec": 64,
+            "writer_mode": "verified_template",
+        }
 
     async def fake_producer(*args, **kwargs):
         seen["producer"] = kwargs.get("content_format")
@@ -201,6 +204,7 @@ def test_orchestrator_passes_selected_format_to_researcher_and_writer(tmp_path, 
     result = asyncio.run(orchestrator.run_pipeline(tmp_path, "ffmpeg", slot=1))
     assert seen == {"researcher": "story", "writer": "story", "producer": "story"}
     assert result["content_format"] == "story"
+    assert result["stages"]["writer"]["writer_mode"] == "verified_template"
 
 
 def test_sample_researcher_skips_sqlite_cache(tmp_path, monkeypatch):

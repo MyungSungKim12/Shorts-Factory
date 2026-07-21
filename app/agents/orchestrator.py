@@ -114,10 +114,17 @@ async def run_pipeline(data_dir: Path, ffmpeg_path: str, slot: int = None) -> di
         script = None
         if script_file.exists():
             try:
+                saved_script = json.loads(script_file.read_text(encoding="utf-8"))
                 script = validate_script(
-                    json.loads(script_file.read_text(encoding="utf-8")), content_format
+                    saved_script, content_format
                 )
-                run_log["stages"]["writer"] = {"status": "skipped", "title": script.get("title", "")}
+                if saved_script.get("writer_mode") in {"llm", "llm_retry", "verified_template"}:
+                    script["writer_mode"] = saved_script["writer_mode"]
+                run_log["stages"]["writer"] = {
+                    "status": "skipped",
+                    "title": script.get("title", ""),
+                    "writer_mode": script.get("writer_mode", "legacy"),
+                }
                 print(f"[2/4] 작가 건너뜀 (오늘 대본 이미 있음: {script.get('title', '')})")
             except Exception as e:
                 print(f"[2/4] 기존 script.json 검증 실패({e}) — 재생성")
@@ -129,6 +136,7 @@ async def run_pipeline(data_dir: Path, ffmpeg_path: str, slot: int = None) -> di
                 "title": script.get("title", ""),
                 "scenes_count": len(script.get("scenes", [])),
                 "total_duration": script.get("total_duration_sec", 0),
+                "writer_mode": script.get("writer_mode", "legacy"),
             }
             print(f"✓ 대본 생성: {script['title']} ({script.get('total_duration_sec')}초)")
 
