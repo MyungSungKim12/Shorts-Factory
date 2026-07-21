@@ -4,7 +4,7 @@ from pathlib import Path
 
 from app.content_format import get_content_format
 from app.console import safe_print
-from app.models import validate_script
+from app.models import validate_script, validate_topic
 from app.services.claude_client import call_agent
 from app.services.json_extract import extract_json
 
@@ -35,6 +35,8 @@ def run_writer(
     topic = json.loads(topic_file.read_text(encoding="utf-8"))
 
     selected = get_content_format(content_format)
+    if selected == "story":
+        topic = validate_topic(topic, selected)
 
     # 작가는 Groq 우선 (검색 불필요 + JSON 생성 강점) — Gemini 호출량 절약 겸 부하 분산.
     # 전송 성공이어도 응답 JSON이 잘릴 수 있으므로 검증 실패 시 한 번만 압축 재생성한다.
@@ -142,6 +144,7 @@ def _story_writer_prompt(topic: dict) -> str:
         f"- {item['beat']}: {', '.join(item['keywords'])}"
         for item in topic.get("visual_plan", [])
     )
+    visual_identity = topic.get("visual_identity") or {}
     return f"""당신은 한국어 유튜브 Shorts 스토리 작가다. 하나의 검증된 소재를 설명해 끝까지 보게 만든다. 완성 영상 목표는 60~75초다.
 
 [소재]
@@ -152,6 +155,10 @@ def _story_writer_prompt(topic: dict) -> str:
 {facts}
 추천 시각 자료:
 {visual_plan}
+Verified visual_identity:
+exact_queries: {', '.join(visual_identity.get('exact_queries', []))}
+safe_fallbacks: {', '.join(visual_identity.get('safe_fallbacks', []))}
+Preserve exact_queries as the hook and close subject anchor. Use safe_fallbacks only for the same real-world subject family; do not create visual_identity in script JSON.
 
 [잔존 구조]
 - 7~10개 씬으로 작성하고 duration_sec 합계는 반드시 53~58초다. 앞에 제목 음성 인트로, 뒤에 CTA가 붙고 Neural2 실제 발화가 계획보다 길어질 여유를 남긴다.

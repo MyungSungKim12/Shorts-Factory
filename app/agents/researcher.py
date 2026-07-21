@@ -183,6 +183,11 @@ def _story_researcher_prompt(context: dict, grounded: bool = True) -> str:
         if grounded else
         "시간이 지나도 바뀌지 않는 불변 사실만 사용하고, 확실한 공식 출처 URL을 아는 소재만 선택하라."
     )
+    verification += (
+        " Include visual_identity in the JSON: exact_queries must start with "
+        "`exact:` and use the verified story subject; safe_fallbacks must stay "
+        "within that same real-world subject family."
+    )
     recent = context.get("recent_topics") or []
     return f"""당신은 실재 장소·자연현상·역사 구조물·동물 생존 원리를 조사하는 한국어 Shorts 리서처다.
 
@@ -222,6 +227,11 @@ def _story_researcher_prompt(context: dict, grounded: bool = True) -> str:
   "visual_plan": [
     {{"beat": "hook", "keywords": ["desert lake aerial", "cracked desert shore"]}}
   ],
+  "visual_identity": {{
+    "exact_queries": ["exact:desert lake", "exact:desert lake aerial"],
+    "safe_fallbacks": ["desert lake aerial", "cracked desert shore"],
+    "required_exact": true
+  }},
   "verification_method": "grounded_search",
   "verified_at": "검색 완료 시각"
 }}

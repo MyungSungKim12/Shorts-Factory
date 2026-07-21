@@ -73,6 +73,13 @@ def test_story_contracts_accept_complete_documents():
     assert validate_script(story_script())["total_duration_sec"] == 64
 
 
+def test_story_topic_derives_a_visual_identity_for_legacy_cached_documents():
+    topic = validate_topic(story_topic())
+
+    assert topic["visual_identity"]["exact_queries"]
+    assert topic["visual_identity"]["safe_fallbacks"]
+
+
 def test_story_contract_accepts_body_duration_reserved_for_cta():
     data = story_script()
     durations = [8, 8, 8, 8, 8, 8, 9]

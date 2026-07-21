@@ -50,6 +50,7 @@ def test_research_prompt_requires_sources_and_visual_plan():
     assert "source_url" in prompt
     assert "verification_method" in prompt
     assert "visual_plan" in prompt
+    assert "visual_identity" in prompt
     assert "실재 장소·자연현상" in prompt
     assert "최신 뉴스" in prompt
 
@@ -67,6 +68,7 @@ def test_writer_prompt_contains_retention_beats():
     assert '"visuals"' in prompt
     assert "인사" in prompt
     assert "exact:" in prompt
+    assert "visual_identity" in prompt
     assert "Wikimedia Commons" in prompt
     assert "close 본문에는 \"\uad6c독\"과 \"좋아요\"를 절대 넣지 마라" in prompt
 

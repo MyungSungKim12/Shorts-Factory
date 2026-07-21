@@ -140,6 +140,12 @@ class StoryVisualPlan(BaseModel):
         return cleaned
 
 
+class VisualIdentity(BaseModel):
+    exact_queries: list[str] = Field(min_length=1, max_length=3)
+    safe_fallbacks: list[str] = Field(min_length=1, max_length=5)
+    required_exact: bool = True
+
+
 class StoryTopicContract(BaseModel):
     """단일 소재 스토리 리서처 산출물 계약."""
     format: Literal["story"] = "story"
@@ -150,6 +156,7 @@ class StoryTopicContract(BaseModel):
     core_question: str = Field(min_length=5)
     facts: list[StoryFact] = Field(min_length=1)
     visual_plan: list[StoryVisualPlan] = Field(min_length=1)
+    visual_identity: VisualIdentity | None = None
     verification_method: str
     verified_at: str = Field(min_length=5)
 
@@ -206,7 +213,11 @@ def validate_topic(data: dict, content_format: str | None = None) -> dict:
     """topic.json 검증 — 실패 시 ValueError."""
     selected = content_format or data.get("format") or "ranking"
     model = StoryTopicContract if selected == "story" else TopicContract
-    return model.model_validate(data).model_dump()
+    result = model.model_validate(data).model_dump()
+    if selected == "story":
+        from app.services.visual_relevance import ensure_visual_identity
+        return ensure_visual_identity(result)
+    return result
 
 
 def validate_script(data: dict, content_format: str | None = None) -> dict:
