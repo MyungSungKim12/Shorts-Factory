@@ -5,6 +5,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime
@@ -64,6 +65,13 @@ def _alert_run_id(slot: int | None) -> str:
     return next_scheduled_slot(now)[0]
 
 
+_RUN_ID_PATTERN = re.compile(r"\d{8}-[1-6]")
+
+
+def _safe_run_id(value: object) -> str:
+    return value if isinstance(value, str) and _RUN_ID_PATTERN.fullmatch(value) else "unknown"
+
+
 def _read_alert_metadata(result: dict) -> tuple[str, str, str]:
     """Read only the fields approved for a prebuild notification."""
     title = "unknown"
@@ -74,8 +82,10 @@ def _read_alert_metadata(result: dict) -> tuple[str, str, str]:
         script = json.loads((destination / "script.json").read_text(encoding="utf-8"))
         topic = json.loads((destination / "topic.json").read_text(encoding="utf-8"))
         if isinstance(script.get("title"), str):
-            title = script["title"]
-        if isinstance(topic.get("verification_method"), str):
+            title = safe_error(RuntimeError(script["title"]))[:100] or "unknown"
+        if topic.get("verification_method") in {
+            "grounded_search", "verified_cache", "model_memory"
+        }:
             verification_method = topic["verification_method"]
         report = result.get("quality_gate", {}).get("report", {})
         if isinstance(report.get("duration"), (int, float)):
@@ -241,21 +251,22 @@ def main() -> None:
         _notify(
             data_dir,
             f"prebuild:{alert_run_id}:failure",
-            f"Prebuild failed\nrun_id: {alert_run_id}\nerror: {safe_error(exc)}",
+            f"Prebuild failed\nrun_id: {alert_run_id}\nerror_category: prebuild_failed",
         )
         raise
     title, duration, verification_method = _read_alert_metadata(result)
+    run_id = _safe_run_id(result.get("run_id"))
     _notify(
         data_dir,
-        f"prebuild:{result['run_id']}:success",
+        f"prebuild:{run_id}:success",
         "Prebuild succeeded"
-        f"\nrun_id: {result['run_id']}"
+        f"\nrun_id: {run_id}"
         f"\ntitle: {title}"
         f"\nduration: {duration}"
         f"\nverification_method: {verification_method}",
     )
     print(f"사전 제작 완료: {result['destination'].resolve()}")
-    print(f"예약 회차: {result['run_id']} ({result['scheduled_at'].isoformat()})")
+    print(f"예약 회차: {run_id} ({result['scheduled_at'].isoformat()})")
     print("현재는 업로드하지 않았으며 해당 cron 회차가 업로드합니다.")
 
 

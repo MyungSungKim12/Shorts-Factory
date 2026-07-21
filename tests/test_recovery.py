@@ -248,15 +248,19 @@ def test_scheduled_runner_alerts_uploaded_url(tmp_path, monkeypatch):
 
 def test_scheduled_runner_alerts_recovery_exhaustion_before_exit(tmp_path, monkeypatch):
     alerts = []
+    token = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi"
     recovery_dir = tmp_path / "recovery"
     recovery_dir.mkdir()
     (recovery_dir / "20260721-1.json").write_text(
-        json.dumps({"failed_stage": "writer", "last_error": "writer failed"}),
+        json.dumps({
+            "failed_stage": "writer",
+            "last_error": f"POST https://api.telegram.org/bot{token}/sendMessage failed",
+        }),
         encoding="utf-8",
     )
 
     async def exhausted(*args, **kwargs):
-        raise RuntimeError("writer failed")
+        raise RuntimeError("pipeline failed")
 
     monkeypatch.setattr(command, "ROOT", tmp_path)
     monkeypatch.chdir(tmp_path)
@@ -277,6 +281,65 @@ def test_scheduled_runner_alerts_recovery_exhaustion_before_exit(tmp_path, monke
     assert alerts == [
         (
             (tmp_path, "recovery:20260721-1:exhausted"),
-            {"text": "Recovery exhausted\nrun_id: 20260721-1\nstage: writer\nerror: writer failed"},
+            {"text": "Recovery exhausted\nrun_id: 20260721-1\nstage: writer\nerror_category: pipeline_failure"},
         )
     ]
+    assert token not in alerts[0][1]["text"]
+
+
+def test_scheduled_runner_maps_unknown_skip_reason_to_safe_category(tmp_path, monkeypatch):
+    alerts = []
+    token = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi"
+
+    async def skipped(*args, **kwargs):
+        return {
+            "date": f"https://api.telegram.org/bot{token}/sendMessage",
+            "success": True,
+            "stages": {
+                "uploader": {
+                    "status": "skipped",
+                    "reason": f"POST https://api.telegram.org/bot{token}/sendMessage failed",
+                }
+            },
+        }
+
+    monkeypatch.setattr(command, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(command, "load_dotenv", lambda: None)
+    monkeypatch.setattr(command, "cleanup_stale_temp_dirs", lambda: {"removed_dirs": 0, "removed_bytes": 0})
+    monkeypatch.setattr(command, "cleanup_old_work", lambda *args: None)
+    monkeypatch.setattr(command, "run_with_recovery", skipped)
+    monkeypatch.setattr(command, "send_alert", lambda *args, **kwargs: alerts.append((args, kwargs)))
+    monkeypatch.setattr(command.sys, "argv", ["run_scheduled.py", "1"])
+
+    command.main()
+
+    assert alerts[0][1]["text"].endswith("reason: unknown")
+    assert "run_id: unknown" in alerts[0][1]["text"]
+    assert token not in alerts[0][1]["text"]
+
+
+def test_scheduled_runner_preserves_known_skip_reason_category(tmp_path, monkeypatch):
+    alerts = []
+
+    async def skipped(*args, **kwargs):
+        return {
+            "date": "20260721-1",
+            "success": True,
+            "stages": {"uploader": {"status": "skipped", "reason": "오늘 영상 이미 업로드됨"}},
+        }
+
+    monkeypatch.setattr(command, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(command, "load_dotenv", lambda: None)
+    monkeypatch.setattr(command, "cleanup_stale_temp_dirs", lambda: {"removed_dirs": 0, "removed_bytes": 0})
+    monkeypatch.setattr(command, "cleanup_old_work", lambda *args: None)
+    monkeypatch.setattr(command, "run_with_recovery", skipped)
+    monkeypatch.setattr(command, "send_alert", lambda *args, **kwargs: alerts.append((args, kwargs)))
+    monkeypatch.setattr(command.sys, "argv", ["run_scheduled.py", "1"])
+
+    command.main()
+
+    assert alerts[0][1]["text"].endswith("reason: already_uploaded")

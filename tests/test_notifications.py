@@ -110,6 +110,28 @@ def test_safe_error_redacts_bot_token_and_truncates():
     assert len(message) == 300
 
 
+def test_safe_error_redacts_token_embedded_in_bot_api_url():
+    from app.services.notifications import safe_error
+
+    token = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi"
+    message = safe_error(
+        RuntimeError(f"POST https://api.telegram.org/bot{token}/sendMessage failed")
+    )
+
+    assert token not in message
+    assert "bot[redacted]" in message
+
+
+def test_corrupt_state_lock_cleanup_never_raises(tmp_path):
+    from app.services.notifications import _release_state_lock
+
+    state_path = tmp_path / "notifications" / "state.json"
+    state_path.parent.mkdir()
+    state_path.with_name(".state.json.lock").write_bytes(b"\xff")
+
+    _release_state_lock(state_path, "owner-token")
+
+
 def test_state_failure_never_reaches_http_or_raises(tmp_path, monkeypatch):
     from app.services import notifications
 

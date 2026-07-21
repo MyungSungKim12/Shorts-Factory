@@ -337,6 +337,7 @@ def test_prepare_cli_alerts_failure_without_changing_failure_result(
     tmp_path: Path, monkeypatch
 ) -> None:
     alerts = []
+    token = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi"
     monkeypatch.setattr(command, "ROOT", tmp_path)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
@@ -344,16 +345,19 @@ def test_prepare_cli_alerts_failure_without_changing_failure_result(
     monkeypatch.setattr(
         command,
         "prepare_slot",
-        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("producer failed")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError(f"POST https://api.telegram.org/bot{token}/sendMessage failed")
+        ),
     )
     monkeypatch.setattr(
         command, "send_alert", lambda *args, **kwargs: alerts.append((args, kwargs)), raising=False
     )
     monkeypatch.setattr(command.sys, "argv", ["prepare_next_slot.py", "--slot", "2"])
 
-    with pytest.raises(RuntimeError, match="producer failed"):
+    with pytest.raises(RuntimeError, match="sendMessage failed"):
         command.main()
 
     assert len(alerts) == 1
     assert alerts[0][0][1].endswith(":failure")
-    assert "error: producer failed" in alerts[0][1]["text"]
+    assert "error_category: prebuild_failed" in alerts[0][1]["text"]
+    assert token not in alerts[0][1]["text"]

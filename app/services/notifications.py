@@ -12,7 +12,7 @@ import requests
 
 
 _DEDUPLICATION_TTL = timedelta(hours=24)
-_BOT_TOKEN_PATTERN = re.compile(r"\b\d{5,15}:[A-Za-z0-9_-]{20,}\b")
+_BOT_TOKEN_PATTERN = re.compile(r"(?<!\d)\d{5,15}:[A-Za-z0-9_-]{20,}")
 
 
 def safe_error(exc: Exception) -> str:
@@ -46,7 +46,7 @@ def _release_state_lock(path: Path, token: str) -> None:
     try:
         if lock_path.read_text(encoding="ascii") == token:
             lock_path.unlink()
-    except OSError:
+    except Exception:
         return
 
 
