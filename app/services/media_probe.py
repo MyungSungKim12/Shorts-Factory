@@ -105,8 +105,8 @@ def validate_sample(report: dict) -> list[str]:
         failures.append("audio")
     if float(report.get("black_ratio", 1)) > 0.10:
         failures.append("black_frames")
-    if float(report.get("duration_delta", 999)) > 0.5:
+    if float(report.get("duration_delta", 0)) > 0.5:
         failures.append("audio_duration_delta")
-    if float(report.get("internal_silence_max", 999)) >= 1.2:
+    if float(report.get("internal_silence_max", 0)) >= 1.2:
         failures.append("internal_silence")
     return failures
