@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from app.services.recovery import run_with_recovery  # noqa: E402
-from app.services.notifications import send_alert  # noqa: E402
+from app.services.notifications import safe_error, send_alert  # noqa: E402
 from app.services.temp_cleanup import cleanup_stale_temp_dirs  # noqa: E402
 from scripts.run_daily import cleanup_old_work  # noqa: E402
 
@@ -76,6 +76,23 @@ def _safe_run_id(value: object) -> str:
     return value if isinstance(value, str) and _RUN_ID_PATTERN.fullmatch(value) else "unknown"
 
 
+def _validated_upload_title(data_dir: Path, run_id: str) -> str:
+    """Read only a contract-sized title from the script used for this upload."""
+    try:
+        payload = json.loads(
+            (data_dir / "work" / run_id / "script.json").read_text(encoding="utf-8")
+        )
+        title = payload.get("title")
+        if not isinstance(title, str):
+            return "unknown"
+        title = " ".join(title.split())
+        if not 5 <= len(title) <= 100:
+            return "unknown"
+        return safe_error(RuntimeError(title)) or "unknown"
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return "unknown"
+
+
 def main() -> None:
     if len(sys.argv) != 2 or not sys.argv[1].isdigit():
         raise SystemExit("사용법: python scripts/run_scheduled.py <slot>")
@@ -119,10 +136,11 @@ def main() -> None:
     run_id = _safe_run_id(result.get("date", result.get("run_id", run_id)))
     if uploader.get("status") == "uploaded":
         url = _safe_uploaded_url(uploader.get("url"))
+        title = _validated_upload_title(data_dir, run_id)
         _notify(
             data_dir,
             f"upload:{run_id}:uploaded",
-            f"Scheduled upload succeeded\nrun_id: {run_id}\nurl: {url}",
+            f"Scheduled upload succeeded\nrun_id: {run_id}\ntitle: {title}\nurl: {url}",
         )
     else:
         reason = _skip_reason_category(uploader.get("reason"))

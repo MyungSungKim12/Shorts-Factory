@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 
 from app.services.media_probe import ffprobe_path_for, probe_video, validate_sample
+from app.services.media_library import exact_source_matches
 
 
 def _spoken_title(title: str) -> str:
@@ -60,12 +61,28 @@ def validate_upload_package(work_dir: Path, ffmpeg_path: str) -> dict:
         failures.append("cta_actions")
 
     visual_relevance = produce.get("visual_relevance") or {}
+    sources = produce.get("sources") if isinstance(produce.get("sources"), list) else []
+    exact_sources = {
+        f"{source.get('provider', '')}:{source.get('media_id', '')}"
+        for source in sources
+        if isinstance(source, dict) and exact_source_matches(source)
+    }
+    invalid_exact_sources = [
+        source
+        for source in sources
+        if isinstance(source, dict)
+        and source.get("exact_match")
+        and not exact_source_matches(source)
+    ]
     if (
         visual_relevance.get("required_exact")
-        and int(visual_relevance.get("exact_source_count") or 0) == 0
+        and not exact_sources
     ):
         failures.append("visual_exact_source")
-    if int(visual_relevance.get("unrelated_fallback_count") or 0) != 0:
+    if (
+        int(visual_relevance.get("unrelated_fallback_count") or 0) != 0
+        or invalid_exact_sources
+    ):
         failures.append("visual_unrelated_fallback")
 
     result = {

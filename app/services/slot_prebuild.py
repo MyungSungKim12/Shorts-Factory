@@ -51,6 +51,11 @@ def _already_uploaded(data_dir: Path, run_id: str) -> bool:
         return False
     try:
         with sqlite3.connect(db_file) as db:
+            table = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'videos'"
+            ).fetchone()
+            if table is None:
+                return False
             row = db.execute(
                 "SELECT 1 FROM videos WHERE date = ? AND status = 'uploaded' LIMIT 1",
                 (run_id,),

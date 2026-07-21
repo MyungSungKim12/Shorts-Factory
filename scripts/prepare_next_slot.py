@@ -251,7 +251,8 @@ def main() -> None:
         _notify(
             data_dir,
             f"prebuild:{alert_run_id}:failure",
-            f"Prebuild failed\nrun_id: {alert_run_id}\nerror_category: prebuild_failed",
+            f"Prebuild failed\nrun_id: {alert_run_id}\nstage: prebuild"
+            "\nerror_category: prebuild_failed",
         )
         raise
     title, duration, verification_method = _read_alert_metadata(result)
@@ -263,7 +264,8 @@ def main() -> None:
         f"\nrun_id: {run_id}"
         f"\ntitle: {title}"
         f"\nduration: {duration}"
-        f"\nverification_method: {verification_method}",
+        f"\nverification_method: {verification_method}"
+        "\nqc_passed: true",
     )
     print(f"사전 제작 완료: {result['destination'].resolve()}")
     print(f"예약 회차: {run_id} ({result['scheduled_at'].isoformat()})")

@@ -226,8 +226,18 @@ def test_visual_relevance_counts_one_reused_exact_source():
     result = story_producer.build_visual_relevance(
         {"required_exact": True},
         [
-            {"provider": "wikimedia_image", "media_id": "File:Richat.jpg", "exact_match": True},
-            {"provider": "wikimedia_image", "media_id": "File:Richat.jpg", "exact_match": True},
+            {
+                "provider": "wikimedia_image",
+                "media_id": "File:Richat.jpg",
+                "keyword": "Richat Structure Mauritania",
+                "exact_match": True,
+            },
+            {
+                "provider": "wikimedia_image",
+                "media_id": "File:Richat.jpg",
+                "keyword": "Richat Structure Mauritania",
+                "exact_match": True,
+            },
             {"provider": "pexels_video", "media_id": "123"},
         ],
         {1: ["exact: Richat Structure Mauritania"], 2: ["desert aerial"]},
@@ -243,6 +253,22 @@ def test_visual_relevance_counts_one_reused_exact_source():
             "2": ["desert aerial"],
         },
     }
+
+
+def test_visual_relevance_rejects_context_only_exact_source():
+    result = story_producer.build_visual_relevance(
+        {"required_exact": True},
+        [{
+            "provider": "wikimedia_image",
+            "media_id": "File:Flag of Mauritania.jpg",
+            "keyword": "Richat Structure Mauritania",
+            "exact_match": True,
+        }],
+        {1: ["exact: Richat Structure Mauritania"]},
+    )
+
+    assert result["exact_source_count"] == 0
+    assert result["unrelated_fallback_count"] == 1
 
 
 def test_trim_narration_removes_only_leading_and_trailing_silence(tmp_path, monkeypatch):

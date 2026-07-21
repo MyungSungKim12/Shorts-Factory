@@ -16,7 +16,7 @@
 | 프로젝트 경로(로컬) | `D:\ms\shorts-factory-be` (백), `D:\ms\shorts-factory-fe` (대시보드) |
 | 대시보드 API | `http://168.107.15.146:8000` (systemd `shorts-dashboard`, 24시간 상시) |
 | 대시보드 화면 | Vercel 배포 (프론트) |
-| 자동 실행 | cron, 매일 3회 (11:00·17:00·21:00 KST) |
+| 자동 실행 | cron, 캐시 워밍 1회 + 사전 제작 3회 + 업로드 3회 (KST) |
 
 ### 파이프라인 흐름
 `리서처(소재+검증) → 작가(대본) → 프로듀서(TTS·영상·자막) → 업로더(YouTube) → 분석가(성과 갱신)`
@@ -255,9 +255,57 @@ ssh -i "D:\ms\ssh-key-2026-07-10.key" ubuntu@168.107.15.146 "df -h / | tail -1; 
 | GitHub push 거부 (`secret detected`) | `.env.example`에 실제 API 키가 들어감 | 자리표시자로 교체 후 `--amend`, 이력 초기화 |
 | 서버 로그가 실행 후에만 보임 | 파이썬 출력 버퍼링 | cron 명령에 `python -u`(unbuffered) 추가 |
 
-## 11. 다음 개선 후보 (미구현)
+## 11. 선제 제작·알림 운영
+
+### 운영 cron 7개 (KST)
+
+```cron
+30 6 * * * cd /home/ubuntu/shorts-factory-be && venv/bin/python -u scripts/warm_verified_cache.py >> data/cron.log 2>&1
+0 9 * * * cd /home/ubuntu/shorts-factory-be && venv/bin/python -u scripts/prepare_next_slot.py --slot 1 >> data/cron.log 2>&1
+0 11 * * * cd /home/ubuntu/shorts-factory-be && venv/bin/python -u scripts/run_scheduled.py 1 >> data/cron.log 2>&1
+0 15 * * * cd /home/ubuntu/shorts-factory-be && venv/bin/python -u scripts/prepare_next_slot.py --slot 2 >> data/cron.log 2>&1
+0 17 * * * cd /home/ubuntu/shorts-factory-be && venv/bin/python -u scripts/run_scheduled.py 2 >> data/cron.log 2>&1
+0 19 * * * cd /home/ubuntu/shorts-factory-be && venv/bin/python -u scripts/prepare_next_slot.py --slot 3 >> data/cron.log 2>&1
+0 21 * * * cd /home/ubuntu/shorts-factory-be && venv/bin/python -u scripts/run_scheduled.py 3 >> data/cron.log 2>&1
+```
+
+- 06:30 워머는 슬롯별 활성 검증 캐시를 기본 10건까지 채운다. 30일이 지난 항목은 전체 기록에는 남아도 활성 개수에는 포함하지 않는다.
+- 워머는 `grounded_search`만 사용한다. 일일 그라운딩 할당량이 끝나면 남은 슬롯을 호출하지 않고 정상 종료하며, `verified_cache`나 `model_memory`로 우회하지 않는다.
+- 09:00·15:00·19:00 사전 제작은 당일 지정 회차만 만든다. 회차 시간이 이미 지났거나 유효한 준비본/업로드 이력이 있으면 덮어쓰지 않는다.
+- 업로드 시 유효한 `prepared.json`과 품질검사를 통과한 `output.mp4`가 있으면 재사용한다. 준비본이 없거나 무효이면 기존 즉시 생성 경로로 폴백한다.
+
+### Telegram 알림
+
+서버 `.env`에만 다음 값을 설정한다. Git, 채팅, 명령행 인자, 로그에는 실제 토큰을 남기지 않는다.
+
+```dotenv
+TELEGRAM_ALERTS_ENABLED=true
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
+```
+
+- `TELEGRAM_ALERTS_ENABLED=true`가 아니면 토큰이 있어도 HTTP 요청을 보내지 않는다.
+- 알림 실패·잠금 경합·Telegram 장애는 제작과 업로드의 성공/실패 결과를 바꾸지 않는다.
+- 토큰 노출이 의심되면 Telegram의 `@BotFather`에서 `/revoke`로 즉시 폐기하고 새 토큰을 서버 `.env`에만 입력한다.
+
+### 배포 전 백업과 원복
+
+1. `/home/ubuntu/backups/<timestamp>/` 아래에 `app`, `scripts`, `tests`, `config`, `.env`, `credentials`, `data`와 현재 `crontab -l` 출력을 백업한다.
+2. 백업 디렉터리의 필수 항목과 용량만 확인하고 비밀 파일 내용은 출력하지 않는다.
+3. 추적된 Git 파일만 배포하고 서버의 `.env`, `credentials`, `data`, `venv`는 보존한다.
+4. 원격 전체 테스트와 `compileall`, 대시보드 재시작, `/api/health` 확인 후에만 cron을 변경한다.
+5. 원복 시 백업 코드를 복원하고 cron은 기존 업로드 3개(11:00·17:00·21:00)만 되돌린다. DB·준비본은 백업본과 현재 상태를 비교한 뒤 복원한다.
+
+### 감독 검증
+
+- 다음 미래 회차를 수동 사전 제작하고 `prepared.json`의 `quality_gate.passed=true`, exact source, 1080x1920 H.264/AAC, 60±5초, 오디오 길이 차이 0.5초 이하, 내부 무음 1.2초 미만을 확인한다.
+- 임시 디렉터리와 전역 잠금이 정리됐는지, Telegram 사전 제작 성공 알림에 제목·길이·검증방식·QC 결과가 포함됐는지 확인한다.
+- 예약 시각 이후 SQLite에 해당 run ID 업로드 행이 정확히 1개인지, Shorts URL과 업로더 성공 로그가 있는지, 대시보드가 정상인지, 업로드 성공 알림이 도착했는지 확인한다.
+
+---
+
+## 12. 다음 개선 후보 (미구현)
 
 - 무료 웹검색(DuckDuckGo) 붙여 model_memory 비중 줄이고 실제 검증 강화
 - YouTube Analytics(시청지속·24/72h 성과) — 재인증 필요
 - 카테고리/시간대 분리 실험 (요일별 순환)
-- 실패 시 알림(텔레그램 등)

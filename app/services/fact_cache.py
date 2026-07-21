@@ -80,27 +80,64 @@ def pick_cached(data_dir: Path, slot, exclude_topics: list, reverify_days: int =
         db.close()
 
 
-def cache_size(data_dir: Path, slot=None) -> int:
-    """캐시에 쌓인 검증 소재 수 (회차 지정 시 해당 회차만)."""
+def cache_stats(
+    data_dir: Path,
+    slot=None,
+    *,
+    reverify_days: int = 30,
+    now: datetime | None = None,
+) -> dict[str, int]:
+    """Return reusable and expired cache counts for one slot or the full cache."""
     db_file = data_dir / "videos.sqlite"
     if not db_file.exists():
-        return 0
+        return {"active": 0, "expired": 0, "total": 0}
     db = _conn(data_dir)
     try:
-        if slot is None:
-            return db.execute("SELECT COUNT(*) FROM verified_topics").fetchone()[0]
-        return db.execute("SELECT COUNT(*) FROM verified_topics WHERE slot = ?", (slot,)).fetchone()[0]
+        cutoff = ((now or datetime.now()) - timedelta(days=reverify_days)).isoformat()
+        where = "" if slot is None else " WHERE slot = ?"
+        parameters = () if slot is None else (slot,)
+        total = db.execute(
+            f"SELECT COUNT(*) FROM verified_topics{where}", parameters
+        ).fetchone()[0]
+        active_where = "verified_at >= ?"
+        active_parameters: tuple = (cutoff,)
+        if slot is not None:
+            active_where += " AND slot = ?"
+            active_parameters += (slot,)
+        active = db.execute(
+            f"SELECT COUNT(*) FROM verified_topics WHERE {active_where}",
+            active_parameters,
+        ).fetchone()[0]
+        return {"active": active, "expired": total - active, "total": total}
     finally:
         db.close()
 
 
-def cached_topics(data_dir: Path) -> set[str]:
-    """Return all cached topic titles for duplicate exclusion during warming."""
+def cache_size(data_dir: Path, slot=None, *, reverify_days: int = 30, now=None) -> int:
+    """Return the number of unexpired, reusable verified topics."""
+    return cache_stats(
+        data_dir, slot, reverify_days=reverify_days, now=now
+    )["active"]
+
+
+def cached_topics(
+    data_dir: Path,
+    *,
+    reverify_days: int = 30,
+    now: datetime | None = None,
+) -> set[str]:
+    """Return active topic titles for duplicate exclusion during warming."""
     db_file = data_dir / "videos.sqlite"
     if not db_file.exists():
         return set()
     db = _conn(data_dir)
     try:
-        return {row[0] for row in db.execute("SELECT topic FROM verified_topics")}
+        cutoff = ((now or datetime.now()) - timedelta(days=reverify_days)).isoformat()
+        return {
+            row[0]
+            for row in db.execute(
+                "SELECT topic FROM verified_topics WHERE verified_at >= ?", (cutoff,)
+            )
+        }
     finally:
         db.close()

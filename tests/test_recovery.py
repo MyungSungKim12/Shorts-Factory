@@ -12,6 +12,10 @@ from scripts import run_scheduled as command
 FIXED_NOW = datetime(2026, 7, 21, 11, 0, tzinfo=timezone.utc)
 
 
+def _token():
+    return "123456789" + ":" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ" + "abcdefghi"
+
+
 def _failed_log(stage="writer", uploader=None):
     stages = {stage: {"status": "error", "error": f"{stage} failed"}}
     if uploader is not None:
@@ -216,6 +220,11 @@ def test_release_owned_global_lock_preserves_changed_owner(tmp_path):
 
 def test_scheduled_runner_alerts_uploaded_url(tmp_path, monkeypatch):
     alerts = []
+    work = tmp_path / "work" / "20260721-1"
+    work.mkdir(parents=True)
+    (work / "script.json").write_text(
+        json.dumps({"title": "검증된 업로드 제목"}), encoding="utf-8"
+    )
 
     async def uploaded(*args, **kwargs):
         return {
@@ -241,14 +250,17 @@ def test_scheduled_runner_alerts_uploaded_url(tmp_path, monkeypatch):
     assert alerts == [
         (
             (tmp_path, "upload:20260721-1:uploaded"),
-            {"text": "Scheduled upload succeeded\nrun_id: 20260721-1\nurl: https://youtu.be/abc"},
+            {"text": (
+                "Scheduled upload succeeded\nrun_id: 20260721-1"
+                "\ntitle: 검증된 업로드 제목\nurl: https://youtu.be/abc"
+            )},
         )
     ]
 
 
 def test_scheduled_runner_alerts_recovery_exhaustion_before_exit(tmp_path, monkeypatch):
     alerts = []
-    token = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi"
+    token = _token()
     recovery_dir = tmp_path / "recovery"
     recovery_dir.mkdir()
     (recovery_dir / "20260721-1.json").write_text(
@@ -289,7 +301,7 @@ def test_scheduled_runner_alerts_recovery_exhaustion_before_exit(tmp_path, monke
 
 def test_scheduled_runner_maps_unknown_skip_reason_to_safe_category(tmp_path, monkeypatch):
     alerts = []
-    token = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi"
+    token = _token()
 
     async def skipped(*args, **kwargs):
         return {

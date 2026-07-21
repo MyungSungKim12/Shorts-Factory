@@ -47,13 +47,46 @@ def _distinctive_tokens(value: str) -> set[str]:
     }
 
 
+def _canonical_anchor_tokens(value: str) -> set[str]:
+    """Keep subject tokens while dropping a conventional trailing context token."""
+    tokens = [
+        token
+        for token in re.findall(r"[^\W_]+", (value or "").lower())
+        if token not in _GENERIC_EXACT_TOKENS
+    ]
+    if len(tokens) > 1:
+        tokens = tokens[:-1]
+    return set(tokens)
+
+
 def exact_candidate_matches(query: str, candidate: MediaCandidate) -> bool:
-    """Require a Wikimedia file title to share a distinctive subject token."""
+    """Require a Wikimedia title to share the query's canonical subject anchor."""
     normalized_query = (query or "").removeprefix("exact:").strip()
     return bool(
-        _distinctive_tokens(normalized_query)
+        _canonical_anchor_tokens(normalized_query)
         & _distinctive_tokens(candidate.media_id)
     )
+
+
+def exact_source_matches(source: dict) -> bool:
+    """Revalidate persisted producer metadata instead of trusting exact_match."""
+    if source.get("provider") != "wikimedia_image" or not source.get("exact_match"):
+        return False
+    query = source.get("keyword")
+    media_id = source.get("media_id")
+    if not isinstance(query, str) or not isinstance(media_id, str):
+        return False
+    candidate = MediaCandidate(
+        provider="wikimedia_image",
+        media_id=media_id,
+        source_url="",
+        download_url="",
+        width=0,
+        height=0,
+        media_type="image",
+        keyword=query,
+    )
+    return exact_candidate_matches(query, candidate)
 
 
 def _resolution_quality(width: int, height: int) -> tuple:

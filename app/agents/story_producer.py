@@ -12,7 +12,11 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 from app.console import safe_print
-from app.services.media_library import fetch_required_exact_media, fetch_story_media
+from app.services.media_library import (
+    exact_source_matches,
+    fetch_required_exact_media,
+    fetch_story_media,
+)
 from app.services.process_runner import run_checked
 from app.services.temp_cleanup import mark_temp_owner
 from app.services.tts import TTSResult, synthesize
@@ -207,7 +211,12 @@ def build_visual_relevance(identity: dict, sources: list[dict], queries: dict) -
     exact_sources = {
         f"{source.get('provider', '')}:{source.get('media_id', '')}"
         for source in sources
-        if source.get("exact_match")
+        if exact_source_matches(source)
+    }
+    invalid_exact_sources = {
+        f"{source.get('provider', '')}:{source.get('media_id', '')}"
+        for source in sources
+        if source.get("exact_match") and not exact_source_matches(source)
     }
     generic_fallback_count = sum(
         1
@@ -218,7 +227,7 @@ def build_visual_relevance(identity: dict, sources: list[dict], queries: dict) -
         "required_exact": bool(identity.get("required_exact")),
         "exact_source_count": len(exact_sources),
         "generic_fallback_count": generic_fallback_count,
-        "unrelated_fallback_count": 0,
+        "unrelated_fallback_count": len(invalid_exact_sources),
         "queries": {str(number): values for number, values in queries.items()},
     }
 

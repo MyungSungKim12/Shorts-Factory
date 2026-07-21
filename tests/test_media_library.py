@@ -192,6 +192,28 @@ def test_exact_candidate_rejects_unrelated_title():
     assert exact_candidate_matches("Richat Structure Mauritania", moon) is False
 
 
+@pytest.mark.parametrize(
+    ("query", "media_id"),
+    [
+        ("Richat Structure Mauritania", "File:Flag of Mauritania.jpg"),
+        ("Eiffel Tower Paris", "File:Paris skyline at dusk.jpg"),
+    ],
+)
+def test_exact_candidate_rejects_context_only_overlap(query, media_id):
+    context_only = MediaCandidate(
+        provider="wikimedia_image",
+        media_id=media_id,
+        source_url="x",
+        download_url="x",
+        width=1200,
+        height=1600,
+        media_type="image",
+        keyword=query,
+    )
+
+    assert exact_candidate_matches(query, context_only) is False
+
+
 def test_required_exact_media_skips_unrelated_wikimedia_candidate(tmp_path, monkeypatch):
     unrelated = candidate(
         "File:Moon surface.jpg", 1200, 1600,

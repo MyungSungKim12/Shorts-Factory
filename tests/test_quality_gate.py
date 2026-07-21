@@ -91,6 +91,33 @@ def test_quality_gate_rejects_unrelated_visual_fallback(tmp_path, monkeypatch):
         quality_gate.validate_upload_package(tmp_path, "ffmpeg")
 
 
+def test_quality_gate_revalidates_claimed_exact_sources(tmp_path, monkeypatch):
+    _, produce = _package(tmp_path)
+    produce["visual_relevance"] = {
+        "required_exact": True,
+        "exact_source_count": 1,
+        "generic_fallback_count": 0,
+        "unrelated_fallback_count": 0,
+    }
+    produce["sources"] = [{
+        "provider": "wikimedia_image",
+        "media_id": "File:Flag of Mauritania.jpg",
+        "keyword": "Richat Structure Mauritania",
+        "exact_match": True,
+    }]
+    (tmp_path / "produce_log.json").write_text(
+        json.dumps(produce, ensure_ascii=False), encoding="utf-8"
+    )
+    monkeypatch.setattr(quality_gate, "probe_video", lambda *args: _valid_probe())
+
+    with pytest.raises(RuntimeError, match="visual_exact_source"):
+        quality_gate.validate_upload_package(tmp_path, "ffmpeg")
+
+    saved = json.loads((tmp_path / "produce_log.json").read_text(encoding="utf-8"))
+    assert "visual_exact_source" in saved["quality_gate"]["failures"]
+    assert "visual_unrelated_fallback" in saved["quality_gate"]["failures"]
+
+
 @pytest.mark.parametrize(
     ("mutation", "failure"),
     [

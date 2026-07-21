@@ -15,6 +15,10 @@ from scripts import prepare_next_slot as command
 KST = ZoneInfo("Asia/Seoul")
 
 
+def _token():
+    return "123456789" + ":" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ" + "abcdefghi"
+
+
 @pytest.mark.parametrize(
     ("hour", "expected_run_id", "expected_hour"),
     [
@@ -216,6 +220,57 @@ def test_explicit_prepare_rejects_unsafe_target_before_generation(
         )
 
 
+def test_fresh_cache_database_does_not_block_prebuild(tmp_path, monkeypatch):
+    from app.services.cache_warmer import warm_verified_cache
+
+    def cache_researcher(data_dir, run_id, **kwargs):
+        from app.services.fact_cache import save_verified
+
+        slot = int(run_id.rsplit("-", 1)[1])
+        save_verified(data_dir, slot, {
+            "topic": f"fresh topic {slot}",
+            "ranking_size": 3,
+            "items": [],
+            "verification_method": "grounded_search",
+        })
+
+    warm_verified_cache(
+        tmp_path,
+        researcher=cache_researcher,
+        now=datetime(2026, 7, 21, 6, 30),
+    )
+    with sqlite3.connect(tmp_path / "videos.sqlite") as db:
+        assert db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='videos'"
+        ).fetchone() is None
+
+    monkeypatch.setattr(command, "run_researcher", lambda *args, **kwargs: None)
+    monkeypatch.setattr(command, "run_writer", lambda *args, **kwargs: None)
+
+    async def fake_producer(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(command, "run_producer", fake_producer)
+    monkeypatch.setattr(
+        command, "validate_upload_package", lambda *args: {"passed": True, "failures": []}
+    )
+    monkeypatch.setattr(
+        command,
+        "promote_staging",
+        lambda data_dir, staging_id, run_id, target_at, quality: data_dir / "work" / run_id,
+    )
+
+    result = command.prepare_slot(
+        tmp_path,
+        "ffmpeg",
+        1,
+        now_fn=lambda: datetime(2026, 7, 21, 9, tzinfo=KST),
+        use_lock=False,
+    )
+
+    assert result["run_id"] == "20260721-1"
+
+
 def test_cli_slot_uses_explicit_prepare(tmp_path: Path, monkeypatch) -> None:
     captured = {}
     monkeypatch.setattr(command, "ROOT", tmp_path)
@@ -327,6 +382,7 @@ def test_prepare_cli_alerts_success_with_allowlisted_summary(
                 "text": (
                     "Prebuild succeeded\nrun_id: 20260721-3\ntitle: approved title"
                     "\nduration: 42.5\nverification_method: grounded_search"
+                    "\nqc_passed: true"
                 )
             },
         )
@@ -337,7 +393,7 @@ def test_prepare_cli_alerts_failure_without_changing_failure_result(
     tmp_path: Path, monkeypatch
 ) -> None:
     alerts = []
-    token = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi"
+    token = _token()
     monkeypatch.setattr(command, "ROOT", tmp_path)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
@@ -359,5 +415,6 @@ def test_prepare_cli_alerts_failure_without_changing_failure_result(
 
     assert len(alerts) == 1
     assert alerts[0][0][1].endswith(":failure")
+    assert "stage: prebuild" in alerts[0][1]["text"]
     assert "error_category: prebuild_failed" in alerts[0][1]["text"]
     assert token not in alerts[0][1]["text"]
