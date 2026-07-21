@@ -107,6 +107,34 @@ def test_history_sorts_valid_json_before_paginating(tmp_path, monkeypatch):
     }
 
 
+def test_history_merges_matching_recovery_without_changing_pagination(tmp_path, monkeypatch):
+    logs = tmp_path / "logs"
+    recovery = tmp_path / "recovery"
+    logs.mkdir()
+    recovery.mkdir()
+    for slot in (1, 2):
+        (logs / f"run-20260721-{slot}.json").write_text(json.dumps({
+            "date": f"20260721-{slot}",
+            "timestamp": f"2026-07-21T{10 + slot}:00:00",
+            "success": slot == 2,
+        }), encoding="utf-8")
+    state = {
+        "run_id": "20260721-1", "attempts": 2, "status": "exhausted",
+        "failed_stage": "producer", "last_error": "audio failed",
+        "next_retry_at": None, "updated_at": "2026-07-21T11:15:00",
+    }
+    (recovery / "20260721-1.json").write_text(json.dumps(state), encoding="utf-8")
+    (recovery / "20260721-2.json").write_text("[]", encoding="utf-8")
+    monkeypatch.setattr(main, "DATA_DIR", tmp_path)
+
+    payload = client.get("/api/history?page=1&page_size=10").json()
+
+    assert [run["date"] for run in payload["runs"]] == ["20260721-2", "20260721-1"]
+    assert "recovery" not in payload["runs"][0]
+    assert payload["runs"][1]["recovery"] == state
+    assert payload["pagination"]["total_items"] == 2
+
+
 @pytest.mark.parametrize(
     "path",
     [

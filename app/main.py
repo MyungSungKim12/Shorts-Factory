@@ -110,7 +110,19 @@ def run_history(
     runs = []
     for f in logs_dir.glob("run-*.json"):
         try:
-            runs.append(json.loads(f.read_text(encoding="utf-8")))
+            run = json.loads(f.read_text(encoding="utf-8"))
+            if not isinstance(run, dict):
+                continue
+            run_id = str(run.get("date", ""))
+            recovery_file = DATA_DIR / "recovery" / f"{run_id}.json"
+            if run_id and recovery_file.exists():
+                try:
+                    recovery = json.loads(recovery_file.read_text(encoding="utf-8"))
+                    if isinstance(recovery, dict):
+                        run["recovery"] = recovery
+                except (json.JSONDecodeError, OSError):
+                    pass
+            runs.append(run)
         except (json.JSONDecodeError, OSError):
             continue
     runs.sort(
