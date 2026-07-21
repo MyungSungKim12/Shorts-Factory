@@ -113,6 +113,41 @@ def test_writer_regenerates_once_when_model_returns_incomplete_json(tmp_path, mo
     assert "RETRY_JSON_ONLY" in prompts[1]
 
 
+def test_writer_uses_verified_template_after_two_invalid_responses(tmp_path, monkeypatch):
+    run_id = "verified-template-story"
+    work_dir = tmp_path / "work" / run_id
+    work_dir.mkdir(parents=True)
+    topic = _topic()
+    (work_dir / "topic.json").write_text(
+        json.dumps(topic, ensure_ascii=False), encoding="utf-8"
+    )
+    calls = []
+
+    def fake_call_agent(**kwargs):
+        calls.append(kwargs)
+        return '{"format":"story","title":"truncated'
+
+    monkeypatch.setattr(writer, "call_agent", fake_call_agent)
+
+    result = writer.run_writer(tmp_path, run_id, content_format="story")
+
+    assert len(calls) == 2
+    assert result["writer_mode"] == "verified_template"
+    assert len(result["scenes"]) == 8
+    assert 53 <= result["total_duration_sec"] <= 58
+    narration = " ".join(scene["narration"] for scene in result["scenes"])
+    assert topic["facts"][0]["claim"] in narration
+    assert topic["facts"][0]["value"] in narration
+    allowed_visuals = {
+        keyword
+        for item in topic["visual_plan"]
+        for keyword in item["keywords"]
+    }
+    assert {
+        visual for scene in result["scenes"] for visual in scene["visuals"]
+    } <= allowed_visuals
+
+
 def test_ranking_writer_still_uses_existing_prompt(tmp_path, monkeypatch):
     run_id = "ranking"
     work_dir = tmp_path / "work" / run_id

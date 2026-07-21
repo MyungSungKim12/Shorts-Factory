@@ -40,6 +40,7 @@ def run_writer(
     # 전송 성공이어도 응답 JSON이 잘릴 수 있으므로 검증 실패 시 한 번만 압축 재생성한다.
     base_prompt = _story_writer_prompt(topic) if selected == "story" else _writer_prompt(topic)
     script_dict = None
+    last_error = None
     for attempt in range(2):
         prompt = base_prompt
         if attempt:
@@ -56,20 +57,79 @@ def run_writer(
         )
         try:
             script_dict = validate_script(extract_json(script_text), selected)
+            script_dict["writer_mode"] = "llm" if attempt == 0 else "llm_retry"
             break
-        except ValueError:
+        except ValueError as exc:
+            last_error = exc
             if attempt:
+                if selected == "story":
+                    safe_print("  [script-writer] 모델 응답 2회 실패 → 검증 사실 템플릿으로 전환")
+                    script_dict = validate_script(build_verified_story_script(topic), selected)
+                    script_dict["writer_mode"] = "verified_template"
+                    break
                 raise
             safe_print("  ⚠️ [script-writer] 불완전한 JSON/스키마 응답 → 압축 JSON으로 1회 재생성")
 
     if script_dict is None:
-        raise RuntimeError("대본 JSON 생성 결과가 없습니다")
+        raise RuntimeError("대본 JSON 생성 결과가 없습니다") from last_error
 
     # script.json 저장 (검증 통과분만 저장됨)
     script_file = work_dir / "script.json"
     script_file.write_text(json.dumps(script_dict, ensure_ascii=False, indent=2), encoding="utf-8")
 
     return script_dict
+
+
+def build_verified_story_script(topic: dict) -> dict:
+    """검증된 topic.json 필드만 조합해 업로드 가능한 스토리 대본을 만든다."""
+    facts = topic["facts"]
+    visuals = [
+        keyword
+        for item in topic["visual_plan"]
+        for keyword in item["keywords"]
+    ]
+    unique_visuals = list(dict.fromkeys(visuals))
+    if len(unique_visuals) == 1:
+        unique_visuals.append(unique_visuals[0])
+
+    roles = [
+        "hook", "context", "problem", "mechanism",
+        "mechanism", "payoff", "payoff", "close",
+    ]
+    durations = [6.5, 6.5, 6.5, 7.0, 7.0, 7.0, 7.0, 8.0]
+    narrations = [
+        topic["hook_angle"],
+        f"{topic['topic']}에 관한 검증된 기록을 살펴보겠습니다.",
+        topic["core_question"],
+    ]
+    for index in range(5):
+        fact = facts[index % len(facts)]
+        narrations.append(f"{fact['claim']}. {fact['value']}")
+
+    scenes = []
+    for index, (role, duration, narration) in enumerate(
+        zip(roles, durations, narrations), start=1
+    ):
+        fact = facts[(index - 1) % len(facts)]
+        scenes.append({
+            "n": index,
+            "role": role,
+            "narration": narration,
+            "visuals": unique_visuals[:3],
+            "duration_sec": duration,
+            "emphasis": [fact["claim"]],
+        })
+
+    return {
+        "format": "story",
+        "title": topic["topic"],
+        "description": "검증된 자료를 바탕으로 핵심 내용을 정리했습니다.",
+        "tags": [topic["category"], topic["target_keyword"]],
+        "hook": topic["hook_angle"],
+        "scenes": scenes,
+        "cta": "이런 이야기의 다음 편도 궁금하다면 구독과 좋아요 부탁드립니다.",
+        "total_duration_sec": sum(durations),
+    }
 
 
 def _story_writer_prompt(topic: dict) -> str:
