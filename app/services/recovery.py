@@ -10,6 +10,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Awaitable, Callable
 
+from app.services.temp_cleanup import _process_alive
+
 
 RETRYABLE_STAGES = {"researcher", "writer", "producer"}
 
@@ -72,10 +74,53 @@ def _write_state(path: Path, state: dict) -> None:
 def _lock_process_alive(lock_path: Path) -> bool:
     try:
         pid = int(lock_path.read_text(encoding="ascii").strip())
-        os.kill(pid, 0)
-        return True
+        return _process_alive(pid)
     except (OSError, ValueError):
         return False
+
+
+def acquire_global_lock(path: Path, run_id: str, now: datetime) -> bool:
+    """전역 잠금을 원자적으로 획득하고 죽은 소유자의 잠금만 회수한다."""
+    payload = {
+        "pid": os.getpid(),
+        "run_id": run_id,
+        "started_at": now.isoformat(),
+    }
+    encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    try:
+        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        try:
+            snapshot = path.read_text(encoding="utf-8")
+            owner = json.loads(snapshot)
+            pid = int(owner["pid"])
+            if _process_alive(pid):
+                return False
+            if path.read_text(encoding="utf-8") != snapshot:
+                return False
+            path.unlink()
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+            return False
+        try:
+            descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            return False
+    os.write(descriptor, encoded)
+    os.close(descriptor)
+    return True
+
+
+def release_owned_lock(path: Path, run_id: str, pid: int) -> None:
+    """현재 프로세스가 아직 소유한 잠금만 해제한다."""
+    try:
+        snapshot = path.read_text(encoding="utf-8")
+        owner = json.loads(snapshot)
+        if owner.get("run_id") != run_id or int(owner.get("pid", 0)) != pid:
+            return
+        if path.read_text(encoding="utf-8") == snapshot:
+            path.unlink()
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return
 
 
 def reconcile_stale_states(data_dir: Path, current_run_id: str, now: datetime) -> None:
@@ -135,6 +180,8 @@ async def run_with_recovery(
     pipeline_runner: Callable[..., Awaitable[dict]] | None = None,
     sleep_fn: Callable[[float], Awaitable[None]] | None = None,
     now_fn: Callable[[], datetime] | None = None,
+    lock_wait_seconds: int = 5400,
+    lock_poll_seconds: int = 30,
 ) -> dict:
     """동일 회차를 잠그고, 업로드 전 명확한 실패만 한 번 재시도한다."""
     if pipeline_runner is None:
@@ -149,6 +196,7 @@ async def run_with_recovery(
     recovery_dir.mkdir(parents=True, exist_ok=True)
     reconcile_stale_states(data_dir, run_id, started_at)
     lock_path = recovery_dir / f"{run_id}.lock"
+    global_lock_path = recovery_dir / "pipeline.lock"
     state_path = recovery_dir / f"{run_id}.json"
 
     try:
@@ -158,10 +206,28 @@ async def run_with_recovery(
 
     os.write(descriptor, str(os.getpid()).encode("ascii"))
     os.close(descriptor)
+    global_lock_owned = False
     scheduled_retry = None
     first_stage = ""
     first_error = ""
     try:
+        waited = 0
+        while not acquire_global_lock(global_lock_path, run_id, now_fn()):
+            if waited >= lock_wait_seconds:
+                error = "전역 파이프라인 잠금 대기 시간 초과"
+                _write_state(
+                    state_path,
+                    _state(
+                        run_id, 0, "exhausted", now_fn(),
+                        stage="scheduler", error=error,
+                    ),
+                )
+                raise RuntimeError(error)
+            sleep_seconds = min(lock_poll_seconds, lock_wait_seconds - waited)
+            await sleep_fn(sleep_seconds)
+            waited += sleep_seconds
+        global_lock_owned = True
+
         for attempt in (1, 2):
             now = now_fn()
             _write_state(
@@ -217,4 +283,6 @@ async def run_with_recovery(
                 raise
         raise RuntimeError("복구 실행 횟수 제한을 초과했습니다")
     finally:
+        if global_lock_owned:
+            release_owned_lock(global_lock_path, run_id, os.getpid())
         lock_path.unlink(missing_ok=True)

@@ -151,3 +151,63 @@ def test_next_slot_normalizes_stale_previous_state(tmp_path):
 
     normalized = json.loads((recovery_dir / "20260721-1.json").read_text())
     assert normalized["status"] == "exhausted"
+
+
+def test_global_lock_waits_for_living_other_slot_then_reclaims(tmp_path, monkeypatch):
+    recovery_dir = tmp_path / "recovery"
+    recovery_dir.mkdir()
+    lock = recovery_dir / "pipeline.lock"
+    lock.write_text(json.dumps({
+        "pid": 777, "run_id": "20260721-1", "started_at": FIXED_NOW.isoformat(),
+    }), encoding="utf-8")
+    alive_checks = iter([True, False])
+    monkeypatch.setattr(recovery, "_process_alive", lambda pid: next(alive_checks))
+    sleeps = []
+
+    async def no_wait(seconds):
+        sleeps.append(seconds)
+
+    async def pipeline(data_dir, ffmpeg_path, slot):
+        return {"date": "20260721-2", "success": True}
+
+    result = asyncio.run(recovery.run_with_recovery(
+        tmp_path, "ffmpeg", 2, pipeline_runner=pipeline,
+        sleep_fn=no_wait, now_fn=lambda: FIXED_NOW,
+        lock_wait_seconds=2, lock_poll_seconds=1,
+    ))
+
+    assert result["success"] is True
+    assert sleeps == [1]
+    assert not lock.exists()
+
+
+def test_unreadable_global_lock_times_out_without_running_pipeline(tmp_path):
+    recovery_dir = tmp_path / "recovery"
+    recovery_dir.mkdir()
+    (recovery_dir / "pipeline.lock").write_text("broken", encoding="utf-8")
+    calls = []
+
+    async def pipeline(*args, **kwargs):
+        calls.append(True)
+        return {"success": True}
+
+    with pytest.raises(RuntimeError, match="전역 파이프라인 잠금 대기 시간 초과"):
+        asyncio.run(recovery.run_with_recovery(
+            tmp_path, "ffmpeg", 2, pipeline_runner=pipeline,
+            sleep_fn=lambda _: asyncio.sleep(0), now_fn=lambda: FIXED_NOW,
+            lock_wait_seconds=0, lock_poll_seconds=1,
+        ))
+
+    assert calls == []
+    assert (recovery_dir / "pipeline.lock").read_text() == "broken"
+
+
+def test_release_owned_global_lock_preserves_changed_owner(tmp_path):
+    lock = tmp_path / "pipeline.lock"
+    lock.write_text(json.dumps({
+        "pid": 999, "run_id": "other", "started_at": FIXED_NOW.isoformat(),
+    }), encoding="utf-8")
+
+    recovery.release_owned_lock(lock, "mine", 123)
+
+    assert lock.exists()
