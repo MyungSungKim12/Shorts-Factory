@@ -54,6 +54,19 @@ def _next_slot(data_dir: Path, date_str: str) -> int:
     return 6
 
 
+def _load_prepared_marker(work_dir: Path, run_id: str) -> dict | None:
+    marker = work_dir / "prepared.json"
+    if not marker.is_file():
+        return None
+    try:
+        value = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(value, dict) or value.get("run_id") != run_id:
+        return None
+    return value
+
+
 async def run_pipeline(data_dir: Path, ffmpeg_path: str, slot: int = None) -> dict:
     """
     전체 파이프라인 실행: 리서처 → 작가 → 프로듀서 → 업로더
@@ -83,6 +96,9 @@ async def run_pipeline(data_dir: Path, ffmpeg_path: str, slot: int = None) -> di
         "success": True,
         "message": "",
     }
+    prepared = _load_prepared_marker(work_dir, run_id)
+    if prepared is not None:
+        run_log["prepared"] = prepared
 
     try:
         # 1. 트렌드 리서처 (오늘 결과가 이미 있고 검증 통과 시에만 재사용)

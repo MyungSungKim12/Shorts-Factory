@@ -1,6 +1,7 @@
 """스토리 리서치·대본 프롬프트와 작가 라우팅 테스트."""
 import json
 import asyncio
+from datetime import datetime
 
 from app.agents import orchestrator, researcher, writer
 
@@ -180,6 +181,19 @@ def test_ranking_writer_still_uses_existing_prompt(tmp_path, monkeypatch):
 def test_orchestrator_passes_selected_format_to_researcher_and_writer(tmp_path, monkeypatch):
     seen = {}
     monkeypatch.setenv("CONTENT_FORMAT", "story")
+    run_id = f"{datetime.now().strftime('%Y%m%d')}-1"
+    work_dir = tmp_path / "work" / run_id
+    work_dir.mkdir(parents=True)
+    (work_dir / "prepared.json").write_text(
+        json.dumps(
+            {
+                "run_id": run_id,
+                "scheduled_at": "2026-07-21T11:00:00+09:00",
+                "quality_gate": {"passed": True},
+            }
+        ),
+        encoding="utf-8",
+    )
 
     def fake_researcher(data_dir, run_id, content_format=None):
         seen["researcher"] = content_format
@@ -204,6 +218,7 @@ def test_orchestrator_passes_selected_format_to_researcher_and_writer(tmp_path, 
     result = asyncio.run(orchestrator.run_pipeline(tmp_path, "ffmpeg", slot=1))
     assert seen == {"researcher": "story", "writer": "story", "producer": "story"}
     assert result["content_format"] == "story"
+    assert result["prepared"]["quality_gate"]["passed"] is True
     assert result["stages"]["writer"]["writer_mode"] == "verified_template"
 
 
