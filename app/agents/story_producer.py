@@ -278,6 +278,22 @@ def _create_fallback_image(path: Path, scene_n: int) -> None:
     image.save(path, quality=92)
 
 
+def _resolve_story_media(
+    media: Path | None,
+    metadata: dict,
+    last_media: Path | None,
+    last_metadata: dict,
+) -> tuple[Path | None, dict, bool]:
+    """Reuse the last real source when a free provider temporarily fails."""
+    if media is not None:
+        return media, metadata, True
+    if last_media is None:
+        return None, metadata, False
+    reused_metadata = dict(last_metadata)
+    reused_metadata.update({"fallback": True, "reused_previous": True})
+    return last_media, reused_metadata, False
+
+
 def _encode_visual(
     media: Path,
     output: Path,
@@ -727,14 +743,20 @@ async def run_story_producer(
                     tmp_path / f"media-{global_shot_n:03d}",
                     used_ids,
                 )
+                media, metadata, is_new_source = _resolve_story_media(
+                    media, metadata, last_media, last_metadata
+                )
                 if media is None:
                     media = tmp_path / f"fallback-{global_shot_n:03d}.jpg"
                     _create_fallback_image(media, scene["n"])
-                if first_media is None:
+                if first_media is None or (
+                    is_new_source and first_metadata.get("fallback")
+                ):
                     first_media = media
                     first_metadata = metadata
-                last_media = media
-                last_metadata = metadata
+                if is_new_source or last_media is None:
+                    last_media = media
+                    last_metadata = metadata
                 clip = tmp_path / f"shot-{global_shot_n:03d}.mp4"
                 _encode_visual(
                     media,

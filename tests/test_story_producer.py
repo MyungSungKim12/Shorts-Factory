@@ -197,6 +197,24 @@ def test_caption_highlights_only_one_number_or_keyword():
     assert "300일" in highlighted
 
 
+def test_missing_source_reuses_last_valid_media(tmp_path):
+    previous = tmp_path / "previous.mp4"
+    previous.write_bytes(b"valid-media")
+
+    media, metadata, is_new_source = story_producer._resolve_story_media(
+        media=None,
+        metadata={"provider": "black_bg", "fallback": True},
+        last_media=previous,
+        last_metadata={"provider": "pexels", "id": "123"},
+    )
+
+    assert media == previous
+    assert metadata["provider"] == "pexels"
+    assert metadata["fallback"] is True
+    assert metadata["reused_previous"] is True
+    assert is_new_source is False
+
+
 def test_finish_video_normalizes_both_overlay_aspect_ratios(tmp_path, monkeypatch):
     seen = {}
 
