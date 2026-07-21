@@ -125,11 +125,20 @@ def test_still_image_filter_has_motion_without_ranking_bands():
 
 def test_video_filter_is_full_frame_vertical():
     vf = story_producer.visual_filter("shot.mp4", duration=3.0)
-    assert "scale=1080:1330" in vf
+    assert "scale=1124:1383" in vf
     assert "crop=1080:1330" in vf
     assert "pad=1080:1920:0:260:black" in vf
     assert "setsar=1" in vf
     assert "zoompan" not in vf
+
+
+def test_video_motion_alternates_by_shot_index():
+    first = story_producer.visual_filter("shot.mp4", 2.5, motion_index=0)
+    second = story_producer.visual_filter("shot.mp4", 2.5, motion_index=1)
+    assert "scale=1124:1383" in first
+    assert first != second
+    assert "crop=1080:1330" in first
+    assert "crop=1080:1330" in second
 
 
 def test_exact_landscape_image_can_preserve_full_composition():

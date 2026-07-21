@@ -152,12 +152,24 @@ def visual_filter(
     duration: float,
     preserve_full: bool = False,
     darken: bool = False,
+    motion_index: int = 0,
 ) -> str:
     """세로 전체화면 영상 또는 정지 이미지 모션 필터를 만든다."""
     overlay = ",drawbox=color=black@0.35:t=fill" if darken else ""
     pad = ",pad=1080:1920:0:260:black"
     if str(media_file).lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
         frames = max(1, round(duration * 30))
+        progress = f"on/{max(1, frames - 1)}"
+        motion = motion_index % 3
+        if motion == 1:
+            x_expr = f"(iw-iw/zoom)*({progress})"
+            y_expr = "ih/2-(ih/zoom/2)"
+        elif motion == 2:
+            x_expr = "iw/2-(iw/zoom/2)"
+            y_expr = f"(ih-ih/zoom)*({progress})"
+        else:
+            x_expr = "iw/2-(iw/zoom/2)"
+            y_expr = "ih/2-(ih/zoom/2)"
         if preserve_full:
             return (
                 "[0:v]split=2[bgsrc][fgsrc];"
@@ -166,19 +178,27 @@ def visual_filter(
                 "[fgsrc]scale=1080:1330:force_original_aspect_ratio=decrease[fg];"
                 "[bg][fg]overlay=(W-w)/2:(H-h)/2,"
                 "zoompan=z='min(zoom+0.0003,1.03)':"
-                "x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+                f"x='{x_expr}':y='{y_expr}':"
                 f"d={frames}:s=1080x1330:fps=30{overlay}{pad},setsar=1,format=yuv420p[vout]"
             )
         return (
             "scale=1200:1478:force_original_aspect_ratio=increase,"
             "crop=1200:1478,"
             "zoompan=z='min(zoom+0.0008,1.08)':"
-            "x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+            f"x='{x_expr}':y='{y_expr}':"
             f"d={frames}:s=1080x1330:fps=30{overlay}{pad},setsar=1,format=yuv420p"
         )
+    seconds = max(0.1, float(duration))
+    x_expr = (
+        f"44*t/{seconds:.3f}"
+        if motion_index % 2 == 0
+        else f"44*(1-t/{seconds:.3f})"
+    )
     return (
-        "scale=1080:1330:force_original_aspect_ratio=increase,"
-        f"crop=1080:1330,fps=30{overlay}{pad},setsar=1,format=yuv420p"
+        "scale=1124:1383:force_original_aspect_ratio=increase,"
+        "crop=1124:1383,"
+        f"crop=1080:1330:x='{x_expr}':y=26,fps=30{overlay}{pad},"
+        "setsar=1,format=yuv420p"
     )
 
 
@@ -265,6 +285,7 @@ def _encode_visual(
     ffmpeg_path: str,
     preserve_full: bool = False,
     darken: bool = False,
+    motion_index: int = 0,
 ) -> None:
     is_image = media.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
     cmd = [ffmpeg_path]
@@ -275,11 +296,14 @@ def _encode_visual(
     cmd += ["-an"]
     if preserve_full and is_image:
         cmd += [
-            "-filter_complex", visual_filter(str(media), duration, preserve_full, darken),
+            "-filter_complex",
+            visual_filter(str(media), duration, preserve_full, darken, motion_index),
             "-map", "[vout]",
         ]
     else:
-        cmd += ["-vf", visual_filter(str(media), duration, preserve_full, darken)]
+        cmd += [
+            "-vf", visual_filter(str(media), duration, preserve_full, darken, motion_index)
+        ]
     cmd += [
         "-t", f"{duration:.3f}",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "25",
@@ -630,6 +654,7 @@ async def run_story_producer(
                     shot["duration_sec"],
                     ffmpeg_path,
                     preserve_full=metadata.get("provider") == "wikimedia_image",
+                    motion_index=global_shot_n - 1,
                 )
                 visual_clips.append(clip)
                 sources.append({
