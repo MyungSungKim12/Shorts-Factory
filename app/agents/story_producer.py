@@ -89,6 +89,56 @@ def build_story_timing(
     }
 
 
+def story_tempo_adjustment(
+    intro_audio_duration: float,
+    body_audio_duration: float,
+    cta_audio_duration: float,
+    scene_count: int,
+    padding: float = 0.15,
+    minimum_tempo: float = 0.80,
+) -> float:
+    """Return a bounded slowdown factor that reaches 60 seconds without silence."""
+    audio_duration = (
+        float(intro_audio_duration)
+        + float(body_audio_duration)
+        + float(cta_audio_duration)
+    )
+    padding_duration = float(padding) * (int(scene_count) + 1)
+    if audio_duration + padding_duration >= 60:
+        return 1.0
+
+    tempo = audio_duration / (60.0 - padding_duration)
+    if tempo < float(minimum_tempo):
+        raise RuntimeError(
+            f"실제 음성 길이가 너무 짧아 자연스러운 감속 한도({minimum_tempo:.2f})를 벗어남"
+        )
+    return round(tempo, 6)
+
+
+def _retime_audio(source: Path, tempo: float, ffmpeg_path: str) -> None:
+    """Slow narration without changing pitch, then atomically replace the source WAV."""
+    output = source.with_name(f".{source.stem}.retimed{source.suffix}")
+    try:
+        run_checked(
+            [
+                ffmpeg_path,
+                "-y",
+                "-i",
+                str(source),
+                "-filter:a",
+                f"atempo={tempo:.6f}",
+                "-c:a",
+                "pcm_s16le",
+                str(output),
+            ],
+            timeout_seconds=180,
+            label="나레이션 길이 보정",
+        )
+        output.replace(source)
+    finally:
+        output.unlink(missing_ok=True)
+
+
 def _scene_duration(
     planned_duration: float,
     audio_duration: float,
@@ -746,7 +796,6 @@ async def run_story_producer(
                 float(scene["duration_sec"]), audio_duration
             )
 
-        body_duration = sum(scene_durations.values())
         cta_plan = build_story_cta_plan(script)
         cta_text = cta_plan["text"]
         cta_result = None
@@ -759,6 +808,34 @@ async def run_story_producer(
             _trim_narration(cta_raw, cta_narration, ffmpeg_path)
             tts_results.append(cta_result)
             cta_audio_duration = _duration(cta_narration, ffmpeg_path)
+
+        audio_tempo = story_tempo_adjustment(
+            intro_audio_duration,
+            sum(audio_durations.values()),
+            cta_audio_duration,
+            len(scene_durations),
+        )
+        if audio_tempo < 1.0:
+            safe_print(
+                f"  → 실제 음성이 짧아 피치 유지 감속 적용: {audio_tempo:.3f}배"
+            )
+            _retime_audio(intro_narration, audio_tempo, ffmpeg_path)
+            for scene_number, narration in narration_files.items():
+                _retime_audio(narration, audio_tempo, ffmpeg_path)
+                audio_duration = _duration(narration, ffmpeg_path)
+                audio_durations[scene_number] = audio_duration
+                scene = next(
+                    item for item in script["scenes"] if item["n"] == scene_number
+                )
+                scene_durations[scene_number] = _scene_duration(
+                    float(scene["duration_sec"]), audio_duration
+                )
+            if cta_narration is not None:
+                _retime_audio(cta_narration, audio_tempo, ffmpeg_path)
+                cta_audio_duration = _duration(cta_narration, ffmpeg_path)
+            intro_audio_duration = _duration(intro_narration, ffmpeg_path)
+
+        body_duration = sum(scene_durations.values())
         story_timing = build_story_timing(
             intro_audio_duration, body_duration, cta_audio_duration
         )
@@ -920,6 +997,7 @@ async def run_story_producer(
         "actual_duration": round(actual_duration, 1),
         "script_sha256": hashlib.sha256(script_file.read_bytes()).hexdigest(),
         "tts": summarize_tts(tts_results),
+        "audio_tempo_adjustment": audio_tempo,
         "layout": {**STORY_LAYOUT, "title": title_metadata},
         "retention_editing": {
             "subtitle_margin_v": 90,

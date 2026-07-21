@@ -1,5 +1,7 @@
 """스토리 샷 계획, 렌더링 필터, 프로듀서 라우팅 테스트."""
 import asyncio
+from pathlib import Path
+
 import pytest
 
 from app.agents import producer
@@ -349,6 +351,44 @@ def test_story_timing_places_spoken_title_before_body_and_cta():
         "cta_end": 65.15,
         "total_duration": 65.15,
     }
+
+
+def test_short_neural_audio_gets_natural_bounded_tempo_adjustment():
+    tempo = story_producer.story_tempo_adjustment(
+        intro_audio_duration=3.0,
+        body_audio_duration=45.0,
+        cta_audio_duration=3.0,
+        scene_count=7,
+        padding=0.15,
+    )
+
+    assert tempo == pytest.approx(0.867, abs=0.001)
+
+
+def test_audio_at_or_above_minimum_is_not_retimed():
+    assert story_producer.story_tempo_adjustment(4.0, 53.0, 4.0, 7) == 1.0
+
+
+def test_excessive_slowdown_is_rejected_instead_of_sounding_unnatural():
+    with pytest.raises(RuntimeError, match="감속 한도"):
+        story_producer.story_tempo_adjustment(2.0, 38.0, 3.0, 7)
+
+
+def test_retime_audio_uses_atempo_and_replaces_source(tmp_path, monkeypatch):
+    source = tmp_path / "narration.wav"
+    source.write_bytes(b"before")
+    captured = {}
+
+    def fake_run_checked(command, **kwargs):
+        captured["command"] = command
+        Path(command[-1]).write_bytes(b"after")
+
+    monkeypatch.setattr(story_producer, "run_checked", fake_run_checked)
+
+    story_producer._retime_audio(source, 0.9, "ffmpeg")
+
+    assert "atempo=0.900000" in captured["command"]
+    assert source.read_bytes() == b"after"
 
 
 def test_story_timing_rejects_total_over_75_seconds():
