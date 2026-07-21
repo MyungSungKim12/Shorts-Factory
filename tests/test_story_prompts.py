@@ -89,6 +89,30 @@ def test_writer_routes_story_format_and_saves_validated_json(tmp_path, monkeypat
     assert json.loads((work_dir / "script.json").read_text(encoding="utf-8"))["format"] == "story"
 
 
+def test_writer_regenerates_once_when_model_returns_incomplete_json(tmp_path, monkeypatch):
+    run_id = "retry-incomplete-story"
+    work_dir = tmp_path / "work" / run_id
+    work_dir.mkdir(parents=True)
+    (work_dir / "topic.json").write_text(
+        json.dumps(_topic(), ensure_ascii=False), encoding="utf-8"
+    )
+    prompts = []
+
+    def fake_call_agent(**kwargs):
+        prompts.append(kwargs["prompt"])
+        if len(prompts) == 1:
+            return '{"format":"story","title":"truncated'
+        return json.dumps(_script(), ensure_ascii=False)
+
+    monkeypatch.setattr(writer, "call_agent", fake_call_agent)
+
+    result = writer.run_writer(tmp_path, run_id, content_format="story")
+
+    assert result["format"] == "story"
+    assert len(prompts) == 2
+    assert "RETRY_JSON_ONLY" in prompts[1]
+
+
 def test_ranking_writer_still_uses_existing_prompt(tmp_path, monkeypatch):
     run_id = "ranking"
     work_dir = tmp_path / "work" / run_id

@@ -3,7 +3,10 @@ import json
 from pathlib import Path
 
 from app.content_format import get_content_format
+from app.console import safe_print
+from app.models import validate_script
 from app.services.claude_client import call_agent
+from app.services.json_extract import extract_json
 
 
 def run_writer(
@@ -33,22 +36,34 @@ def run_writer(
 
     selected = get_content_format(content_format)
 
-    # Claude를 통해 작가 에이전트 실행
-    # 작가는 Groq 우선 (검색 불필요 + JSON 생성 강점) — Gemini 호출량 절약 겸 부하 분산
-    script_text = call_agent(
-        prompt=_story_writer_prompt(topic) if selected == "story" else _writer_prompt(topic),
-        agent_name="script-writer",
-        max_tokens=16000,
-        prefer="groq",
-    )
+    # 작가는 Groq 우선 (검색 불필요 + JSON 생성 강점) — Gemini 호출량 절약 겸 부하 분산.
+    # 전송 성공이어도 응답 JSON이 잘릴 수 있으므로 검증 실패 시 한 번만 압축 재생성한다.
+    base_prompt = _story_writer_prompt(topic) if selected == "story" else _writer_prompt(topic)
+    script_dict = None
+    for attempt in range(2):
+        prompt = base_prompt
+        if attempt:
+            prompt += (
+                "\n\n[RETRY_JSON_ONLY]\n"
+                "이전 응답은 JSON이 불완전하거나 스키마 검증에 실패했다. "
+                "설명과 코드펜스를 제외하고 같은 사실만 사용해 더 짧고 완결된 JSON 객체 하나만 출력하라."
+            )
+        script_text = call_agent(
+            prompt=prompt,
+            agent_name="script-writer",
+            max_tokens=16000,
+            prefer="groq",
+        )
+        try:
+            script_dict = validate_script(extract_json(script_text), selected)
+            break
+        except ValueError:
+            if attempt:
+                raise
+            safe_print("  ⚠️ [script-writer] 불완전한 JSON/스키마 응답 → 압축 JSON으로 1회 재생성")
 
-    # JSON 파싱 (견고 추출 — 코드펜스·후행 텍스트 제거)
-    from app.services.json_extract import extract_json
-    script_dict = extract_json(script_text)
-
-    # 검증 게이트 — 역순 구조/길이 정합성/제목 길이 검사. 실패 시 파이프라인 중단.
-    from app.models import validate_script
-    script_dict = validate_script(script_dict, selected)
+    if script_dict is None:
+        raise RuntimeError("대본 JSON 생성 결과가 없습니다")
 
     # script.json 저장 (검증 통과분만 저장됨)
     script_file = work_dir / "script.json"
