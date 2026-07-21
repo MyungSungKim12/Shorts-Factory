@@ -47,11 +47,14 @@ def probe_video(path: Path, ffprobe_path: str = "ffprobe") -> dict:
     video = next((item for item in streams if item.get("codec_type") == "video"), {})
     audio = next((item for item in streams if item.get("codec_type") == "audio"), {})
     duration = float((data.get("format") or {}).get("duration") or video.get("duration") or 0)
+    audio_duration = float(audio.get("duration") or duration if audio else 0)
 
     black = run_checked(
         [
             _ffmpeg_path_for(ffprobe_path), "-hide_banner", "-i", str(path),
-            "-vf", "blackdetect=d=0.5:pix_th=0.10", "-an", "-f", "null", os.devnull,
+            "-vf", "blackdetect=d=0.5:pix_th=0.10",
+            "-af", "silencedetect=noise=-45dB:d=1.2",
+            "-f", "null", os.devnull,
         ],
         timeout=_probe_timeout(),
         text=True,
@@ -60,6 +63,22 @@ def probe_video(path: Path, ffprobe_path: str = "ffprobe") -> dict:
         float(value) for value in re.findall(r"black_duration:([0-9.]+)", black.stderr or "")
     ]
     black_ratio = sum(black_durations) / duration if duration else 1.0
+    silence_starts = [
+        float(value) for value in re.findall(r"silence_start:\s*([0-9.]+)", black.stderr or "")
+    ]
+    silence_ends = [
+        float(value) for value in re.findall(r"silence_end:\s*([0-9.]+)", black.stderr or "")
+    ]
+    silence_durations = [
+        float(value) for value in re.findall(r"silence_duration:\s*([0-9.]+)", black.stderr or "")
+    ]
+    internal_silences = [
+        silence_duration
+        for start, end, silence_duration in zip(
+            silence_starts, silence_ends, silence_durations
+        )
+        if start > 0.25 and end < duration - 0.25
+    ]
     return {
         "width": int(video.get("width", 0)),
         "height": int(video.get("height", 0)),
@@ -68,6 +87,9 @@ def probe_video(path: Path, ffprobe_path: str = "ffprobe") -> dict:
         "audio_codec": audio.get("codec_name", ""),
         "has_audio": bool(audio),
         "black_ratio": round(black_ratio, 4),
+        "audio_duration": round(audio_duration, 3),
+        "duration_delta": round(abs(duration - audio_duration), 3),
+        "internal_silence_max": round(max(internal_silences, default=0.0), 3),
     }
 
 
@@ -83,4 +105,8 @@ def validate_sample(report: dict) -> list[str]:
         failures.append("audio")
     if float(report.get("black_ratio", 1)) > 0.10:
         failures.append("black_frames")
+    if float(report.get("duration_delta", 999)) > 0.5:
+        failures.append("audio_duration_delta")
+    if float(report.get("internal_silence_max", 999)) >= 1.2:
+        failures.append("internal_silence")
     return failures

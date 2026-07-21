@@ -11,6 +11,8 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
+from app.services.quality_gate import validate_upload_package
+
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 CRED_DIR = Path("credentials")
 
@@ -85,7 +87,9 @@ def run_uploader(data_dir: Path, date_str: str) -> dict:
             total_len += len(t)
 
         # 4. 영상 파일 검증 (손상/규격 미달 영상이 올라가는 것 차단)
-        _validate_video_file(video_file)
+        quality = validate_upload_package(
+            work_dir, os.getenv("FFMPEG_PATH", "ffmpeg")
+        )
 
         # 5. 채널 설정 로드
         channel_cfg = {}
@@ -139,6 +143,7 @@ def run_uploader(data_dir: Path, date_str: str) -> dict:
             "video_id": video_id,
             "url": f"https://youtube.com/shorts/{video_id}",
             "privacy": body["status"]["privacyStatus"],
+            "quality_gate": quality,
         }
     finally:
         db.close()
