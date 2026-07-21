@@ -172,7 +172,20 @@ def test_subtitles_end_with_actual_audio_instead_of_scene_padding(tmp_path):
 def test_story_subtitle_style_uses_smaller_font():
     style = story_producer._subtitle_style("Malgun Gothic")
     assert "FontSize=16" in style
-    assert "MarginV=55" in style
+    assert "MarginV=90" in style
+
+
+def test_subtitle_style_moves_caption_to_lower_middle():
+    style = story_producer._subtitle_style("Malgun Gothic")
+    assert "Alignment=2" in style
+    assert "MarginV=90" in style
+
+
+def test_caption_highlights_only_one_number_or_keyword():
+    highlighted = story_producer._highlight_caption("무려 300일 동안 번개가 칩니다")
+    assert highlighted.count(r"{\c&H00D7FF&}") == 1
+    assert highlighted.count(r"{\c&HFFFFFF&}") == 1
+    assert "300일" in highlighted
 
 
 def test_finish_video_normalizes_both_overlay_aspect_ratios(tmp_path, monkeypatch):

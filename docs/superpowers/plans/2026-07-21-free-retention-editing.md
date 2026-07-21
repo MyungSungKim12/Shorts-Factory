@@ -147,7 +147,7 @@ git commit -m "feat: pace story shots for retention"
 def test_subtitle_style_moves_caption_to_lower_middle():
     style = story_producer._subtitle_style("Malgun Gothic")
     assert "Alignment=2" in style
-    assert "MarginV=500" in style
+    assert "MarginV=90" in style
 
 
 def test_caption_highlights_only_one_number_or_keyword():
@@ -182,7 +182,7 @@ def _highlight_caption(text: str) -> str:
     )
 ```
 
-`_write_srt`에서 각 cue의 chunk에 `_highlight_caption`을 적용한다. `_subtitle_style`은 `Alignment=2,MarginV=500`을 사용한다. 1330px 영상 영역이 y=260~1590이므로 자막 기준선 y=1420이 되어 영상 영역의 하단 중앙에 남는다.
+`_write_srt`에서 각 cue의 chunk에 `_highlight_caption`을 적용한다. `_subtitle_style`은 `Alignment=2,MarginV=90`을 사용한다. libass의 기본 PlayResY 좌표계를 고려하면 1920px 출력에서 자막 기준선이 화면 높이의 약 70%에 놓여 실제 영상 영역의 하단 중앙에 남는다.
 
 - [ ] **Step 4: 줄바꿈 회귀와 스타일 테스트를 실행한다**
 

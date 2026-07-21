@@ -332,6 +332,24 @@ def _split_caption(text: str, max_len: int = 22) -> list[str]:
     return chunks or [text]
 
 
+HIGHLIGHT_PATTERN = re.compile(
+    r"\d[\d,.]*(?:년|개월|일|시간|분|초|명|개|km|m|%|배)?|비밀|하지만|놀랍게도"
+)
+
+
+def _highlight_caption(text: str) -> str:
+    match = HIGHLIGHT_PATTERN.search(text)
+    if not match:
+        return text
+    return (
+        text[:match.start()]
+        + r"{\c&H00D7FF&}"
+        + match.group(0)
+        + r"{\c&HFFFFFF&}"
+        + text[match.end():]
+    )
+
+
 def _wrap_title(text: str, max_chars: int = 18, max_lines: int = 2) -> list[str]:
     """Wrap a title without ever splitting a word; overflow stays on the last line."""
     words = text.split()
@@ -429,7 +447,7 @@ def _write_srt(
         lines.extend([
             str(cue),
             f"{_srt_time(0)} --> {_srt_time(intro['audio_end'])}",
-            intro["text"],
+            _highlight_caption(intro["text"]),
             "",
         ])
         current = float(intro["body_start"])
@@ -446,7 +464,7 @@ def _write_srt(
             lines.extend([
                 str(cue),
                 f"{_srt_time(cursor)} --> {_srt_time(cursor + chunk_duration)}",
-                chunk,
+                _highlight_caption(chunk),
                 "",
             ])
             cursor += chunk_duration
@@ -456,7 +474,7 @@ def _write_srt(
         lines.extend([
             str(cue),
             f"{_srt_time(cta['start'])} --> {_srt_time(cta['end'])}",
-            cta["text"],
+            _highlight_caption(cta["text"]),
             "",
         ])
     output.write_text("\n".join(lines), encoding="utf-8")
@@ -465,7 +483,7 @@ def _write_srt(
 def _subtitle_style(font: str) -> str:
     return (
         f"FontName={font},FontSize=16,Bold=1,PrimaryColour=&H00FFFFFF,"
-        "OutlineColour=&H00000000,Outline=3,Shadow=1,Alignment=2,MarginV=55"
+        "OutlineColour=&H00000000,Outline=3,Shadow=1,Alignment=2,MarginV=90"
     )
 
 
