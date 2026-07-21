@@ -87,6 +87,16 @@ def build_story_timing(
     }
 
 
+def _scene_duration(
+    planned_duration: float,
+    audio_duration: float,
+    padding: float = 0.15,
+) -> float:
+    """Keep scene cuts aligned to cleaned narration, not model estimates."""
+    _ = planned_duration
+    return round(float(audio_duration) + float(padding), 3)
+
+
 ROLE_SHOT_RANGES = {
     "hook": (1.8, 2.2),
     "context": (2.4, 3.2),
@@ -335,6 +345,22 @@ def _concat_files(files: list[Path], output: Path, ffmpeg_path: str, tmp_path: P
     _run_ffmpeg([
         ffmpeg_path, "-f", "concat", "-safe", "0", "-i", str(manifest),
         "-c", "copy", "-y", str(output),
+    ])
+
+
+def _trim_narration(source: Path, output: Path, ffmpeg_path: str) -> None:
+    """Trim only edge silence while preserving pauses inside narration."""
+    edge_trim = (
+        "silenceremove=start_periods=1:start_duration=0.02:"
+        "start_threshold=-45dB:start_silence=0.06,"
+        "areverse,"
+        "silenceremove=start_periods=1:start_duration=0.05:"
+        "start_threshold=-45dB:start_silence=0.12,"
+        "areverse"
+    )
+    _run_ffmpeg([
+        ffmpeg_path, "-i", str(source), "-af", edge_trim,
+        "-c:a", "pcm_s16le", "-ar", "44100", "-y", str(output),
     ])
 
 
@@ -688,22 +714,26 @@ async def run_story_producer(
         audio_durations = {}
 
         spoken_intro = _spoken_intro(script["title"])
-        intro_narration = tmp_path / "narration-intro.mp3"
-        intro_result = synthesize(_tts_text(spoken_intro), intro_narration)
+        intro_raw = tmp_path / "narration-intro-raw.mp3"
+        intro_narration = tmp_path / "narration-intro.wav"
+        intro_result = synthesize(_tts_text(spoken_intro), intro_raw)
+        _trim_narration(intro_raw, intro_narration, ffmpeg_path)
         tts_results.append(intro_result)
         intro_audio_duration = _duration(intro_narration, ffmpeg_path)
 
         safe_print("  → Neural2 스토리 나레이션 생성 중...")
         for scene in script.get("scenes", []):
-            narration = tmp_path / f"narration-{scene['n']:02d}.mp3"
-            result = synthesize(_tts_text(scene["narration"]), narration)
+            narration_raw = tmp_path / f"narration-{scene['n']:02d}-raw.mp3"
+            narration = tmp_path / f"narration-{scene['n']:02d}.wav"
+            result = synthesize(_tts_text(scene["narration"]), narration_raw)
+            _trim_narration(narration_raw, narration, ffmpeg_path)
             tts_results.append(result)
             scene_tts_results[scene["n"]] = result
             narration_files[scene["n"]] = narration
             audio_duration = _duration(narration, ffmpeg_path)
             audio_durations[scene["n"]] = audio_duration
-            scene_durations[scene["n"]] = max(
-                float(scene["duration_sec"]), round(audio_duration + 0.2, 3)
+            scene_durations[scene["n"]] = _scene_duration(
+                float(scene["duration_sec"]), audio_duration
             )
 
         body_duration = sum(scene_durations.values())
@@ -713,8 +743,10 @@ async def run_story_producer(
         cta_narration = None
         cta_audio_duration = 0.0
         if cta_plan["append"]:
-            cta_narration = tmp_path / "narration-cta.mp3"
-            cta_result = synthesize(_tts_text(cta_text), cta_narration)
+            cta_raw = tmp_path / "narration-cta-raw.mp3"
+            cta_narration = tmp_path / "narration-cta.wav"
+            cta_result = synthesize(_tts_text(cta_text), cta_raw)
+            _trim_narration(cta_raw, cta_narration, ffmpeg_path)
             tts_results.append(cta_result)
             cta_audio_duration = _duration(cta_narration, ffmpeg_path)
         story_timing = build_story_timing(

@@ -215,6 +215,30 @@ def test_missing_source_reuses_last_valid_media(tmp_path):
     assert is_new_source is False
 
 
+def test_trim_narration_removes_only_leading_and_trailing_silence(tmp_path, monkeypatch):
+    seen = {}
+    source = tmp_path / "raw.mp3"
+    output = tmp_path / "clean.wav"
+
+    monkeypatch.setattr(
+        story_producer,
+        "_run_ffmpeg",
+        lambda cmd, cwd=None: seen.update(cmd=cmd, cwd=cwd),
+    )
+
+    story_producer._trim_narration(source, output, "ffmpeg")
+
+    audio_filter = seen["cmd"][seen["cmd"].index("-af") + 1]
+    assert audio_filter.count("silenceremove=start_periods=1") == 2
+    assert audio_filter.count("areverse") == 2
+    assert "stop_periods" not in audio_filter
+    assert seen["cmd"][-1] == str(output)
+
+
+def test_scene_duration_follows_clean_audio_instead_of_planned_padding():
+    assert story_producer._scene_duration(7.0, 5.8) == 5.95
+
+
 def test_finish_video_normalizes_both_overlay_aspect_ratios(tmp_path, monkeypatch):
     seen = {}
 
