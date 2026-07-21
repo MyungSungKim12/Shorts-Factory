@@ -343,3 +343,34 @@ def test_scheduled_runner_preserves_known_skip_reason_category(tmp_path, monkeyp
     command.main()
 
     assert alerts[0][1]["text"].endswith("reason: already_uploaded")
+
+
+def test_scheduled_runner_contains_non_object_recovery_state(tmp_path, monkeypatch):
+    alerts = []
+    recovery_dir = tmp_path / "recovery"
+    recovery_dir.mkdir()
+    (recovery_dir / "20260721-1.json").write_text("[]", encoding="utf-8")
+
+    async def exhausted(*args, **kwargs):
+        raise RuntimeError("pipeline failed")
+
+    monkeypatch.setattr(command, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(command, "load_dotenv", lambda: None)
+    monkeypatch.setattr(command, "cleanup_stale_temp_dirs", lambda: {"removed_dirs": 0, "removed_bytes": 0})
+    monkeypatch.setattr(command, "cleanup_old_work", lambda *args: None)
+    monkeypatch.setattr(command, "run_with_recovery", exhausted)
+    monkeypatch.setattr(command, "send_alert", lambda *args, **kwargs: alerts.append((args, kwargs)))
+    monkeypatch.setattr(command, "_scheduled_run_id", lambda slot: "20260721-1")
+    monkeypatch.setattr(command.sys, "argv", ["run_scheduled.py", "1"])
+
+    with pytest.raises(SystemExit, match="1"):
+        command.main()
+
+    assert alerts == [
+        (
+            (tmp_path, "recovery:20260721-1:exhausted"),
+            {"text": "Recovery exhausted\nrun_id: 20260721-1\nstage: unknown\nerror_category: pipeline_failure"},
+        )
+    ]

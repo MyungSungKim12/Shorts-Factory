@@ -45,6 +45,8 @@ def _recovery_details(data_dir: Path, run_id: str) -> tuple[str, str]:
         state = json.loads(
             (data_dir / "recovery" / f"{run_id}.json").read_text(encoding="utf-8")
         )
+        if not isinstance(state, dict):
+            return "unknown", "pipeline_failure"
         stage = state.get("failed_stage")
         error = state.get("last_error")
         stage = stage if stage in _RECOVERY_STAGES else "unknown"
