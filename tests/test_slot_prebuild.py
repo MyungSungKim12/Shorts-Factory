@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from app.services import slot_prebuild
 from app.services.slot_prebuild import next_scheduled_slot, promote_staging
 from scripts import prepare_next_slot as command
 
@@ -42,6 +43,26 @@ def test_exact_slot_time_skips_the_running_slot() -> None:
 
     assert run_id == "20260721-2"
     assert scheduled_at.hour == 17
+
+
+@pytest.mark.parametrize(
+    ("hour", "slot", "run_id"),
+    [(9, 1, "20260721-1"), (15, 2, "20260721-2"), (19, 3, "20260721-3")],
+)
+def test_prebuild_targets_explicit_same_day_slot(
+    hour: int, slot: int, run_id: str
+) -> None:
+    selected_run_id, scheduled_at = slot_prebuild.scheduled_run(
+        datetime(2026, 7, 21, hour, tzinfo=KST), slot
+    )
+
+    assert selected_run_id == run_id
+    assert scheduled_at.date().isoformat() == "2026-07-21"
+
+
+def test_expired_explicit_slot_is_rejected() -> None:
+    with pytest.raises(RuntimeError, match="이미 지난"):
+        slot_prebuild.scheduled_run(datetime(2026, 7, 21, 17, tzinfo=KST), 2)
 
 
 def _staging_package(data_dir: Path, staging_id: str = "sample") -> Path:
@@ -158,3 +179,109 @@ def test_prepare_command_builds_in_staging_and_never_uploads(
     assert result["run_id"] == "20260721-2"
     assert result["scheduled_at"].hour == 17
     assert result["destination"] == tmp_path / "work" / "20260721-2"
+
+
+@pytest.mark.parametrize("unsafe_target", ["destination", "uploaded"])
+def test_explicit_prepare_rejects_unsafe_target_before_generation(
+    tmp_path: Path, monkeypatch, unsafe_target: str
+) -> None:
+    run_id = "20260721-2"
+    if unsafe_target == "destination":
+        target = tmp_path / "work" / run_id
+        target.mkdir(parents=True)
+        (target / "prepared.json").write_text(
+            json.dumps({"run_id": run_id, "quality_gate": {"passed": True}}),
+            encoding="utf-8",
+        )
+    else:
+        with sqlite3.connect(tmp_path / "videos.sqlite") as db:
+            db.execute("CREATE TABLE videos (video_id TEXT, date TEXT, status TEXT)")
+            db.execute(
+                "INSERT INTO videos VALUES (?, ?, ?)",
+                ("youtube-id", run_id, "uploaded"),
+            )
+
+    def generation_must_not_start(*args, **kwargs):
+        raise AssertionError("generation must not start for an unsafe explicit slot")
+
+    monkeypatch.setattr(command, "run_researcher", generation_must_not_start)
+
+    with pytest.raises(RuntimeError):
+        command.prepare_slot(
+            tmp_path,
+            "ffmpeg",
+            2,
+            now_fn=lambda: datetime(2026, 7, 21, 12, tzinfo=KST),
+            use_lock=False,
+        )
+
+
+def test_cli_slot_uses_explicit_prepare(tmp_path: Path, monkeypatch) -> None:
+    captured = {}
+    monkeypatch.setattr(command, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(command, "load_dotenv", lambda: None)
+    monkeypatch.setattr(
+        command,
+        "prepare_slot",
+        lambda data_dir, ffmpeg_path, slot, **kwargs: captured.update(
+            data_dir=data_dir,
+            ffmpeg_path=ffmpeg_path,
+            slot=slot,
+            **kwargs,
+        )
+        or {
+            "destination": tmp_path / "work" / "20260721-3",
+            "run_id": "20260721-3",
+            "scheduled_at": datetime(2026, 7, 21, 21, tzinfo=KST),
+        },
+    )
+    monkeypatch.setattr(command.sys, "argv", ["prepare_next_slot.py", "--slot", "3"])
+
+    command.main()
+
+    assert captured["slot"] == 3
+
+
+def test_explicit_prepare_keeps_the_initial_target_after_rendering(
+    tmp_path: Path, monkeypatch
+) -> None:
+    calls = []
+    scheduled_at = datetime(2026, 7, 21, 17, tzinfo=KST)
+
+    monkeypatch.setattr(
+        command,
+        "scheduled_run",
+        lambda now, slot: calls.append((now, slot)) or ("20260721-2", scheduled_at),
+    )
+    monkeypatch.setattr(command, "run_researcher", lambda *args, **kwargs: None)
+    monkeypatch.setattr(command, "run_writer", lambda *args, **kwargs: None)
+
+    async def fake_producer(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(command, "run_producer", fake_producer)
+    monkeypatch.setattr(
+        command, "validate_upload_package", lambda *args: {"passed": True, "failures": []}
+    )
+    monkeypatch.setattr(
+        command,
+        "promote_staging",
+        lambda data_dir, staging_id, run_id, target_at, quality: (
+            calls.append((run_id, target_at)) or data_dir / "work" / run_id
+        ),
+    )
+
+    result = command.prepare_slot(
+        tmp_path,
+        "ffmpeg",
+        2,
+        now_fn=lambda: datetime(2026, 7, 21, 12, tzinfo=KST),
+        use_lock=False,
+    )
+
+    assert calls == [
+        (datetime(2026, 7, 21, 12, tzinfo=KST), 2),
+        ("20260721-2", scheduled_at),
+    ]
+    assert result["run_id"] == "20260721-2"

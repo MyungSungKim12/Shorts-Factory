@@ -224,6 +224,50 @@ def test_orchestrator_passes_selected_format_to_researcher_and_writer(tmp_path, 
     assert result["stages"]["writer"]["writer_mode"] == "verified_template"
 
 
+def test_orchestrator_ignores_unpassed_prepared_marker(tmp_path):
+    run_id = f"{datetime.now().strftime('%Y%m%d')}-1"
+    work_dir = tmp_path / "work" / run_id
+    work_dir.mkdir(parents=True)
+    (work_dir / "prepared.json").write_text(
+        json.dumps({"run_id": run_id, "quality_gate": {"passed": False}}),
+        encoding="utf-8",
+    )
+
+    assert orchestrator._load_prepared_marker(work_dir, run_id) is None
+
+
+def test_orchestrator_without_prepared_marker_uses_just_in_time_generation(
+    tmp_path, monkeypatch
+):
+    calls = []
+
+    def fake_researcher(*args, **kwargs):
+        calls.append("researcher")
+        return {"topic": "즉시 생성 소재", "items": []}
+
+    def fake_writer(*args, **kwargs):
+        calls.append("writer")
+        return {"title": "즉시 생성 대본", "scenes": [], "total_duration_sec": 0}
+
+    async def fake_producer(*args, **kwargs):
+        calls.append("producer")
+        return {"output_file": str(tmp_path / "output.mp4")}
+
+    monkeypatch.setattr(orchestrator, "run_researcher", fake_researcher)
+    monkeypatch.setattr(orchestrator, "run_writer", fake_writer)
+    monkeypatch.setattr(orchestrator, "run_producer", fake_producer)
+    monkeypatch.setattr(
+        orchestrator,
+        "run_uploader",
+        lambda *args: {"status": "skipped", "reason": "test"},
+    )
+
+    result = asyncio.run(orchestrator.run_pipeline(tmp_path, "ffmpeg", slot=1))
+
+    assert calls == ["researcher", "writer", "producer"]
+    assert "prepared" not in result
+
+
 def test_sample_researcher_skips_sqlite_cache(tmp_path, monkeypatch):
     monkeypatch.setattr(
         researcher,

@@ -33,6 +33,18 @@ def next_scheduled_slot(now: datetime | None = None) -> tuple[str, datetime]:
     raise RuntimeError("다음 예약 회차를 계산하지 못했습니다")
 
 
+def scheduled_run(now: datetime, slot: int) -> tuple[str, datetime]:
+    """명시한 오늘의 예약 회차를 반환하고 이미 지난 회차는 거부한다."""
+    current = now.replace(tzinfo=KST) if now.tzinfo is None else now.astimezone(KST)
+    schedule = dict(SCHEDULE)
+    if slot not in schedule:
+        raise RuntimeError(f"알 수 없는 예약 회차: {slot}")
+    scheduled_at = datetime.combine(current.date(), schedule[slot], tzinfo=KST)
+    if scheduled_at <= current:
+        raise RuntimeError(f"이미 지난 예약 회차: {slot}")
+    return f"{scheduled_at:%Y%m%d}-{slot}", scheduled_at
+
+
 def _already_uploaded(data_dir: Path, run_id: str) -> bool:
     db_file = data_dir / "videos.sqlite"
     if not db_file.exists():
@@ -46,6 +58,15 @@ def _already_uploaded(data_dir: Path, run_id: str) -> bool:
         return row is not None
     except sqlite3.Error as exc:
         raise RuntimeError(f"업로드 이력 확인 실패: {exc}") from exc
+
+
+def ensure_target_available(data_dir: Path, run_id: str) -> None:
+    """기존 예약 패키지나 업로드 이력이 있는 회차를 덮어쓰지 않는다."""
+    data_dir = Path(data_dir)
+    if _already_uploaded(data_dir, run_id):
+        raise RuntimeError(f"이미 업로드된 회차입니다: {run_id}")
+    if (data_dir / "work" / run_id).exists():
+        raise RuntimeError(f"예약 회차 작업 디렉터리가 이미 존재합니다: {run_id}")
 
 
 def _validate_staging(staging: Path, quality: dict) -> None:
@@ -75,10 +96,7 @@ def promote_staging(
     temporary = destination.parent / f".{run_id}.promoting-{os.getpid()}"
 
     _validate_staging(staging, quality)
-    if _already_uploaded(data_dir, run_id):
-        raise RuntimeError(f"이미 업로드된 회차입니다: {run_id}")
-    if destination.exists():
-        raise RuntimeError(f"예약 회차 작업 디렉터리가 이미 존재합니다: {run_id}")
+    ensure_target_available(data_dir, run_id)
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     if temporary.exists():

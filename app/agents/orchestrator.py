@@ -64,6 +64,9 @@ def _load_prepared_marker(work_dir: Path, run_id: str) -> dict | None:
         return None
     if not isinstance(value, dict) or value.get("run_id") != run_id:
         return None
+    quality_gate = value.get("quality_gate")
+    if not isinstance(quality_gate, dict) or quality_gate.get("passed") is not True:
+        return None
     return value
 
 

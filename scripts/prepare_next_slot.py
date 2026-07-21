@@ -24,8 +24,10 @@ from app.services.quality_gate import validate_upload_package  # noqa: E402
 from app.services.recovery import acquire_global_lock, release_owned_lock  # noqa: E402
 from app.services.slot_prebuild import (  # noqa: E402
     KST,
+    ensure_target_available,
     next_scheduled_slot,
     promote_staging,
+    scheduled_run,
 )
 
 
@@ -55,9 +57,55 @@ def prepare_next_slot(
     lock_poll_seconds: int = 30,
 ) -> dict:
     """분리된 staging에서 완성한 패키지만 다음 미래 회차로 승격한다."""
+    return _prepare(
+        data_dir,
+        ffmpeg_path,
+        now_fn=now_fn,
+        use_lock=use_lock,
+        lock_wait_seconds=lock_wait_seconds,
+        lock_poll_seconds=lock_poll_seconds,
+    )
+
+
+def prepare_slot(
+    data_dir: Path,
+    ffmpeg_path: str,
+    slot: int,
+    *,
+    now_fn: Callable[[], datetime] | None = None,
+    use_lock: bool = True,
+    lock_wait_seconds: int = 5400,
+    lock_poll_seconds: int = 30,
+) -> dict:
+    """명시한 오늘의 예약 회차만 사전 제작한다."""
+    return _prepare(
+        data_dir,
+        ffmpeg_path,
+        slot=slot,
+        now_fn=now_fn,
+        use_lock=use_lock,
+        lock_wait_seconds=lock_wait_seconds,
+        lock_poll_seconds=lock_poll_seconds,
+    )
+
+
+def _prepare(
+    data_dir: Path,
+    ffmpeg_path: str,
+    *,
+    slot: int | None = None,
+    now_fn: Callable[[], datetime] | None = None,
+    use_lock: bool = True,
+    lock_wait_seconds: int = 5400,
+    lock_poll_seconds: int = 30,
+) -> dict:
+    """staging 제작을 수행하고 명시 회차면 처음 선택한 대상에만 승격한다."""
     data_dir = Path(data_dir)
     now_fn = now_fn or (lambda: datetime.now(tz=KST))
-    initial_run_id, _ = next_scheduled_slot(now_fn())
+    if slot is None:
+        initial_run_id, initial_scheduled_at = next_scheduled_slot(now_fn())
+    else:
+        initial_run_id, initial_scheduled_at = scheduled_run(now_fn(), slot)
     initial_slot = initial_run_id.rsplit("-", 1)[1]
     staging_id = f"prebuild-{now_fn().strftime('%Y%m%d-%H%M%S')}-{initial_slot}"
     staging_dir = data_dir / "staging" / staging_id
@@ -77,6 +125,10 @@ def prepare_next_slot(
         lock_owned = True
 
     try:
+        if slot is not None:
+            if initial_scheduled_at <= now_fn().astimezone(KST):
+                raise RuntimeError(f"이미 지난 예약 회차: {slot}")
+            ensure_target_available(data_dir, initial_run_id)
         selected = get_content_format()
         run_researcher(
             data_dir,
@@ -100,7 +152,12 @@ def prepare_next_slot(
             )
         )
         quality = validate_upload_package(staging_dir, ffmpeg_path)
-        run_id, scheduled_at = next_scheduled_slot(now_fn())
+        if slot is None:
+            run_id, scheduled_at = next_scheduled_slot(now_fn())
+        else:
+            if initial_scheduled_at <= now_fn().astimezone(KST):
+                raise RuntimeError(f"이미 지난 예약 회차: {slot}")
+            run_id, scheduled_at = initial_run_id, initial_scheduled_at
         destination = promote_staging(
             data_dir, staging_id, run_id, scheduled_at, quality
         )
@@ -121,16 +178,25 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="검증된 영상을 다음 11/17/21시 예약 회차에 사전 배치"
     )
+    parser.add_argument("--slot", type=int, choices=(1, 2, 3))
     parser.add_argument("--lock-wait-seconds", type=int, default=5400)
     args = parser.parse_args()
 
     data_dir = Path(os.getenv("DATA_DIR", "./data"))
     ffmpeg_path = os.getenv("FFMPEG_PATH", "ffmpeg")
-    result = prepare_next_slot(
-        data_dir,
-        ffmpeg_path,
-        lock_wait_seconds=args.lock_wait_seconds,
-    )
+    if args.slot is None:
+        result = prepare_next_slot(
+            data_dir,
+            ffmpeg_path,
+            lock_wait_seconds=args.lock_wait_seconds,
+        )
+    else:
+        result = prepare_slot(
+            data_dir,
+            ffmpeg_path,
+            args.slot,
+            lock_wait_seconds=args.lock_wait_seconds,
+        )
     print(f"사전 제작 완료: {result['destination'].resolve()}")
     print(f"예약 회차: {result['run_id']} ({result['scheduled_at'].isoformat()})")
     print("현재는 업로드하지 않았으며 해당 cron 회차가 업로드합니다.")
