@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from app.services.recovery import run_with_recovery  # noqa: E402
+from app.services.temp_cleanup import cleanup_stale_temp_dirs  # noqa: E402
 from scripts.run_daily import cleanup_old_work  # noqa: E402
 
 
@@ -28,6 +29,11 @@ def main() -> None:
     data_dir = Path(os.getenv("DATA_DIR", "./data"))
     ffmpeg_path = os.getenv("FFMPEG_PATH", "ffmpeg")
     delay_seconds = int(os.getenv("RECOVERY_DELAY_SECONDS", "900"))
+    cleanup = cleanup_stale_temp_dirs()
+    print(
+        f"임시 작업 정리: {cleanup['removed_dirs']}개, "
+        f"{cleanup['removed_bytes']}바이트"
+    )
     cleanup_old_work(data_dir, int(os.getenv("WORK_RETENTION_DAYS", "7")))
 
     try:

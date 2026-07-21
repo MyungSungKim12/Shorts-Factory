@@ -13,6 +13,8 @@ from PIL import Image, ImageDraw, ImageFont
 
 from app.console import safe_print
 from app.services.media_library import fetch_story_media
+from app.services.process_runner import run_checked
+from app.services.temp_cleanup import mark_temp_owner
 from app.services.tts import TTSResult, synthesize
 
 
@@ -220,11 +222,22 @@ def summarize_tts(results: list[TTSResult]) -> dict:
     }
 
 
-def _run_ffmpeg(cmd: list[str], cwd: Path | None = None) -> None:
-    result = subprocess.run(cmd, capture_output=True, cwd=cwd)
-    if result.returncode:
-        stderr = result.stderr.decode("utf-8", errors="replace")[-1200:]
-        raise RuntimeError(f"ffmpeg 실패({result.returncode}):\n{stderr}")
+def _timeout(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+        return value if value > 0 else default
+    except ValueError:
+        return default
+
+
+def _run_ffmpeg(
+    cmd: list[str], cwd: Path | None = None, timeout: int | None = None
+) -> None:
+    run_checked(
+        cmd,
+        cwd=cwd,
+        timeout=timeout or _timeout("SHOT_FFMPEG_TIMEOUT_SEC", 180),
+    )
 
 
 def _ffprobe_path(ffmpeg_path: str) -> str:
@@ -237,10 +250,10 @@ def _ffprobe_path(ffmpeg_path: str) -> str:
 
 
 def _duration(path: Path, ffmpeg_path: str) -> float:
-    result = subprocess.run(
+    result = run_checked(
         [_ffprobe_path(ffmpeg_path), "-v", "error", "-show_entries", "format=duration",
          "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
-        capture_output=True,
+        timeout=_timeout("MEDIA_PROBE_TIMEOUT_SEC", 180),
         text=True,
     )
     try:
@@ -681,7 +694,11 @@ def _finish_video(
         "-c:a", "aac", "-b:a", "128k", "-pix_fmt", "yuv420p",
         "-movflags", "+faststart", "-y", str(output.resolve()),
     ]
-    _run_ffmpeg(cmd, cwd=tmp_path)
+    _run_ffmpeg(
+        cmd,
+        cwd=tmp_path,
+        timeout=_timeout("FINAL_FFMPEG_TIMEOUT_SEC", 900),
+    )
 
 
 async def run_story_producer(
@@ -697,8 +714,9 @@ async def run_story_producer(
         raise FileNotFoundError(f"script.json이 없습니다: {script_file}")
     script = json.loads(script_file.read_text(encoding="utf-8"))
 
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory(prefix="shorts-factory-") as tmpdir:
         tmp_path = Path(tmpdir)
+        mark_temp_owner(tmp_path)
         tts_results = []
         narration_files = {}
         scene_tts_results = {}

@@ -228,7 +228,7 @@ def test_trim_narration_removes_only_leading_and_trailing_silence(tmp_path, monk
     monkeypatch.setattr(
         story_producer,
         "_run_ffmpeg",
-        lambda cmd, cwd=None: seen.update(cmd=cmd, cwd=cwd),
+        lambda cmd, cwd=None, timeout=None: seen.update(cmd=cmd, cwd=cwd, timeout=timeout),
     )
 
     story_producer._trim_narration(source, output, "ffmpeg")
@@ -251,7 +251,7 @@ def test_finish_video_normalizes_both_overlay_aspect_ratios(tmp_path, monkeypatc
     monkeypatch.setattr(
         story_producer,
         "_run_ffmpeg",
-        lambda cmd, cwd=None: seen.update(cmd=cmd, cwd=cwd),
+        lambda cmd, cwd=None, timeout=None: seen.update(cmd=cmd, cwd=cwd, timeout=timeout),
     )
 
     story_producer._finish_video(
@@ -270,6 +270,7 @@ def test_finish_video_normalizes_both_overlay_aspect_ratios(tmp_path, monkeypatc
     title_input = seen["cmd"].index(str(tmp_path / "title.png"))
     assert seen["cmd"][title_input - 3:title_input] == ["-loop", "1", "-i"]
     assert "overlay=0:0:shortest=1" in filters
+    assert seen["timeout"] == 900
 
 
 def test_transition_events_are_limited_to_hook_and_payoff():
@@ -288,7 +289,7 @@ def test_finish_video_mixes_two_transition_cues(tmp_path, monkeypatch):
     monkeypatch.setattr(
         story_producer,
         "_run_ffmpeg",
-        lambda cmd, cwd=None: seen.update(cmd=cmd, cwd=cwd),
+        lambda cmd, cwd=None, timeout=None: seen.update(cmd=cmd, cwd=cwd, timeout=timeout),
     )
 
     story_producer._finish_video(

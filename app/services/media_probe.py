@@ -5,6 +5,16 @@ import re
 import subprocess
 from pathlib import Path
 
+from app.services.process_runner import run_checked
+
+
+def _probe_timeout() -> int:
+    try:
+        value = int(os.getenv("MEDIA_PROBE_TIMEOUT_SEC", "180"))
+        return value if value > 0 else 180
+    except ValueError:
+        return 180
+
 
 def ffprobe_path_for(ffmpeg_path: str) -> str:
     lower = ffmpeg_path.lower()
@@ -27,25 +37,23 @@ def _ffmpeg_path_for(ffprobe_path: str) -> str:
 def probe_video(path: Path, ffprobe_path: str = "ffprobe") -> dict:
     """ffprobe와 blackdetect 결과를 정규화한 검사 보고서를 반환한다."""
     path = Path(path)
-    result = subprocess.run(
+    result = run_checked(
         [ffprobe_path, "-v", "error", "-show_streams", "-show_format", "-of", "json", str(path)],
-        capture_output=True,
+        timeout=_probe_timeout(),
         text=True,
     )
-    if result.returncode:
-        raise RuntimeError(f"ffprobe 실패: {result.stderr[-500:]}")
     data = json.loads(result.stdout)
     streams = data.get("streams", [])
     video = next((item for item in streams if item.get("codec_type") == "video"), {})
     audio = next((item for item in streams if item.get("codec_type") == "audio"), {})
     duration = float((data.get("format") or {}).get("duration") or video.get("duration") or 0)
 
-    black = subprocess.run(
+    black = run_checked(
         [
             _ffmpeg_path_for(ffprobe_path), "-hide_banner", "-i", str(path),
             "-vf", "blackdetect=d=0.5:pix_th=0.10", "-an", "-f", "null", os.devnull,
         ],
-        capture_output=True,
+        timeout=_probe_timeout(),
         text=True,
     )
     black_durations = [
