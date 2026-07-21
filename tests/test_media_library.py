@@ -46,6 +46,7 @@ def test_fetch_records_provenance_and_marks_id_used(tmp_path, monkeypatch):
         output.write_bytes(b"video")
 
     monkeypatch.setattr(media_library, "_download_candidate", fake_download)
+    monkeypatch.setattr(media_library, "_is_usable_download", lambda path: True)
     used = set()
     path, meta = asyncio.run(
         media_library.fetch_story_media(["desert lake", "dry desert"], tmp_path / "shot", used)
@@ -76,6 +77,7 @@ def test_fetch_uses_next_keyword_without_reusing_media(tmp_path, monkeypatch):
     monkeypatch.setattr(media_library, "_pixabay_video_candidates", lambda keyword: [])
     monkeypatch.setattr(media_library, "_pexels_photo_candidates", lambda keyword: [])
     monkeypatch.setattr(media_library, "_download_candidate", lambda item, output: output.write_bytes(b"ok"))
+    monkeypatch.setattr(media_library, "_is_usable_download", lambda path: True)
 
     path, meta = asyncio.run(
         media_library.fetch_story_media(
@@ -100,6 +102,36 @@ def test_fetch_returns_black_metadata_when_no_source_exists(tmp_path, monkeypatc
     assert meta["fallback"] is True
 
 
+def test_fetch_tries_next_candidate_after_invalid_download(tmp_path, monkeypatch):
+    broken = candidate(1, 1080, 1920)
+    valid = candidate(2, 1080, 1920)
+    monkeypatch.setattr(
+        media_library, "_pexels_video_candidates", lambda keyword: [broken, valid]
+    )
+    monkeypatch.setattr(media_library, "_pixabay_video_candidates", lambda keyword: [])
+    monkeypatch.setattr(media_library, "_pexels_photo_candidates", lambda keyword: [])
+    monkeypatch.setattr(
+        media_library,
+        "_is_usable_download",
+        lambda path: path.read_bytes() == b"valid",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        media_library,
+        "_download_candidate",
+        lambda item, output: output.write_bytes(
+            b"broken" if item.media_id == "1" else b"valid"
+        ),
+    )
+
+    path, metadata = asyncio.run(
+        media_library.fetch_story_media(["storm"], tmp_path / "shot", set())
+    )
+
+    assert path.read_bytes() == b"valid"
+    assert metadata["media_id"] == "2"
+
+
 def test_exact_keyword_prefers_licensed_wikimedia_image(tmp_path, monkeypatch):
     exact = MediaCandidate(
         provider="wikimedia_image",
@@ -119,6 +151,7 @@ def test_exact_keyword_prefers_licensed_wikimedia_image(tmp_path, monkeypatch):
     monkeypatch.setattr(media_library, "_pixabay_video_candidates", lambda keyword: [])
     monkeypatch.setattr(media_library, "_pexels_photo_candidates", lambda keyword: [])
     monkeypatch.setattr(media_library, "_download_candidate", lambda item, output: output.write_bytes(b"image"))
+    monkeypatch.setattr(media_library, "_is_usable_download", lambda path: True)
 
     path, meta = asyncio.run(media_library.fetch_story_media(
         ["exact: Blood Falls Antarctica", "antarctica glacier"],

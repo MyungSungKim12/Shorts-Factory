@@ -38,8 +38,16 @@ def choose_candidate(
     used_ids: set[str],
 ) -> MediaCandidate | None:
     """이미 사용한 소스를 제외하고 세로·고해상도·비디오 순으로 선택한다."""
+    ranked = choose_candidates(candidates, used_ids)
+    return ranked[0] if ranked else None
+
+
+def choose_candidates(
+    candidates: list[MediaCandidate],
+    used_ids: set[str],
+) -> list[MediaCandidate]:
     available = [item for item in candidates if item.unique_id not in used_ids]
-    return max(available, key=_quality) if available else None
+    return sorted(available, key=_quality, reverse=True)
 
 
 def _best_variant(variants: list[dict], url_key: str) -> dict | None:
@@ -220,6 +228,20 @@ def _download_candidate(candidate: MediaCandidate, output: Path) -> None:
     output.write_bytes(response.content)
 
 
+def _is_usable_download(path: Path) -> bool:
+    try:
+        if not path.is_file() or path.stat().st_size <= 1024:
+            return False
+        header = path.read_bytes()[:12]
+    except OSError:
+        return False
+    if path.suffix.lower() == ".mp4":
+        return len(header) >= 8 and header[4:8] == b"ftyp"
+    if path.suffix.lower() in {".jpg", ".jpeg"}:
+        return header.startswith(b"\xff\xd8")
+    return True
+
+
 async def fetch_story_media(
     keywords: list[str],
     output_stem: Path,
@@ -238,30 +260,31 @@ async def fetch_story_media(
             _pexels_photo_candidates,
         )
         for collect in providers:
-            candidate = choose_candidate(collect(keyword), used_ids)
-            if not candidate:
-                continue
-            suffix = ".mp4" if candidate.media_type == "video" else ".jpg"
-            output = Path(f"{output_stem}{suffix}")
-            try:
-                _download_candidate(candidate, output)
-            except requests.RequestException:
-                continue
-            used_ids.add(candidate.unique_id)
-            metadata = {
-                "provider": candidate.provider,
-                "media_id": candidate.media_id,
-                "source_url": candidate.source_url,
-                "keyword": keyword,
-                "fallback": keyword_index > 0,
-                "width": candidate.width,
-                "height": candidate.height,
-            }
-            if candidate.license:
-                metadata["license"] = candidate.license
-            if candidate.attribution:
-                metadata["attribution"] = candidate.attribution
-            return output, metadata
+            for candidate in choose_candidates(collect(keyword), used_ids):
+                suffix = ".mp4" if candidate.media_type == "video" else ".jpg"
+                output = Path(f"{output_stem}{suffix}")
+                try:
+                    _download_candidate(candidate, output)
+                except (requests.RequestException, OSError):
+                    continue
+                if not _is_usable_download(output):
+                    output.unlink(missing_ok=True)
+                    continue
+                used_ids.add(candidate.unique_id)
+                metadata = {
+                    "provider": candidate.provider,
+                    "media_id": candidate.media_id,
+                    "source_url": candidate.source_url,
+                    "keyword": keyword,
+                    "fallback": keyword_index > 0,
+                    "width": candidate.width,
+                    "height": candidate.height,
+                }
+                if candidate.license:
+                    metadata["license"] = candidate.license
+                if candidate.attribution:
+                    metadata["attribution"] = candidate.attribution
+                return output, metadata
 
     return None, {
         "provider": "black_bg",
