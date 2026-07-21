@@ -59,6 +59,15 @@ def validate_upload_package(work_dir: Path, ffmpeg_path: str) -> dict:
     if separate_audio and not ("구독" in cta_text and "좋아요" in cta_text):
         failures.append("cta_actions")
 
+    visual_relevance = produce.get("visual_relevance") or {}
+    if (
+        visual_relevance.get("required_exact")
+        and int(visual_relevance.get("exact_source_count") or 0) == 0
+    ):
+        failures.append("visual_exact_source")
+    if int(visual_relevance.get("unrelated_fallback_count") or 0) != 0:
+        failures.append("visual_unrelated_fallback")
+
     result = {
         "passed": not failures,
         "failures": list(dict.fromkeys(failures)),

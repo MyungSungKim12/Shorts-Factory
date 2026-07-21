@@ -54,6 +54,43 @@ def test_complete_upload_package_passes_and_persists_report(tmp_path, monkeypatc
     assert saved["quality_gate"] == result
 
 
+def test_quality_gate_rejects_missing_required_exact_source(tmp_path, monkeypatch):
+    _, produce = _package(tmp_path)
+    produce["visual_relevance"] = {
+        "required_exact": True,
+        "exact_source_count": 0,
+        "generic_fallback_count": 4,
+        "unrelated_fallback_count": 0,
+    }
+    (tmp_path / "produce_log.json").write_text(
+        json.dumps(produce, ensure_ascii=False), encoding="utf-8"
+    )
+    monkeypatch.setattr(quality_gate, "probe_video", lambda *args: _valid_probe())
+
+    with pytest.raises(RuntimeError, match="visual_exact_source"):
+        quality_gate.validate_upload_package(tmp_path, "ffmpeg")
+
+    saved = json.loads((tmp_path / "produce_log.json").read_text(encoding="utf-8"))
+    assert "visual_exact_source" in saved["quality_gate"]["failures"]
+
+
+def test_quality_gate_rejects_unrelated_visual_fallback(tmp_path, monkeypatch):
+    _, produce = _package(tmp_path)
+    produce["visual_relevance"] = {
+        "required_exact": False,
+        "exact_source_count": 0,
+        "generic_fallback_count": 0,
+        "unrelated_fallback_count": 1,
+    }
+    (tmp_path / "produce_log.json").write_text(
+        json.dumps(produce, ensure_ascii=False), encoding="utf-8"
+    )
+    monkeypatch.setattr(quality_gate, "probe_video", lambda *args: _valid_probe())
+
+    with pytest.raises(RuntimeError, match="visual_unrelated_fallback"):
+        quality_gate.validate_upload_package(tmp_path, "ffmpeg")
+
+
 @pytest.mark.parametrize(
     ("mutation", "failure"),
     [

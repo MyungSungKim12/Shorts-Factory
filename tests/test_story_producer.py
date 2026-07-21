@@ -222,6 +222,29 @@ def test_missing_source_reuses_last_valid_media(tmp_path):
     assert is_new_source is False
 
 
+def test_visual_relevance_counts_one_reused_exact_source():
+    result = story_producer.build_visual_relevance(
+        {"required_exact": True},
+        [
+            {"provider": "wikimedia_image", "media_id": "File:Richat.jpg", "exact_match": True},
+            {"provider": "wikimedia_image", "media_id": "File:Richat.jpg", "exact_match": True},
+            {"provider": "pexels_video", "media_id": "123"},
+        ],
+        {1: ["exact: Richat Structure Mauritania"], 2: ["desert aerial"]},
+    )
+
+    assert result == {
+        "required_exact": True,
+        "exact_source_count": 1,
+        "generic_fallback_count": 1,
+        "unrelated_fallback_count": 0,
+        "queries": {
+            "1": ["exact: Richat Structure Mauritania"],
+            "2": ["desert aerial"],
+        },
+    }
+
+
 def test_trim_narration_removes_only_leading_and_trailing_silence(tmp_path, monkeypatch):
     seen = {}
     source = tmp_path / "raw.mp3"

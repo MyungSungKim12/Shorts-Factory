@@ -4,7 +4,7 @@ import asyncio
 import pytest
 
 from app.services import media_library
-from app.services.media_library import MediaCandidate, choose_candidate
+from app.services.media_library import MediaCandidate, choose_candidate, exact_candidate_matches
 
 
 def candidate(media_id, width, height, provider="pexels_video", media_type="video", keyword="desert lake"):
@@ -175,6 +175,37 @@ def test_exact_keyword_prefers_licensed_wikimedia_image(tmp_path, monkeypatch):
     assert meta["provider"] == "wikimedia_image"
     assert meta["license"] == "CC BY-SA 4.0"
     assert meta["attribution"] == "Jane Scientist"
+
+
+def test_exact_candidate_rejects_unrelated_title():
+    moon = MediaCandidate(
+        provider="wikimedia_image",
+        media_id="File:Moon surface.jpg",
+        source_url="x",
+        download_url="x",
+        width=1200,
+        height=1600,
+        media_type="image",
+        keyword="Richat Structure Mauritania",
+    )
+
+    assert exact_candidate_matches("Richat Structure Mauritania", moon) is False
+
+
+def test_required_exact_media_skips_unrelated_wikimedia_candidate(tmp_path, monkeypatch):
+    unrelated = candidate(
+        "File:Moon surface.jpg", 1200, 1600,
+        provider="wikimedia_image", media_type="image",
+        keyword="Richat Structure Mauritania",
+    )
+    monkeypatch.setattr(media_library, "_wikimedia_image_candidates", lambda query: [unrelated])
+
+    with pytest.raises(RuntimeError, match="exact Wikimedia"):
+        media_library.fetch_required_exact_media(
+            {"exact_queries": ["exact: Richat Structure Mauritania"]},
+            tmp_path / "required-exact",
+            set(),
+        )
 
 
 def test_wikimedia_download_sends_identifying_user_agent(tmp_path, monkeypatch):

@@ -12,10 +12,11 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 from app.console import safe_print
-from app.services.media_library import fetch_story_media
+from app.services.media_library import fetch_required_exact_media, fetch_story_media
 from app.services.process_runner import run_checked
 from app.services.temp_cleanup import mark_temp_owner
 from app.services.tts import TTSResult, synthesize
+from app.services.visual_relevance import ensure_visual_identity, story_scene_queries
 
 
 DEFAULT_STORY_CTA = "이런 이야기가 더 궁금하다면, 구독과 좋아요 부탁드립니다."
@@ -199,6 +200,27 @@ def build_shot_plan(script: dict) -> list[dict]:
     for shot_n, shot in enumerate(shots, start=1):
         shot["shot_n"] = shot_n
     return shots
+
+
+def build_visual_relevance(identity: dict, sources: list[dict], queries: dict) -> dict:
+    """Summarize whether the rendered shots retained the verified subject."""
+    exact_sources = {
+        f"{source.get('provider', '')}:{source.get('media_id', '')}"
+        for source in sources
+        if source.get("exact_match")
+    }
+    generic_fallback_count = sum(
+        1
+        for source in sources
+        if not source.get("exact_match") and source.get("provider") != "black_bg"
+    )
+    return {
+        "required_exact": bool(identity.get("required_exact")),
+        "exact_source_count": len(exact_sources),
+        "generic_fallback_count": generic_fallback_count,
+        "unrelated_fallback_count": 0,
+        "queries": {str(number): values for number, values in queries.items()},
+    }
 
 
 def visual_filter(
@@ -763,10 +785,23 @@ async def run_story_producer(
     if not script_file.exists():
         raise FileNotFoundError(f"script.json이 없습니다: {script_file}")
     script = json.loads(script_file.read_text(encoding="utf-8"))
+    topic_file = work_dir / "topic.json"
+    if not topic_file.exists():
+        raise FileNotFoundError(f"topic.json is missing: {topic_file}")
+    topic = json.loads(topic_file.read_text(encoding="utf-8"))
+    identity = ensure_visual_identity(topic)["visual_identity"]
+    scene_queries = story_scene_queries(script, topic)
 
     with tempfile.TemporaryDirectory(prefix="shorts-factory-") as tmpdir:
         tmp_path = Path(tmpdir)
         mark_temp_owner(tmp_path)
+        used_ids: set[str] = set()
+        required_media = None
+        required_metadata = {}
+        if identity["required_exact"]:
+            required_media, required_metadata = fetch_required_exact_media(
+                identity, tmp_path / "required-exact", used_ids
+            )
         tts_results = []
         narration_files = {}
         scene_tts_results = {}
@@ -841,7 +876,6 @@ async def run_story_producer(
         )
 
         safe_print("  → 무료 미디어 선별 및 2~4초 샷 생성 중...")
-        used_ids: set[str] = set()
         sources = []
         scene_videos = []
         global_shot_n = 0
@@ -854,17 +888,25 @@ async def run_story_producer(
             visual_clips = []
             for local_index, shot in enumerate(shots, start=1):
                 global_shot_n += 1
-                other_keywords = [
-                    value for value in scene.get("visuals", []) if value != shot["keyword"]
-                ]
-                media, metadata = await fetch_story_media(
-                    [shot["keyword"], *other_keywords],
-                    tmp_path / f"media-{global_shot_n:03d}",
-                    used_ids,
+                use_required_media = (
+                    required_media is not None
+                    and local_index == 1
+                    and scene.get("role") in {"hook", "close"}
                 )
-                media, metadata, is_new_source = _resolve_story_media(
-                    media, metadata, last_media, last_metadata
-                )
+                if use_required_media:
+                    media = required_media
+                    metadata = dict(required_metadata)
+                    metadata["reused_exact_asset"] = scene.get("role") == "close"
+                    is_new_source = False
+                else:
+                    media, metadata = await fetch_story_media(
+                        scene_queries.get(scene["n"], [shot["keyword"]]),
+                        tmp_path / f"media-{global_shot_n:03d}",
+                        used_ids,
+                    )
+                    media, metadata, is_new_source = _resolve_story_media(
+                        media, metadata, last_media, last_metadata
+                    )
                 if media is None:
                     media = tmp_path / f"fallback-{global_shot_n:03d}.jpg"
                     _create_fallback_image(media, scene["n"])
@@ -1029,6 +1071,7 @@ async def run_story_producer(
             "visual_source": last_metadata,
         },
         "sources": sources,
+        "visual_relevance": build_visual_relevance(identity, sources, scene_queries),
         "fallback_shots": sum(1 for item in sources if item.get("fallback")),
         "experiment": "story_v1_retention",
     }

@@ -11,6 +11,9 @@ import requests
 DEFAULT_MAX_VIDEO_BYTES = 80 * 1024 * 1024
 DEFAULT_MAX_IMAGE_BYTES = 15 * 1024 * 1024
 DOWNLOAD_CHUNK_BYTES = 1024 * 1024
+_GENERIC_EXACT_TOKENS = frozenset({
+    "file", "image", "photo", "structure", "landscape",
+})
 
 
 class MediaTooLarge(requests.RequestException):
@@ -33,6 +36,24 @@ class MediaCandidate:
     @property
     def unique_id(self) -> str:
         return f"{self.provider}:{self.media_id}"
+
+
+def _distinctive_tokens(value: str) -> set[str]:
+    """Return normalized title tokens that can identify a real subject."""
+    return {
+        token
+        for token in re.findall(r"[^\W_]+", (value or "").lower())
+        if token not in _GENERIC_EXACT_TOKENS
+    }
+
+
+def exact_candidate_matches(query: str, candidate: MediaCandidate) -> bool:
+    """Require a Wikimedia file title to share a distinctive subject token."""
+    normalized_query = (query or "").removeprefix("exact:").strip()
+    return bool(
+        _distinctive_tokens(normalized_query)
+        & _distinctive_tokens(candidate.media_id)
+    )
 
 
 def _resolution_quality(width: int, height: int) -> tuple:
@@ -329,6 +350,13 @@ async def fetch_story_media(
         )
         for collect in providers:
             for candidate in choose_candidates(collect(keyword), used_ids):
+                if (
+                    exact
+                    and candidate.provider == "wikimedia_image"
+                    and not exact_candidate_matches(keyword, candidate)
+                ):
+                    rejected_candidates += 1
+                    continue
                 suffix = ".mp4" if candidate.media_type == "video" else ".jpg"
                 output = Path(f"{output_stem}{suffix}")
                 try:
@@ -359,6 +387,8 @@ async def fetch_story_media(
                     metadata["license"] = candidate.license
                 if candidate.attribution:
                     metadata["attribution"] = candidate.attribution
+                if exact and candidate.provider == "wikimedia_image":
+                    metadata["exact_match"] = True
                 return output, metadata
 
     return None, {
@@ -372,3 +402,55 @@ async def fetch_story_media(
         "download_bytes": 0,
         "rejected_candidates": rejected_candidates,
     }
+
+
+def fetch_required_exact_media(
+    identity: dict,
+    destination: Path,
+    used_ids: set[str],
+) -> tuple[Path, dict]:
+    """Download one licensed Wikimedia asset that matches the subject anchor."""
+    raw_queries = identity.get("exact_queries") or []
+    queries = list(dict.fromkeys(
+        value.removeprefix("exact:").strip()
+        for value in raw_queries
+        if isinstance(value, str) and value.removeprefix("exact:").strip()
+    ))
+    output = destination if destination.suffix else destination.with_suffix(".jpg")
+    rejected_candidates = 0
+    for query_index, query in enumerate(queries):
+        for candidate in choose_candidates(_wikimedia_image_candidates(query), used_ids):
+            if not candidate.license.strip() or not exact_candidate_matches(query, candidate):
+                rejected_candidates += 1
+                continue
+            try:
+                downloaded = _download_candidate(candidate, output)
+            except MediaTooLarge:
+                rejected_candidates += 1
+                continue
+            except (requests.RequestException, OSError):
+                continue
+            if not _is_usable_download(output):
+                output.unlink(missing_ok=True)
+                continue
+            used_ids.add(candidate.unique_id)
+            metadata = {
+                "provider": candidate.provider,
+                "media_id": candidate.media_id,
+                "source_url": candidate.source_url,
+                "keyword": query,
+                "fallback": query_index > 0,
+                "width": candidate.width,
+                "height": candidate.height,
+                "download_bytes": (
+                    downloaded if isinstance(downloaded, int) else output.stat().st_size
+                ),
+                "rejected_candidates": rejected_candidates,
+                "license": candidate.license,
+                "exact_match": True,
+            }
+            if candidate.attribution:
+                metadata["attribution"] = candidate.attribution
+            return output, metadata
+
+    raise RuntimeError("required exact Wikimedia media is unavailable")
