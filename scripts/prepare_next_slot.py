@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import sys
 import time
@@ -22,6 +23,7 @@ from app.agents.writer import run_writer  # noqa: E402
 from app.content_format import get_content_format  # noqa: E402
 from app.services.quality_gate import validate_upload_package  # noqa: E402
 from app.services.recovery import acquire_global_lock, release_owned_lock  # noqa: E402
+from app.services.notifications import safe_error, send_alert  # noqa: E402
 from app.services.slot_prebuild import (  # noqa: E402
     KST,
     ensure_target_available,
@@ -45,6 +47,42 @@ def _wait_for_lock(
         duration = min(poll_seconds, wait_seconds - waited)
         time.sleep(duration)
         waited += duration
+
+
+def _notify(data_dir: Path, event_key: str, text: str) -> None:
+    """Notifications remain optional even if the adapter is unexpectedly broken."""
+    try:
+        send_alert(data_dir, event_key, text=text)
+    except Exception:
+        return
+
+
+def _alert_run_id(slot: int | None) -> str:
+    now = datetime.now(tz=KST)
+    if slot is not None:
+        return f"{now:%Y%m%d}-{slot}"
+    return next_scheduled_slot(now)[0]
+
+
+def _read_alert_metadata(result: dict) -> tuple[str, str, str]:
+    """Read only the fields approved for a prebuild notification."""
+    title = "unknown"
+    verification_method = "unknown"
+    duration = "unknown"
+    try:
+        destination = Path(result["destination"])
+        script = json.loads((destination / "script.json").read_text(encoding="utf-8"))
+        topic = json.loads((destination / "topic.json").read_text(encoding="utf-8"))
+        if isinstance(script.get("title"), str):
+            title = script["title"]
+        if isinstance(topic.get("verification_method"), str):
+            verification_method = topic["verification_method"]
+        report = result.get("quality_gate", {}).get("report", {})
+        if isinstance(report.get("duration"), (int, float)):
+            duration = str(report["duration"])
+    except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
+        pass
+    return title, duration, verification_method
 
 
 def prepare_next_slot(
@@ -184,19 +222,38 @@ def main() -> None:
 
     data_dir = Path(os.getenv("DATA_DIR", "./data"))
     ffmpeg_path = os.getenv("FFMPEG_PATH", "ffmpeg")
-    if args.slot is None:
-        result = prepare_next_slot(
+    alert_run_id = _alert_run_id(args.slot)
+    try:
+        if args.slot is None:
+            result = prepare_next_slot(
+                data_dir,
+                ffmpeg_path,
+                lock_wait_seconds=args.lock_wait_seconds,
+            )
+        else:
+            result = prepare_slot(
+                data_dir,
+                ffmpeg_path,
+                args.slot,
+                lock_wait_seconds=args.lock_wait_seconds,
+            )
+    except Exception as exc:
+        _notify(
             data_dir,
-            ffmpeg_path,
-            lock_wait_seconds=args.lock_wait_seconds,
+            f"prebuild:{alert_run_id}:failure",
+            f"Prebuild failed\nrun_id: {alert_run_id}\nerror: {safe_error(exc)}",
         )
-    else:
-        result = prepare_slot(
-            data_dir,
-            ffmpeg_path,
-            args.slot,
-            lock_wait_seconds=args.lock_wait_seconds,
-        )
+        raise
+    title, duration, verification_method = _read_alert_metadata(result)
+    _notify(
+        data_dir,
+        f"prebuild:{result['run_id']}:success",
+        "Prebuild succeeded"
+        f"\nrun_id: {result['run_id']}"
+        f"\ntitle: {title}"
+        f"\nduration: {duration}"
+        f"\nverification_method: {verification_method}",
+    )
     print(f"사전 제작 완료: {result['destination'].resolve()}")
     print(f"예약 회차: {result['run_id']} ({result['scheduled_at'].isoformat()})")
     print("현재는 업로드하지 않았으며 해당 cron 회차가 업로드합니다.")

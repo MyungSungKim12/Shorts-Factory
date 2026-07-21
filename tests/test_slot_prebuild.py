@@ -285,3 +285,75 @@ def test_explicit_prepare_keeps_the_initial_target_after_rendering(
         ("20260721-2", scheduled_at),
     ]
     assert result["run_id"] == "20260721-2"
+
+
+def test_prepare_cli_alerts_success_with_allowlisted_summary(
+    tmp_path: Path, monkeypatch
+) -> None:
+    destination = tmp_path / "work" / "20260721-3"
+    destination.mkdir(parents=True)
+    (destination / "script.json").write_text(
+        json.dumps({"title": "approved title"}), encoding="utf-8"
+    )
+    (destination / "topic.json").write_text(
+        json.dumps({"verification_method": "grounded_search"}), encoding="utf-8"
+    )
+    alerts = []
+    monkeypatch.setattr(command, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(command, "load_dotenv", lambda: None)
+    monkeypatch.setattr(
+        command,
+        "prepare_next_slot",
+        lambda *args, **kwargs: {
+            "destination": destination,
+            "run_id": "20260721-3",
+            "scheduled_at": datetime(2026, 7, 21, 21, tzinfo=KST),
+            "quality_gate": {"report": {"duration": 42.5}},
+        },
+    )
+    monkeypatch.setattr(
+        command, "send_alert", lambda *args, **kwargs: alerts.append((args, kwargs)), raising=False
+    )
+    monkeypatch.setattr(command.sys, "argv", ["prepare_next_slot.py"])
+
+    command.main()
+
+    assert alerts == [
+        (
+            (tmp_path, "prebuild:20260721-3:success"),
+            {
+                "text": (
+                    "Prebuild succeeded\nrun_id: 20260721-3\ntitle: approved title"
+                    "\nduration: 42.5\nverification_method: grounded_search"
+                )
+            },
+        )
+    ]
+
+
+def test_prepare_cli_alerts_failure_without_changing_failure_result(
+    tmp_path: Path, monkeypatch
+) -> None:
+    alerts = []
+    monkeypatch.setattr(command, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(command, "load_dotenv", lambda: None)
+    monkeypatch.setattr(
+        command,
+        "prepare_slot",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("producer failed")),
+    )
+    monkeypatch.setattr(
+        command, "send_alert", lambda *args, **kwargs: alerts.append((args, kwargs)), raising=False
+    )
+    monkeypatch.setattr(command.sys, "argv", ["prepare_next_slot.py", "--slot", "2"])
+
+    with pytest.raises(RuntimeError, match="producer failed"):
+        command.main()
+
+    assert len(alerts) == 1
+    assert alerts[0][0][1].endswith(":failure")
+    assert "error: producer failed" in alerts[0][1]["text"]

@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import pytest
 
 from app.services import recovery
+from scripts import run_scheduled as command
 
 
 FIXED_NOW = datetime(2026, 7, 21, 11, 0, tzinfo=timezone.utc)
@@ -211,3 +212,71 @@ def test_release_owned_global_lock_preserves_changed_owner(tmp_path):
     recovery.release_owned_lock(lock, "mine", 123)
 
     assert lock.exists()
+
+
+def test_scheduled_runner_alerts_uploaded_url(tmp_path, monkeypatch):
+    alerts = []
+
+    async def uploaded(*args, **kwargs):
+        return {
+            "date": "20260721-1",
+            "success": True,
+            "stages": {"uploader": {"status": "uploaded", "url": "https://youtu.be/abc"}},
+        }
+
+    monkeypatch.setattr(command, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(command, "load_dotenv", lambda: None)
+    monkeypatch.setattr(command, "cleanup_stale_temp_dirs", lambda: {"removed_dirs": 0, "removed_bytes": 0})
+    monkeypatch.setattr(command, "cleanup_old_work", lambda *args: None)
+    monkeypatch.setattr(command, "run_with_recovery", uploaded)
+    monkeypatch.setattr(
+        command, "send_alert", lambda *args, **kwargs: alerts.append((args, kwargs)), raising=False
+    )
+    monkeypatch.setattr(command.sys, "argv", ["run_scheduled.py", "1"])
+
+    command.main()
+
+    assert alerts == [
+        (
+            (tmp_path, "upload:20260721-1:uploaded"),
+            {"text": "Scheduled upload succeeded\nrun_id: 20260721-1\nurl: https://youtu.be/abc"},
+        )
+    ]
+
+
+def test_scheduled_runner_alerts_recovery_exhaustion_before_exit(tmp_path, monkeypatch):
+    alerts = []
+    recovery_dir = tmp_path / "recovery"
+    recovery_dir.mkdir()
+    (recovery_dir / "20260721-1.json").write_text(
+        json.dumps({"failed_stage": "writer", "last_error": "writer failed"}),
+        encoding="utf-8",
+    )
+
+    async def exhausted(*args, **kwargs):
+        raise RuntimeError("writer failed")
+
+    monkeypatch.setattr(command, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(command, "load_dotenv", lambda: None)
+    monkeypatch.setattr(command, "cleanup_stale_temp_dirs", lambda: {"removed_dirs": 0, "removed_bytes": 0})
+    monkeypatch.setattr(command, "cleanup_old_work", lambda *args: None)
+    monkeypatch.setattr(command, "run_with_recovery", exhausted)
+    monkeypatch.setattr(
+        command, "send_alert", lambda *args, **kwargs: alerts.append((args, kwargs)), raising=False
+    )
+    monkeypatch.setattr(command.sys, "argv", ["run_scheduled.py", "1"])
+    monkeypatch.setattr(command, "_scheduled_run_id", lambda slot: "20260721-1", raising=False)
+
+    with pytest.raises(SystemExit, match="1"):
+        command.main()
+
+    assert alerts == [
+        (
+            (tmp_path, "recovery:20260721-1:exhausted"),
+            {"text": "Recovery exhausted\nrun_id: 20260721-1\nstage: writer\nerror: writer failed"},
+        )
+    ]

@@ -98,3 +98,31 @@ def test_grounded_only_never_reads_cache_or_calls_model_memory(tmp_path, monkeyp
 def test_verified_cache_rejects_non_grounded_payloads(tmp_path):
     with pytest.raises(ValueError, match="grounded_search"):
         save_verified(tmp_path, 1, _topic("not grounded", method="model_memory"))
+
+
+def test_cache_warmer_cli_alerts_with_counts_sizes_and_shortage(tmp_path, monkeypatch):
+    from scripts import warm_verified_cache as command
+
+    alerts = []
+    summary = {
+        "target_per_slot": 10,
+        "warmed_slots": [1, 3],
+        "slot_sizes": {1: 4, 2: 10, 3: 2},
+        "quota_exhausted": True,
+    }
+    monkeypatch.setattr(command, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(command, "load_dotenv", lambda: None)
+    monkeypatch.setattr(command, "warm_verified_cache", lambda data_dir: summary)
+    monkeypatch.setattr(
+        command, "send_alert", lambda *args, **kwargs: alerts.append((args, kwargs)), raising=False
+    )
+
+    command.main()
+
+    assert len(alerts) == 1
+    assert "added_slots: 2" in alerts[0][1]["text"]
+    assert "sizes: 1=4, 2=10, 3=2" in alerts[0][1]["text"]
+    assert "quota_exhausted: true" in alerts[0][1]["text"]
+    assert "shortage_slots: 1, 3" in alerts[0][1]["text"]
