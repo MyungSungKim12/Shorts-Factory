@@ -185,6 +185,25 @@ def test_prepare_command_builds_in_staging_and_never_uploads(
     assert result["destination"] == tmp_path / "work" / "20260721-2"
 
 
+def test_prepare_command_tags_the_failed_pipeline_stage(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(command, "run_researcher", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        command,
+        "run_writer",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("provider secret")),
+    )
+
+    with pytest.raises(RuntimeError) as captured:
+        command.prepare_next_slot(
+            tmp_path,
+            "ffmpeg",
+            now_fn=lambda: datetime(2026, 7, 21, 12, 0, tzinfo=KST),
+            use_lock=False,
+        )
+
+    assert captured.value.prebuild_stage == "writer"
+
+
 @pytest.mark.parametrize("unsafe_target", ["destination", "uploaded"])
 def test_explicit_prepare_rejects_unsafe_target_before_generation(
     tmp_path: Path, monkeypatch, unsafe_target: str
@@ -394,6 +413,10 @@ def test_prepare_cli_alerts_failure_without_changing_failure_result(
 ) -> None:
     alerts = []
     token = _token()
+    failure = RuntimeError(
+        f"POST https://api.telegram.org/bot{token}/sendMessage failed"
+    )
+    failure.prebuild_stage = "writer"
     monkeypatch.setattr(command, "ROOT", tmp_path)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
@@ -401,9 +424,7 @@ def test_prepare_cli_alerts_failure_without_changing_failure_result(
     monkeypatch.setattr(
         command,
         "prepare_slot",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            RuntimeError(f"POST https://api.telegram.org/bot{token}/sendMessage failed")
-        ),
+        lambda *args, **kwargs: (_ for _ in ()).throw(failure),
     )
     monkeypatch.setattr(
         command, "send_alert", lambda *args, **kwargs: alerts.append((args, kwargs)), raising=False
@@ -415,6 +436,8 @@ def test_prepare_cli_alerts_failure_without_changing_failure_result(
 
     assert len(alerts) == 1
     assert alerts[0][0][1].endswith(":failure")
-    assert "stage: prebuild" in alerts[0][1]["text"]
-    assert "error_category: prebuild_failed" in alerts[0][1]["text"]
+    assert "stage: writer" in alerts[0][1]["text"]
+    assert "error_category: writer_failed" in alerts[0][1]["text"]
+    assert "diagnostic: script_generation_failure" in alerts[0][1]["text"]
+    assert "sendMessage" not in alerts[0][1]["text"]
     assert token not in alerts[0][1]["text"]

@@ -197,6 +197,9 @@ def test_exact_candidate_rejects_unrelated_title():
     [
         ("Richat Structure Mauritania", "File:Flag of Mauritania.jpg"),
         ("Eiffel Tower Paris", "File:Paris skyline at dusk.jpg"),
+        ("Lake Baikal Russia", "File:Lake Tahoe in summer.jpg"),
+        ("Mount Fuji Japan", "File:Mount Everest from base camp.jpg"),
+        ("Blood Falls Antarctica", "File:Blood donation campaign.jpg"),
     ],
 )
 def test_exact_candidate_rejects_context_only_overlap(query, media_id):

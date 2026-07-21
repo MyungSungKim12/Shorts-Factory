@@ -72,6 +72,35 @@ def _windows_pid_alive(pid: int) -> bool:
         kernel32.CloseHandle(handle)
 
 
+def _read_lock_snapshot(path: Path) -> tuple[bytes, int, int, int, int]:
+    """Read one stable lock snapshot for compare-before-unlink recovery."""
+    before = path.stat()
+    content = path.read_bytes()
+    after = path.stat()
+    before_signature = (
+        before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns
+    )
+    after_signature = (
+        after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
+    )
+    if before_signature != after_signature:
+        raise OSError("notification lock changed while reading")
+    return (content, *after_signature)
+
+
+def _unlink_lock_if_unchanged(
+    path: Path, snapshot: tuple[bytes, int, int, int, int]
+) -> bool:
+    """Remove a stale lock only when owner bytes and file identity still match."""
+    try:
+        if _read_lock_snapshot(path) != snapshot:
+            return False
+        path.unlink()
+        return True
+    except (FileNotFoundError, OSError):
+        return False
+
+
 def _claim_state_lock(
     path: Path, event_key: str, now: datetime
 ) -> tuple[str, str | None]:
@@ -88,21 +117,28 @@ def _claim_state_lock(
     try:
         descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except FileExistsError:
+        snapshot = None
         try:
-            owner = json.loads(lock_path.read_text(encoding="utf-8"))
+            snapshot = _read_lock_snapshot(lock_path)
+            owner = json.loads(snapshot[0].decode("utf-8"))
             started_at = _as_utc(datetime.fromisoformat(owner["started_at"]))
             owner_pid = int(owner["pid"])
             owner_event = owner["event_key"]
             if not isinstance(owner_event, str):
                 return "busy", None
-        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+        except (OSError, UnicodeDecodeError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+            if snapshot is not None:
+                modified_at = datetime.fromtimestamp(
+                    snapshot[4] / 1_000_000_000, tz=timezone.utc
+                )
+                if (
+                    now - modified_at >= _LOCK_TTL
+                    and _unlink_lock_if_unchanged(lock_path, snapshot)
+                ):
+                    return _claim_state_lock(path, event_key, now)
             return "busy", None
         if now - started_at >= _LOCK_TTL or not _pid_alive(owner_pid):
-            try:
-                lock_path.unlink()
-            except FileNotFoundError:
-                pass
-            except OSError:
+            if snapshot is None or not _unlink_lock_if_unchanged(lock_path, snapshot):
                 return "busy", None
             return _claim_state_lock(path, event_key, now)
         if owner_event == event_key:

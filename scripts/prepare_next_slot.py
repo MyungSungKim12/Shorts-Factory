@@ -66,10 +66,40 @@ def _alert_run_id(slot: int | None) -> str:
 
 
 _RUN_ID_PATTERN = re.compile(r"\d{8}-[1-6]")
+_FAILURE_DIAGNOSTICS = {
+    "lock": ("lock_timeout", "global_lock_timeout"),
+    "target": ("target_failed", "target_unavailable"),
+    "researcher": ("researcher_failed", "research_failure"),
+    "writer": ("writer_failed", "script_generation_failure"),
+    "producer": ("producer_failed", "media_generation_failure"),
+    "quality_gate": ("quality_gate_failed", "quality_gate_failure"),
+    "promotion": ("promotion_failed", "promotion_failure"),
+    "unknown": ("pipeline_failure", "unknown_pipeline_failure"),
+}
 
 
 def _safe_run_id(value: object) -> str:
     return value if isinstance(value, str) and _RUN_ID_PATTERN.fullmatch(value) else "unknown"
+
+
+def _run_stage(stage: str, action: Callable[[], object]):
+    """Preserve the original exception while attaching one allowlisted stage."""
+    try:
+        return action()
+    except Exception as exc:
+        try:
+            setattr(exc, "prebuild_stage", stage)
+        except Exception:
+            pass
+        raise
+
+
+def _failure_alert_fields(exc: Exception) -> tuple[str, str, str]:
+    stage = getattr(exc, "prebuild_stage", "unknown")
+    if stage not in _FAILURE_DIAGNOSTICS:
+        stage = "unknown"
+    category, diagnostic = _FAILURE_DIAGNOSTICS[stage]
+    return stage, category, diagnostic
 
 
 def _read_alert_metadata(result: dict) -> tuple[str, str, str]:
@@ -151,9 +181,13 @@ def _prepare(
     data_dir = Path(data_dir)
     now_fn = now_fn or (lambda: datetime.now(tz=KST))
     if slot is None:
-        initial_run_id, initial_scheduled_at = next_scheduled_slot(now_fn())
+        initial_run_id, initial_scheduled_at = _run_stage(
+            "target", lambda: next_scheduled_slot(now_fn())
+        )
     else:
-        initial_run_id, initial_scheduled_at = scheduled_run(now_fn(), slot)
+        initial_run_id, initial_scheduled_at = _run_stage(
+            "target", lambda: scheduled_run(now_fn(), slot)
+        )
     initial_slot = initial_run_id.rsplit("-", 1)[1]
     staging_id = f"prebuild-{now_fn().strftime('%Y%m%d-%H%M%S')}-{initial_slot}"
     staging_dir = data_dir / "staging" / staging_id
@@ -163,12 +197,15 @@ def _prepare(
 
     if use_lock:
         lock_path.parent.mkdir(parents=True, exist_ok=True)
-        _wait_for_lock(
-            lock_path,
-            lock_owner,
-            now_fn,
-            lock_wait_seconds,
-            lock_poll_seconds,
+        _run_stage(
+            "lock",
+            lambda: _wait_for_lock(
+                lock_path,
+                lock_owner,
+                now_fn,
+                lock_wait_seconds,
+                lock_poll_seconds,
+            ),
         )
         lock_owned = True
 
@@ -176,38 +213,55 @@ def _prepare(
         if slot is not None:
             if initial_scheduled_at <= now_fn().astimezone(KST):
                 raise RuntimeError(f"이미 지난 예약 회차: {slot}")
-            ensure_target_available(data_dir, initial_run_id)
+            _run_stage(
+                "target", lambda: ensure_target_available(data_dir, initial_run_id)
+            )
         selected = get_content_format()
-        run_researcher(
-            data_dir,
-            staging_id,
-            content_format=selected,
-            work_root="staging",
-        )
-        run_writer(
-            data_dir,
-            staging_id,
-            content_format=selected,
-            work_root="staging",
-        )
-        asyncio.run(
-            run_producer(
+        _run_stage(
+            "researcher",
+            lambda: run_researcher(
                 data_dir,
                 staging_id,
-                ffmpeg_path,
                 content_format=selected,
                 work_root="staging",
-            )
+            ),
         )
-        quality = validate_upload_package(staging_dir, ffmpeg_path)
+        _run_stage(
+            "writer",
+            lambda: run_writer(
+                data_dir,
+                staging_id,
+                content_format=selected,
+                work_root="staging",
+            ),
+        )
+        _run_stage(
+            "producer",
+            lambda: asyncio.run(
+                run_producer(
+                    data_dir,
+                    staging_id,
+                    ffmpeg_path,
+                    content_format=selected,
+                    work_root="staging",
+                )
+            ),
+        )
+        quality = _run_stage(
+            "quality_gate",
+            lambda: validate_upload_package(staging_dir, ffmpeg_path),
+        )
         if slot is None:
             run_id, scheduled_at = next_scheduled_slot(now_fn())
         else:
             if initial_scheduled_at <= now_fn().astimezone(KST):
                 raise RuntimeError(f"이미 지난 예약 회차: {slot}")
             run_id, scheduled_at = initial_run_id, initial_scheduled_at
-        destination = promote_staging(
-            data_dir, staging_id, run_id, scheduled_at, quality
+        destination = _run_stage(
+            "promotion",
+            lambda: promote_staging(
+                data_dir, staging_id, run_id, scheduled_at, quality
+            ),
         )
         return {
             "run_id": run_id,
@@ -248,11 +302,13 @@ def main() -> None:
                 lock_wait_seconds=args.lock_wait_seconds,
             )
     except Exception as exc:
+        stage, error_category, diagnostic = _failure_alert_fields(exc)
         _notify(
             data_dir,
             f"prebuild:{alert_run_id}:failure",
-            f"Prebuild failed\nrun_id: {alert_run_id}\nstage: prebuild"
-            "\nerror_category: prebuild_failed",
+            f"Prebuild failed\nrun_id: {alert_run_id}\nstage: {stage}"
+            f"\nerror_category: {error_category}"
+            f"\ndiagnostic: {diagnostic}",
         )
         raise
     title, duration, verification_method = _read_alert_metadata(result)

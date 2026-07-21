@@ -11,8 +11,11 @@ import requests
 DEFAULT_MAX_VIDEO_BYTES = 80 * 1024 * 1024
 DEFAULT_MAX_IMAGE_BYTES = 15 * 1024 * 1024
 DOWNLOAD_CHUNK_BYTES = 1024 * 1024
-_GENERIC_EXACT_TOKENS = frozenset({
-    "file", "image", "photo", "structure", "landscape",
+_QUERY_NOISE_TOKENS = frozenset({
+    "file", "image", "photo", "landscape", "the", "of", "in", "at",
+})
+_GENERIC_EXACT_TOKENS = _QUERY_NOISE_TOKENS | frozenset({
+    "structure", "lake", "mount", "mountain",
 })
 
 
@@ -48,24 +51,22 @@ def _distinctive_tokens(value: str) -> set[str]:
 
 
 def _canonical_anchor_tokens(value: str) -> set[str]:
-    """Keep subject tokens while dropping a conventional trailing context token."""
+    """Extract the complete named subject, excluding a trailing location context."""
     tokens = [
         token
         for token in re.findall(r"[^\W_]+", (value or "").lower())
-        if token not in _GENERIC_EXACT_TOKENS
+        if token not in _QUERY_NOISE_TOKENS
     ]
-    if len(tokens) > 1:
+    if len(tokens) >= 3:
         tokens = tokens[:-1]
-    return set(tokens)
+    return {token for token in tokens if token not in _GENERIC_EXACT_TOKENS}
 
 
 def exact_candidate_matches(query: str, candidate: MediaCandidate) -> bool:
     """Require a Wikimedia title to share the query's canonical subject anchor."""
     normalized_query = (query or "").removeprefix("exact:").strip()
-    return bool(
-        _canonical_anchor_tokens(normalized_query)
-        & _distinctive_tokens(candidate.media_id)
-    )
+    anchors = _canonical_anchor_tokens(normalized_query)
+    return bool(anchors) and anchors.issubset(_distinctive_tokens(candidate.media_id))
 
 
 def exact_source_matches(source: dict) -> bool:

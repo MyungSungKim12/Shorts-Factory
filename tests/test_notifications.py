@@ -242,6 +242,47 @@ def test_stale_notification_lock_is_recovered(tmp_path, monkeypatch):
     assert result == {"status": "sent"}
 
 
+def test_stale_partially_written_lock_is_recovered(tmp_path, monkeypatch):
+    from app.services import notifications
+
+    _configured_env(monkeypatch)
+    state_path = tmp_path / "notifications" / "state.json"
+    state_path.parent.mkdir(parents=True)
+    lock_path = state_path.with_name(".state.json.lock")
+    lock_path.write_text("{", encoding="utf-8")
+    stale_epoch = datetime(2026, 7, 20, tzinfo=timezone.utc).timestamp()
+    notifications.os.utime(lock_path, (stale_epoch, stale_epoch))
+    monkeypatch.setattr(
+        notifications.requests,
+        "post",
+        lambda *args, **kwargs: type(
+            "Response",
+            (), {"raise_for_status": lambda self: None, "json": lambda self: {"ok": True}},
+        )(),
+    )
+
+    result = notifications.send_alert(
+        tmp_path,
+        "new:event",
+        "ok",
+        now=datetime(2026, 7, 21, tzinfo=timezone.utc),
+    )
+
+    assert result == {"status": "sent"}
+
+
+def test_stale_lock_snapshot_does_not_unlink_replaced_owner(tmp_path):
+    from app.services import notifications
+
+    lock_path = tmp_path / ".state.json.lock"
+    lock_path.write_text("old-owner", encoding="utf-8")
+    snapshot = notifications._read_lock_snapshot(lock_path)
+    lock_path.write_text("new-owner", encoding="utf-8")
+
+    assert notifications._unlink_lock_if_unchanged(lock_path, snapshot) is False
+    assert lock_path.read_text(encoding="utf-8") == "new-owner"
+
+
 def test_current_process_liveness_check_never_sends_a_signal(monkeypatch):
     from app.services import notifications
 

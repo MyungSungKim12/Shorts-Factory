@@ -298,7 +298,7 @@ TELEGRAM_CHAT_ID=
 
 ### 감독 검증
 
-- 다음 미래 회차를 수동 사전 제작하고 `prepared.json`의 `quality_gate.passed=true`, exact source, 1080x1920 H.264/AAC, 60±5초, 오디오 길이 차이 0.5초 이하, 내부 무음 1.2초 미만을 확인한다.
+- 다음 미래 회차를 수동 사전 제작하고 `prepared.json`의 `quality_gate.passed=true`, exact source, 1080x1920 H.264/AAC, 60~75초, 오디오 길이 차이 0.5초 이하, 내부 무음 1.2초 미만을 확인한다.
 - 임시 디렉터리와 전역 잠금이 정리됐는지, Telegram 사전 제작 성공 알림에 제목·길이·검증방식·QC 결과가 포함됐는지 확인한다.
 - 예약 시각 이후 SQLite에 해당 run ID 업로드 행이 정확히 1개인지, Shorts URL과 업로더 성공 로그가 있는지, 대시보드가 정상인지, 업로드 성공 알림이 도착했는지 확인한다.
 
