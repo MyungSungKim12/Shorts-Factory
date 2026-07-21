@@ -87,18 +87,46 @@ def build_story_timing(
     }
 
 
+ROLE_SHOT_RANGES = {
+    "hook": (1.8, 2.2),
+    "context": (2.4, 3.2),
+    "problem": (2.4, 3.2),
+    "mechanism": (2.2, 3.0),
+    "payoff": (2.0, 2.8),
+    "close": (2.5, 3.5),
+}
+
+
+def _shot_duration_range(role: str) -> tuple[float, float]:
+    return ROLE_SHOT_RANGES.get(role, (2.2, 3.0))
+
+
+def _spoken_intro(title: str) -> str:
+    normalized = re.sub(r"[?!。]+$", "", str(title)).strip()
+    normalized = re.sub(r"(?:의\s*)?(?:비밀|이유|진실)$", "", normalized).strip()
+    words = normalized.split()
+    selected = []
+    for word in words:
+        if selected and len(" ".join(selected + [word])) > 22:
+            break
+        selected.append(word)
+    return " ".join(selected) or normalized[:22]
+
+
 def _scene_shots(scene: dict, duration: float | None = None) -> list[dict]:
     visuals = [value.strip() for value in scene.get("visuals", []) if value.strip()]
     if not visuals:
         visuals = ["natural landscape"]
     total = float(duration if duration is not None else scene.get("duration_sec", 4))
-    count = max(len(visuals), math.ceil(total / 4))
-    seconds = max(2.0, min(4.0, total / count))
+    minimum, maximum = _shot_duration_range(scene.get("role", "context"))
+    count = max(len(visuals), math.ceil(total / maximum))
+    while count > 1 and total / count < minimum:
+        count -= 1
+    seconds = total / count
     shots = []
     remaining = total
     for index in range(count):
-        shot_duration = seconds if index < count - 1 else max(2.0, remaining)
-        shot_duration = min(4.0, shot_duration)
+        shot_duration = seconds if index < count - 1 else remaining
         shots.append({
             "scene_n": scene["n"],
             "role": scene.get("role", "context"),
@@ -513,8 +541,9 @@ async def run_story_producer(
         scene_durations = {}
         audio_durations = {}
 
+        spoken_intro = _spoken_intro(script["title"])
         intro_narration = tmp_path / "narration-intro.mp3"
-        intro_result = synthesize(_tts_text(script["title"]), intro_narration)
+        intro_result = synthesize(_tts_text(spoken_intro), intro_narration)
         tts_results.append(intro_result)
         intro_audio_duration = _duration(intro_narration, ffmpeg_path)
 
@@ -653,7 +682,7 @@ async def run_story_producer(
             audio_durations,
             srt_path,
             intro={
-                "text": script["title"],
+                "text": spoken_intro,
                 "audio_end": intro_audio_duration,
                 "body_start": story_timing["body_start"],
             },
@@ -684,7 +713,7 @@ async def run_story_producer(
         "tts": summarize_tts(tts_results),
         "layout": {**STORY_LAYOUT, "title": title_metadata},
         "intro": {
-            "text": script["title"],
+            "text": spoken_intro,
             "audio_duration": round(intro_audio_duration, 3),
             "duration": story_timing["intro_duration"],
             "tts": {

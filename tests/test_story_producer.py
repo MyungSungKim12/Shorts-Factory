@@ -80,12 +80,12 @@ def test_each_story_beat_becomes_short_visual_shots():
         "emphasis": ["물이 남아 있습니다"],
     }]}
     shots = story_producer.build_shot_plan(script)
-    assert len(shots) == 2
-    assert all(2 <= shot["duration_sec"] <= 4 for shot in shots)
+    assert len(shots) == 4
+    assert all(1.8 <= shot["duration_sec"] <= 2.2 for shot in shots)
     assert {shot["keyword"] for shot in shots} == {
         "desert lake aerial", "cracked desert ground"
     }
-    assert [shot["shot_n"] for shot in shots] == [1, 2]
+    assert [shot["shot_n"] for shot in shots] == [1, 2, 3, 4]
 
 
 def test_long_beat_adds_shots_instead_of_exceeding_four_seconds():
@@ -95,9 +95,24 @@ def test_long_beat_adds_shots_instead_of_exceeding_four_seconds():
         "duration_sec": 15, "emphasis": [],
     }]}
     shots = story_producer.build_shot_plan(script)
-    assert len(shots) == 4
-    assert all(shot["duration_sec"] <= 4 for shot in shots)
+    assert len(shots) == 5
+    assert all(2.2 <= shot["duration_sec"] <= 3.0 for shot in shots)
     assert abs(sum(shot["duration_sec"] for shot in shots) - 15) < 0.01
+
+
+def test_retention_shot_ranges_are_role_specific():
+    assert story_producer._shot_duration_range("hook") == (1.8, 2.2)
+    assert story_producer._shot_duration_range("context") == (2.4, 3.2)
+    assert story_producer._shot_duration_range("mechanism") == (2.2, 3.0)
+    assert story_producer._shot_duration_range("payoff") == (2.0, 2.8)
+    assert story_producer._shot_duration_range("close") == (2.5, 3.5)
+
+
+def test_spoken_intro_keeps_one_short_topic_phrase():
+    assert (
+        story_producer._spoken_intro("300일 동안 번개가 멈추지 않는 마을의 비밀")
+        == "300일 동안 번개가 멈추지 않는 마을"
+    )
 
 
 def test_still_image_filter_has_motion_without_ranking_bands():
