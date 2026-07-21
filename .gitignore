@@ -6,3 +6,4 @@ data/
 *.mp4
 *.mp3
 .worktrees/
+.analysis_reference/
