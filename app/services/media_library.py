@@ -8,6 +8,15 @@ from pathlib import Path
 import requests
 
 
+DEFAULT_MAX_VIDEO_BYTES = 80 * 1024 * 1024
+DEFAULT_MAX_IMAGE_BYTES = 15 * 1024 * 1024
+DOWNLOAD_CHUNK_BYTES = 1024 * 1024
+
+
+class MediaTooLarge(requests.RequestException):
+    """무료 미디어가 설정된 다운로드 상한을 초과했다."""
+
+
 @dataclass(frozen=True)
 class MediaCandidate:
     provider: str
@@ -26,11 +35,22 @@ class MediaCandidate:
         return f"{self.provider}:{self.media_id}"
 
 
+def _resolution_quality(width: int, height: int) -> tuple:
+    adequate = width >= 720 and height >= 1280
+    within_output = width <= 1080 and height <= 1920
+    pixels = width * height
+    if adequate and within_output:
+        return 3, pixels
+    if adequate:
+        excess = max(width - 1080, 0) * max(height - 1920, 0)
+        return 2, -excess, -pixels
+    return 1, pixels
+
+
 def _quality(candidate: MediaCandidate) -> tuple:
     portrait = candidate.height > candidate.width
-    resolution = min(candidate.width, candidate.height)
     video = candidate.media_type == "video"
-    return portrait, resolution, video
+    return portrait, _resolution_quality(candidate.width, candidate.height), video
 
 
 def choose_candidate(
@@ -58,7 +78,9 @@ def _best_variant(variants: list[dict], url_key: str) -> dict | None:
         usable,
         key=lambda item: (
             int(item.get("height", 0)) > int(item.get("width", 0)),
-            min(int(item.get("width", 0)), int(item.get("height", 0))),
+            _resolution_quality(
+                int(item.get("width", 0)), int(item.get("height", 0))
+            ),
         ),
     )
 
@@ -217,15 +239,60 @@ def _wikimedia_image_candidates(keyword: str) -> list[MediaCandidate]:
         return []
 
 
-def _download_candidate(candidate: MediaCandidate, output: Path) -> None:
+def _positive_env_int(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+        return value if value > 0 else default
+    except ValueError:
+        return default
+
+
+def media_limit(media_type: str) -> int:
+    if media_type == "video":
+        return _positive_env_int("MEDIA_MAX_VIDEO_BYTES", DEFAULT_MAX_VIDEO_BYTES)
+    return _positive_env_int("MEDIA_MAX_IMAGE_BYTES", DEFAULT_MAX_IMAGE_BYTES)
+
+
+def _download_candidate(candidate: MediaCandidate, output: Path) -> int:
     headers = (
         {"User-Agent": "ShortsFactory/1.0 (local sample generator)"}
         if candidate.provider == "wikimedia_image" else None
     )
-    response = requests.get(candidate.download_url, headers=headers, timeout=45)
+    connect_timeout = _positive_env_int("MEDIA_CONNECT_TIMEOUT_SEC", 10)
+    read_timeout = _positive_env_int("MEDIA_READ_TIMEOUT_SEC", 30)
+    response = requests.get(
+        candidate.download_url,
+        headers=headers,
+        stream=True,
+        timeout=(connect_timeout, read_timeout),
+    )
     response.raise_for_status()
+    limit = media_limit(candidate.media_type)
+    try:
+        declared = int(response.headers.get("Content-Length", "0"))
+    except (TypeError, ValueError):
+        declared = 0
+    if declared > limit:
+        raise MediaTooLarge(f"미디어 크기 상한 초과: {declared}>{limit}")
+
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_bytes(response.content)
+    partial = Path(f"{output}.part")
+    written = 0
+    try:
+        with partial.open("wb") as stream:
+            for chunk in response.iter_content(chunk_size=DOWNLOAD_CHUNK_BYTES):
+                if not chunk:
+                    continue
+                written += len(chunk)
+                if written > limit:
+                    raise MediaTooLarge(f"미디어 크기 상한 초과: {written}>{limit}")
+                stream.write(chunk)
+        partial.replace(output)
+        return written
+    except Exception:
+        partial.unlink(missing_ok=True)
+        output.unlink(missing_ok=True)
+        raise
 
 
 def _is_usable_download(path: Path) -> bool:
@@ -249,6 +316,7 @@ async def fetch_story_media(
 ) -> tuple[Path | None, dict]:
     """검색어 순서를 지키며 무료 소스를 내려받고 출처 메타데이터를 반환한다."""
     clean_keywords = list(dict.fromkeys(value.strip() for value in keywords if value.strip()))
+    rejected_candidates = 0
     for keyword_index, raw_keyword in enumerate(clean_keywords):
         exact = raw_keyword.lower().startswith("exact:")
         keyword = raw_keyword.split(":", 1)[1].strip() if exact else raw_keyword
@@ -264,7 +332,10 @@ async def fetch_story_media(
                 suffix = ".mp4" if candidate.media_type == "video" else ".jpg"
                 output = Path(f"{output_stem}{suffix}")
                 try:
-                    _download_candidate(candidate, output)
+                    downloaded = _download_candidate(candidate, output)
+                except MediaTooLarge:
+                    rejected_candidates += 1
+                    continue
                 except (requests.RequestException, OSError):
                     continue
                 if not _is_usable_download(output):
@@ -279,6 +350,10 @@ async def fetch_story_media(
                     "fallback": keyword_index > 0,
                     "width": candidate.width,
                     "height": candidate.height,
+                    "download_bytes": (
+                        downloaded if isinstance(downloaded, int) else output.stat().st_size
+                    ),
+                    "rejected_candidates": rejected_candidates,
                 }
                 if candidate.license:
                     metadata["license"] = candidate.license
@@ -294,4 +369,6 @@ async def fetch_story_media(
         "fallback": True,
         "width": 1080,
         "height": 1920,
+        "download_bytes": 0,
+        "rejected_candidates": rejected_candidates,
     }

@@ -1,6 +1,8 @@
 """무료 미디어 후보 선별, 출처 기록, 중복 방지 테스트."""
 import asyncio
 
+import pytest
+
 from app.services import media_library
 from app.services.media_library import MediaCandidate, choose_candidate
 
@@ -29,6 +31,15 @@ def test_portrait_unique_candidate_wins():
 def test_higher_resolution_wins_between_portrait_candidates():
     chosen = choose_candidate([candidate(1, 720, 1280), candidate(2, 1080, 1920)], set())
     assert chosen.media_id == "2"
+
+
+def test_output_sized_variant_wins_over_4k():
+    chosen = media_library._best_variant([
+        {"link": "4k", "width": 2160, "height": 3840},
+        {"link": "output", "width": 1080, "height": 1920},
+        {"link": "small", "width": 720, "height": 1280},
+    ], "link")
+    assert chosen["link"] == "output"
 
 
 def test_all_duplicates_return_none():
@@ -62,6 +73,8 @@ def test_fetch_records_provenance_and_marks_id_used(tmp_path, monkeypatch):
         "fallback": False,
         "width": 1080,
         "height": 1920,
+        "download_bytes": 5,
+        "rejected_candidates": 0,
     }
 
 
@@ -175,9 +188,11 @@ def test_wikimedia_download_sends_identifying_user_agent(tmp_path, monkeypatch):
     captured = {}
 
     class Response:
-        content = b"image"
+        headers = {"Content-Length": "5"}
         def raise_for_status(self):
             return None
+        def iter_content(self, chunk_size):
+            yield b"image"
 
     def fake_get(url, **kwargs):
         captured.update(kwargs)
@@ -186,3 +201,56 @@ def test_wikimedia_download_sends_identifying_user_agent(tmp_path, monkeypatch):
     monkeypatch.setattr(media_library.requests, "get", fake_get)
     media_library._download_candidate(exact, tmp_path / "image.jpg")
     assert "ShortsFactory" in captured["headers"]["User-Agent"]
+
+
+def test_download_rejects_oversized_content_length_without_reading(tmp_path, monkeypatch):
+    picked = candidate(31, 1080, 1920)
+    output = tmp_path / "large.mp4"
+
+    class Response:
+        headers = {"Content-Length": "7"}
+        content = b"ignored"
+        iterated = False
+
+        def raise_for_status(self):
+            return None
+
+        def iter_content(self, chunk_size):
+            self.iterated = True
+            yield b"ignored"
+
+    response = Response()
+    monkeypatch.setenv("MEDIA_MAX_VIDEO_BYTES", "6")
+    monkeypatch.setattr(media_library.requests, "get", lambda *args, **kwargs: response)
+
+    with pytest.raises(media_library.MediaTooLarge):
+        media_library._download_candidate(picked, output)
+
+    assert response.iterated is False
+    assert not output.exists()
+    assert not (tmp_path / "large.mp4.part").exists()
+
+
+def test_download_stops_unknown_length_stream_at_limit(tmp_path, monkeypatch):
+    picked = candidate(32, 1080, 1920)
+    output = tmp_path / "stream.mp4"
+
+    class Response:
+        headers = {}
+        content = b"12345678"
+
+        def raise_for_status(self):
+            return None
+
+        def iter_content(self, chunk_size):
+            yield b"1234"
+            yield b"5678"
+
+    monkeypatch.setenv("MEDIA_MAX_VIDEO_BYTES", "6")
+    monkeypatch.setattr(media_library.requests, "get", lambda *args, **kwargs: Response())
+
+    with pytest.raises(media_library.MediaTooLarge):
+        media_library._download_candidate(picked, output)
+
+    assert not output.exists()
+    assert not (tmp_path / "stream.mp4.part").exists()
