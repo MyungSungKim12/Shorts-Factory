@@ -145,6 +145,14 @@ class VisualIdentity(BaseModel):
     safe_fallbacks: list[str] = Field(min_length=1, max_length=5)
     required_exact: bool = True
 
+    @field_validator("exact_queries", "safe_fallbacks")
+    @classmethod
+    def _queries_are_nonblank(cls, values: list[str]) -> list[str]:
+        cleaned = [(value or "").strip() for value in values]
+        if any(not value for value in cleaned):
+            raise ValueError("visual identity query must not be blank")
+        return cleaned
+
 
 class StoryTopicContract(BaseModel):
     """단일 소재 스토리 리서처 산출물 계약."""

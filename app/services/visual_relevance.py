@@ -16,7 +16,9 @@ def _unique(values: list[str], limit: int | None = None) -> list[str]:
 
 def _exact(query: str) -> str:
     value = (query or "").strip()
-    return value if value.startswith("exact:") else f"exact:{value}"
+    if value.startswith("exact:"):
+        value = value.removeprefix("exact:").strip()
+    return f"exact: {value}" if value else ""
 
 
 def ensure_visual_identity(topic: dict) -> dict:

@@ -1,7 +1,9 @@
 """Verified-subject visual anchors for story media selection."""
 
+import pytest
+
 from app.models import validate_topic
-from app.services.visual_relevance import story_scene_queries
+from app.services.visual_relevance import ensure_visual_identity, story_scene_queries
 
 
 def _story_topic():
@@ -45,6 +47,29 @@ def test_missing_visual_identity_is_derived_from_verified_topic():
     assert identity["exact_queries"][0].startswith("exact:")
     assert identity["safe_fallbacks"]
     assert identity["required_exact"] is True
+
+
+def test_blank_exact_query_derives_the_verified_target_anchor():
+    topic = _story_topic()
+    topic["visual_identity"] = {
+        "exact_queries": [""],
+        "safe_fallbacks": ["desert lake aerial"],
+    }
+
+    identity = ensure_visual_identity(topic)["visual_identity"]
+
+    assert identity["exact_queries"][0] == "exact: desert lake"
+
+
+def test_story_contract_rejects_blank_visual_identity_queries():
+    topic = _story_topic()
+    topic["visual_identity"] = {
+        "exact_queries": [""],
+        "safe_fallbacks": ["desert lake aerial"],
+    }
+
+    with pytest.raises(ValueError):
+        validate_topic(topic, "story")
 
 
 def test_hook_and_close_queries_keep_subject_anchor():
