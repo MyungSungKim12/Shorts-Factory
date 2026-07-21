@@ -192,8 +192,8 @@ def test_subtitle_style_moves_caption_to_lower_middle():
 
 def test_caption_highlights_only_one_number_or_keyword():
     highlighted = story_producer._highlight_caption("무려 300일 동안 번개가 칩니다")
-    assert highlighted.count(r"{\c&H00D7FF&}") == 1
-    assert highlighted.count(r"{\c&HFFFFFF&}") == 1
+    assert highlighted.count('<font color="#FFD700">') == 1
+    assert highlighted.count("</font>") == 1
     assert "300일" in highlighted
 
 
@@ -220,6 +220,9 @@ def test_finish_video_normalizes_both_overlay_aspect_ratios(tmp_path, monkeypatc
     assert "[0:v]setsar=1,subtitles=" in filters
     assert "[1:v]setsar=1[title]" in filters
     assert "[subbed][title]overlay=0:0" in filters
+    title_input = seen["cmd"].index(str(tmp_path / "title.png"))
+    assert seen["cmd"][title_input - 3:title_input] == ["-loop", "1", "-i"]
+    assert "overlay=0:0:shortest=1" in filters
 
 
 def test_transition_events_are_limited_to_hook_and_payoff():
@@ -328,8 +331,30 @@ def test_story_srt_appends_cta_for_exact_audio_window(tmp_path):
     )
 
     subtitles = output.read_text(encoding="utf-8")
-    assert "00:00:06,000 --> 00:00:09,200" in subtitles
-    assert "구독과 좋아요 부탁드립니다." in subtitles
+    assert "00:00:06,000" in subtitles
+    assert "00:00:09,200" in subtitles
+    assert "구독" in subtitles
+    assert "좋아요" in subtitles
+
+
+def test_long_cta_is_split_into_short_caption_cues(tmp_path):
+    output = tmp_path / "subs.srt"
+    story_producer._write_srt(
+        {"scenes": []},
+        scene_durations={},
+        audio_durations={},
+        output=output,
+        cta={
+            "text": "사막의 신비로운 자연 이야기를 계속 보고 싶으시다면 구독과 좋아요 부탁드립니다!",
+            "start": 60.0,
+            "end": 66.0,
+        },
+    )
+
+    subtitles = output.read_text(encoding="utf-8")
+    assert subtitles.count("-->") >= 2
+    assert "00:01:00,000" in subtitles
+    assert "00:01:06,000" in subtitles
 
 
 def test_story_srt_starts_with_title_and_shifts_body(tmp_path):

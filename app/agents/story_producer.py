@@ -367,9 +367,9 @@ def _highlight_caption(text: str) -> str:
         return text
     return (
         text[:match.start()]
-        + r"{\c&H00D7FF&}"
+        + '<font color="#FFD700">'
         + match.group(0)
-        + r"{\c&HFFFFFF&}"
+        + "</font>"
         + text[match.end():]
     )
 
@@ -494,13 +494,21 @@ def _write_srt(
             cursor += chunk_duration
         current += scene_duration
     if cta:
-        cue += 1
-        lines.extend([
-            str(cue),
-            f"{_srt_time(cta['start'])} --> {_srt_time(cta['end'])}",
-            _highlight_caption(cta["text"]),
-            "",
-        ])
+        chunks = _split_caption(cta["text"])
+        weights = [max(1, len(chunk)) for chunk in chunks]
+        total_weight = sum(weights)
+        cursor = float(cta["start"])
+        duration = float(cta["end"]) - cursor
+        for chunk, weight in zip(chunks, weights):
+            chunk_duration = duration * weight / total_weight
+            cue += 1
+            lines.extend([
+                str(cue),
+                f"{_srt_time(cursor)} --> {_srt_time(cursor + chunk_duration)}",
+                _highlight_caption(chunk),
+                "",
+            ])
+            cursor += chunk_duration
     output.write_text("\n".join(lines), encoding="utf-8")
 
 
@@ -614,7 +622,7 @@ def _finish_video(
         title_index = 1
         base_audio_filter = "[0:a]anull[aout]" if use_tone else ""
 
-    cmd += ["-i", str(title_overlay)]
+    cmd += ["-loop", "1", "-i", str(title_overlay)]
     tone_index = title_index + 1
     if use_tone:
         cmd += ["-i", str(transition_tone)]
@@ -622,7 +630,7 @@ def _finish_video(
     filters = (
         f"[0:v]{video_filter}[subbed];"
         f"[{title_index}:v]setsar=1[title];"
-        "[subbed][title]overlay=0:0[vout]"
+        "[subbed][title]overlay=0:0:shortest=1[vout]"
     )
     if base_audio_filter:
         filters += ";" + base_audio_filter
