@@ -521,6 +521,69 @@ def _pick_bgm() -> Path | None:
     return tracks[datetime.now().timetuple().tm_yday % len(tracks)].resolve()
 
 
+def _transition_scene_numbers(script: dict) -> list[int]:
+    selected = []
+    for scene in script.get("scenes", []):
+        if scene.get("role") in {"hook", "payoff"}:
+            selected.append(int(scene["n"]))
+        if len(selected) == 2:
+            break
+    return selected
+
+
+def _transition_times(
+    script: dict,
+    scene_durations: dict[int, float],
+    body_start: float,
+) -> list[float]:
+    selected = set(_transition_scene_numbers(script))
+    times = []
+    cursor = float(body_start)
+    for scene in script.get("scenes", []):
+        scene_n = int(scene["n"])
+        if scene_n in selected:
+            times.append(0.0 if scene.get("role") == "hook" else round(cursor, 3))
+        cursor += float(scene_durations[scene_n])
+    return times[:2]
+
+
+def _create_transition_tone(path: Path, ffmpeg_path: str) -> bool:
+    try:
+        _run_ffmpeg([
+            ffmpeg_path,
+            "-f", "lavfi",
+            "-i", "sine=frequency=520:duration=0.12",
+            "-af", "afade=t=out:st=0.07:d=0.05,volume=0.035",
+            "-c:a", "pcm_s16le",
+            "-y", str(path),
+        ])
+    except RuntimeError:
+        return False
+    return path.is_file()
+
+
+def _transition_audio_filter(tone_index: int, times: list[float]) -> str:
+    count = min(2, len(times))
+    if count == 0:
+        return ""
+    split = (
+        f"[{tone_index}:a]asplit={count}"
+        + "".join(f"[tone{index}]" for index in range(count))
+        + ";"
+    )
+    delays = "".join(
+        f"[tone{index}]adelay={round(times[index] * 1000)}:all=1[cue{index}];"
+        for index in range(count)
+    )
+    inputs = "[aout]" + "".join(f"[cue{index}]" for index in range(count))
+    return (
+        split
+        + delays
+        + f"{inputs}amix=inputs={count + 1}:duration=first:"
+        "dropout_transition=0[finala]"
+    )
+
+
 def _finish_video(
     concat_video: Path,
     output: Path,
@@ -528,31 +591,48 @@ def _finish_video(
     title_overlay: Path,
     ffmpeg_path: str,
     tmp_path: Path,
+    transition_tone: Path | None = None,
+    transition_times: list[float] | None = None,
 ) -> None:
     font = os.getenv("SUBTITLE_FONT", "Malgun Gothic")
     style = _subtitle_style(font)
     video_filter = f"setsar=1,subtitles=subs.srt:force_style='{style}'"
     bgm = _pick_bgm()
+    cue_times = (transition_times or [])[:2]
+    use_tone = transition_tone is not None and bool(cue_times)
+    cmd = [ffmpeg_path, "-i", str(concat_video)]
     if bgm:
         volume = os.getenv("BGM_VOLUME", "0.08")
-        cmd = [
-            ffmpeg_path, "-i", str(concat_video), "-stream_loop", "-1", "-i", str(bgm),
-            "-i", str(title_overlay),
-            "-filter_complex",
-            f"[0:v]{video_filter}[subbed];[2:v]setsar=1[title];"
-            f"[subbed][title]overlay=0:0[vout];"
+        cmd += ["-stream_loop", "-1", "-i", str(bgm)]
+        title_index = 2
+        base_audio_filter = (
             f"[1:a]volume={volume}[bg];"
             "[bg][0:a]sidechaincompress=threshold=0.02:ratio=8[ducked];"
-            "[0:a][ducked]amix=inputs=2:duration=first:dropout_transition=2[aout]",
-            "-map", "[vout]", "-map", "[aout]",
-        ]
+            "[0:a][ducked]amix=inputs=2:duration=first:dropout_transition=2[aout]"
+        )
     else:
-        cmd = [
-            ffmpeg_path, "-i", str(concat_video), "-i", str(title_overlay),
-            "-filter_complex",
-            f"[0:v]{video_filter}[subbed];[1:v]setsar=1[title];"
-            f"[subbed][title]overlay=0:0[vout]",
-            "-map", "[vout]", "-map", "0:a:0",
+        title_index = 1
+        base_audio_filter = "[0:a]anull[aout]" if use_tone else ""
+
+    cmd += ["-i", str(title_overlay)]
+    tone_index = title_index + 1
+    if use_tone:
+        cmd += ["-i", str(transition_tone)]
+
+    filters = (
+        f"[0:v]{video_filter}[subbed];"
+        f"[{title_index}:v]setsar=1[title];"
+        "[subbed][title]overlay=0:0[vout]"
+    )
+    if base_audio_filter:
+        filters += ";" + base_audio_filter
+    if use_tone:
+        filters += ";" + _transition_audio_filter(tone_index, cue_times)
+
+    audio_map = "[finala]" if use_tone else ("[aout]" if bgm else "0:a:0")
+    cmd += [
+            "-filter_complex", filters,
+            "-map", "[vout]", "-map", audio_map,
         ]
     cmd += [
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "25",
@@ -738,9 +818,23 @@ async def run_story_producer(
         title_overlay = tmp_path / "title-overlay.png"
         title_metadata = _create_title_overlay(script["title"], title_overlay)
 
+        transition_times = _transition_times(
+            script, scene_durations, story_timing["body_start"]
+        )
+        transition_tone = tmp_path / "transition.wav"
+        if not _create_transition_tone(transition_tone, ffmpeg_path):
+            transition_tone = None
+
         output_mp4 = work_dir / "output.mp4"
         _finish_video(
-            concat_video, output_mp4, srt_path, title_overlay, ffmpeg_path, tmp_path
+            concat_video,
+            output_mp4,
+            srt_path,
+            title_overlay,
+            ffmpeg_path,
+            tmp_path,
+            transition_tone=transition_tone,
+            transition_times=transition_times,
         )
         actual_duration = _duration(output_mp4, ffmpeg_path)
         cta_log_result = cta_result or scene_tts_results[script["scenes"][-1]["n"]]
@@ -755,6 +849,12 @@ async def run_story_producer(
         "script_sha256": hashlib.sha256(script_file.read_bytes()).hexdigest(),
         "tts": summarize_tts(tts_results),
         "layout": {**STORY_LAYOUT, "title": title_metadata},
+        "retention_editing": {
+            "subtitle_margin_v": 90,
+            "highlighting": True,
+            "transition_times": transition_times if transition_tone else [],
+            "shot_count": len(sources),
+        },
         "intro": {
             "text": spoken_intro,
             "audio_duration": round(intro_audio_duration, 3),

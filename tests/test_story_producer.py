@@ -222,6 +222,43 @@ def test_finish_video_normalizes_both_overlay_aspect_ratios(tmp_path, monkeypatc
     assert "[subbed][title]overlay=0:0" in filters
 
 
+def test_transition_events_are_limited_to_hook_and_payoff():
+    script = {"scenes": [
+        {"n": 1, "role": "hook"},
+        {"n": 2, "role": "context"},
+        {"n": 3, "role": "payoff"},
+        {"n": 4, "role": "close"},
+    ]}
+    assert story_producer._transition_scene_numbers(script) == [1, 3]
+
+
+def test_finish_video_mixes_two_transition_cues(tmp_path, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(story_producer, "_pick_bgm", lambda: None)
+    monkeypatch.setattr(
+        story_producer,
+        "_run_ffmpeg",
+        lambda cmd, cwd=None: seen.update(cmd=cmd, cwd=cwd),
+    )
+
+    story_producer._finish_video(
+        tmp_path / "concat.mp4",
+        tmp_path / "output.mp4",
+        tmp_path / "subs.srt",
+        tmp_path / "title.png",
+        "ffmpeg",
+        tmp_path,
+        transition_tone=tmp_path / "transition.wav",
+        transition_times=[0.0, 12.5],
+    )
+
+    filters = seen["cmd"][seen["cmd"].index("-filter_complex") + 1]
+    assert "asplit=2" in filters
+    assert "adelay=12500:all=1" in filters
+    assert "amix=inputs=3" in filters
+    assert seen["cmd"][seen["cmd"].index("-map") + 3] == "[finala]"
+
+
 def test_story_layout_reserves_fixed_title_and_subtitle_bands():
     assert story_producer.STORY_LAYOUT == {
         "canvas_width": 1080,
