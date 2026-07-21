@@ -29,6 +29,8 @@ def _conn(data_dir: Path) -> sqlite3.Connection:
 
 def save_verified(data_dir: Path, slot, topic_dict: dict) -> None:
     """그라운딩으로 검증된 소재를 캐시에 저장/갱신."""
+    if topic_dict.get("verification_method") != "grounded_search":
+        raise ValueError("verified cache accepts only grounded_search topics")
     db = _conn(data_dir)
     try:
         now = datetime.now().isoformat()
@@ -88,5 +90,17 @@ def cache_size(data_dir: Path, slot=None) -> int:
         if slot is None:
             return db.execute("SELECT COUNT(*) FROM verified_topics").fetchone()[0]
         return db.execute("SELECT COUNT(*) FROM verified_topics WHERE slot = ?", (slot,)).fetchone()[0]
+    finally:
+        db.close()
+
+
+def cached_topics(data_dir: Path) -> set[str]:
+    """Return all cached topic titles for duplicate exclusion during warming."""
+    db_file = data_dir / "videos.sqlite"
+    if not db_file.exists():
+        return set()
+    db = _conn(data_dir)
+    try:
+        return {row[0] for row in db.execute("SELECT topic FROM verified_topics")}
     finally:
         db.close()

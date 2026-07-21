@@ -8,6 +8,21 @@ from app.content_format import get_content_format
 from app.services.claude_client import call_agent
 from app.services.web_search import search_ranking_topics
 
+
+class GroundingUnavailable(RuntimeError):
+    """A grounded-only research request could not obtain a verified topic."""
+
+    def __init__(self, message: str, *, daily_quota: bool) -> None:
+        super().__init__(message)
+        self.daily_quota = daily_quota
+
+
+def _is_daily_quota_error(error: Exception) -> bool:
+    message = str(error).lower().replace(" ", "")
+    return any(marker in message for marker in (
+        "daily", "perday", "quotaexceeded", "일일", "할당초과",
+    ))
+
 # 회차별 고정 카테고리 — 매일 3개 영상이 서로 다른 결로 나오고, 카테고리별 성과 비교(A/B)도 됨.
 # desc는 "무료 스톡(Pexels) 영상이 존재하는 대상"으로 유도하는 게 핵심.
 SLOT_CATEGORIES = {
@@ -61,6 +76,8 @@ def _load_recent_topics(data_dir: Path, days: int = 14) -> list:
         rows = db.execute(
             "SELECT title FROM videos WHERE date >= ? ORDER BY date DESC", (cutoff,)
         ).fetchall()
+    except sqlite3.OperationalError:
+        return []
     finally:
         db.close()
     return [r[0] for r in rows]
@@ -73,6 +90,7 @@ def run_researcher(
     content_format: str | None = None,
     work_root: str = "work",
     use_cache: bool = True,
+    verification_policy: str = "normal",
 ) -> dict:
     """
     랭킹 소재를 발굴하고 순위 데이터를 수집한다.
@@ -85,6 +103,9 @@ def run_researcher(
     Returns:
         topic.json 스키마 dict
     """
+    if verification_policy not in {"normal", "grounded_only"}:
+        raise ValueError("verification_policy must be 'normal' or 'grounded_only'")
+
     selected = get_content_format(content_format)
     if recent_topics is None:
         recent_topics = _load_recent_topics(data_dir)
@@ -141,6 +162,11 @@ def run_researcher(
         else:
             safe_print("  ✓ 검색 그라운딩으로 검증 (샘플 모드: 캐시 미사용)")
     except Exception as e:
+        if verification_policy == "grounded_only":
+            raise GroundingUnavailable(
+                f"grounded research unavailable: {e}",
+                daily_quota=_is_daily_quota_error(e),
+            ) from e
         safe_print(f"  ℹ️ 그라운딩 검증 실패({str(e)[:60]}) — 검증 캐시에서 소재 찾기")
         cache_slot = 0 if selected == "story" else slot
         cached = pick_cached(data_dir, cache_slot, recent_topics) if use_cache else None

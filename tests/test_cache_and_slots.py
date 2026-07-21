@@ -47,3 +47,14 @@ def test_회차_카테고리_매핑():
     # 모든 카테고리에 영상 폴백어 존재
     for c in SLOT_CATEGORIES.values():
         assert c.get("visual_fallback")
+
+
+def test_cached_topics_supports_warmer_exclusions():
+    from app.services.fact_cache import cached_topics
+
+    with tempfile.TemporaryDirectory() as td:
+        d = Path(td)
+        save_verified(d, 1, _topic("animal topic"))
+        save_verified(d, 2, _topic("travel topic"))
+
+        assert cached_topics(d) == {"animal topic", "travel topic"}
