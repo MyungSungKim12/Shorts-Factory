@@ -35,6 +35,7 @@ class MediaCandidate:
     license: str = ""
     attribution: str = ""
     description: str = ""
+    alternate_download_url: str = ""
 
     @property
     def unique_id(self) -> str:
@@ -291,6 +292,10 @@ def _wikimedia_image_candidates(keyword: str) -> list[MediaCandidate]:
                     _plain_text((metadata.get("ObjectName") or {}).get("value", "")),
                     _plain_text((metadata.get("ImageDescription") or {}).get("value", "")),
                 ))),
+                alternate_download_url=(
+                    image_info.get("url", "")
+                    if image_info.get("url") != download_url else ""
+                ),
             ))
         return candidates
     except (requests.RequestException, ValueError, TypeError):
@@ -318,13 +323,27 @@ def _download_candidate(candidate: MediaCandidate, output: Path) -> int:
     )
     connect_timeout = _positive_env_int("MEDIA_CONNECT_TIMEOUT_SEC", 10)
     read_timeout = _positive_env_int("MEDIA_READ_TIMEOUT_SEC", 30)
-    response = requests.get(
-        candidate.download_url,
-        headers=headers,
-        stream=True,
-        timeout=(connect_timeout, read_timeout),
-    )
-    response.raise_for_status()
+    download_urls = [candidate.download_url]
+    if candidate.alternate_download_url and candidate.alternate_download_url != candidate.download_url:
+        download_urls.append(candidate.alternate_download_url)
+    response = None
+    for index, download_url in enumerate(download_urls):
+        response = requests.get(
+            download_url,
+            headers=headers,
+            stream=True,
+            timeout=(connect_timeout, read_timeout),
+        )
+        try:
+            response.raise_for_status()
+            break
+        except requests.HTTPError as exc:
+            status_code = getattr(exc.response, "status_code", None)
+            has_alternate = index + 1 < len(download_urls)
+            if status_code == 429 and has_alternate:
+                continue
+            raise
+    assert response is not None
     limit = media_limit(candidate.media_type)
     try:
         declared = int(response.headers.get("Content-Length", "0"))

@@ -99,6 +99,32 @@ def test_quality_gate_rejects_text_only_veo_as_exact_real_subject(
         quality_gate.validate_upload_package(tmp_path, "ffmpeg")
 
 
+def test_quality_gate_rejects_ai_opening_without_reference_provenance(
+    tmp_path, monkeypatch
+):
+    _, produce = _package(tmp_path)
+    produce["visual_relevance"] = {
+        "required_exact": False,
+        "exact_source_count": 0,
+        "generic_fallback_count": 0,
+        "unrelated_fallback_count": 0,
+        "opening_strategy": "vertex_veo_image",
+    }
+    produce["intro"]["ai_generation"] = {
+        "provider": "vertex_veo",
+        "status": "ready",
+        "asset_id": "asset-1",
+        "subject_key": "richat-structure",
+    }
+    (tmp_path / "produce_log.json").write_text(
+        json.dumps(produce, ensure_ascii=False), encoding="utf-8"
+    )
+    monkeypatch.setattr(quality_gate, "probe_video", lambda *args: _valid_probe())
+
+    with pytest.raises(RuntimeError, match="ai_opening_provenance"):
+        quality_gate.validate_upload_package(tmp_path, "ffmpeg")
+
+
 def test_quality_gate_accepts_logged_stock_fallback_when_exact_media_is_unavailable(
     tmp_path, monkeypatch
 ):

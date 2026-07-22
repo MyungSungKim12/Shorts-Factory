@@ -23,16 +23,17 @@
 
 ---
 
-## 2. 업로드 스케줄 (하루 3회)
+## 2. 업로드 스케줄 (하루 4회)
 
 | 회차 | 시간(KST) | 카테고리 |
 |------|-----------|----------|
-| 1 | 11:00 | 🐶 동물/펫 |
-| 2 | 17:00 | ✈️ 여행/명소 |
-| 3 | 21:00 | 🏛️ 역사 |
+| 1 | 11:00 | 극한 생존/위험한 동물 |
+| 4 | 14:00 | 미스터리/기이한 기록 |
+| 2 | 17:00 | 금지된 장소/거대 구조 |
+| 3 | 21:00 | 역사적 반전/재난/치명적 실수 |
 
 - 기술적 상한은 하루 6회 (YouTube API 쿼터 10,000 ÷ 업로드당 1,600).
-- 운영 설정은 하루 3회이며 `.env`의 `DAILY_UPLOAD_LIMIT=3`으로 추가 실행도 차단한다.
+- 운영 cron은 하루 4회이며 코드의 기술적 상한은 하루 6회다.
 - 회차 = `run_id`의 `-N` (예: `20260716-2` = 7/16 2회차).
 
 ---
@@ -162,8 +163,10 @@ git add . ; git commit -m "메시지" ; git push
 
 - 작업 폴더는 **7일 보관 후 자동 삭제** (`run_daily.py`의 cleanup). 하루 4회 × 7일 ≈ 2~4GB 유지.
 - 영상 원본은 유튜브에 있으므로 로컬 삭제해도 손실 없음.
+- AI 자산은 `data/media/ai_openings/`에 별도 저장하며 **자동 삭제하지 않는다**. 검증 실패 자산도 `rejected` 상태로 보존하고 재사용에서만 제외한다.
+- AI 라이브러리는 같은 실제 대상 자산을 먼저 재사용한다. 신규 생성은 검증된 실제 이미지가 있을 때만 허용하며, 실패·할당량·크레딧 소진 시 무료 스톡으로 폴백한다.
 ```bash
-ssh -i "D:\ms\ssh-key-2026-07-10.key" ubuntu@168.107.15.146 "df -h / | tail -1; du -sh shorts-factory-be/data; ls shorts-factory-be/data/work"
+ssh -i "D:\ms\ssh-key-2026-07-10.key" ubuntu@168.107.15.146 "df -h / | tail -1; du -sh shorts-factory-be/data shorts-factory-be/data/media/ai_openings 2>/dev/null; ls shorts-factory-be/data/work"
 ```
 
 ---
@@ -183,6 +186,9 @@ ssh -i "D:\ms\ssh-key-2026-07-10.key" ubuntu@168.107.15.146 "df -h / | tail -1; 
 | `CHANNEL_NAME` | 오프닝 브랜딩 (비우면 생략, 현재 비어있음) |
 | `UPLOAD_PRIVACY` | `public` |
 | `DAILY_UPLOAD_LIMIT` | 6 (코드가 상한 강제) |
+| `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_LOCATION` | Vertex AI 프로젝트와 리전 |
+| `VEO_OPENING_ENABLED` / `VEO_MODEL` | 실제 이미지 기반 AI 오프닝 활성화와 모델 |
+| `VEO_OPENING_MAX_SEC` | 제목 인트로에서 AI 편집본을 사용할 최대 길이(기본 3초) |
 | `DASHBOARD_TOKEN` | 대시보드 수동실행 보호 토큰 |
 
 ### credentials/ (서버, 커밋 금지)

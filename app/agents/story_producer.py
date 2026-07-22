@@ -5,6 +5,7 @@ import json
 import math
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 from datetime import datetime
@@ -13,6 +14,12 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 from app.console import safe_print
+from app.services.ai_opening_library import (
+    AiOpeningLibrary,
+    build_opening_derivative,
+    normalize_subject_key,
+    validate_ai_opening,
+)
 from app.services.media_library import (
     exact_source_matches,
     fetch_required_exact_media,
@@ -22,6 +29,7 @@ from app.services.process_runner import run_checked
 from app.services.temp_cleanup import mark_temp_owner
 from app.services.tts import TTSResult, synthesize
 from app.services.visual_relevance import ensure_visual_identity, story_scene_queries
+from app.services.vertex_video import generate_opening_video
 
 
 DEFAULT_STORY_CTA = "이런 이야기가 더 궁금하다면, 구독과 좋아요 부탁드립니다."
@@ -38,42 +46,182 @@ STORY_LAYOUT = {
 
 def _select_opening_source(
     identity: dict,
+    topic: dict,
+    data_dir: Path,
     temp_dir: Path,
     used_ids: set[str],
+    *,
+    ffmpeg_path: str,
+    run_id: str,
+    library: AiOpeningLibrary | None = None,
+    generator=None,
+    validator=None,
+    derivative_builder=None,
 ) -> dict:
-    """검증된 실제 자료를 우선하고 부정확한 랜드마크 재현은 거부한다."""
+    """영구 AI 자산을 우선하고 실제 기준 이미지가 있을 때만 새로 생성한다."""
     result = {
         "required_media": None,
         "required_metadata": {},
+        "ai_media": None,
         "ai_generation": None,
         "strategy": "stock_only",
     }
     if not identity.get("required_exact"):
         return result
+    queries = identity.get("exact_queries") or []
+    subject = str(queries[0] if queries else topic.get("topic") or "").removeprefix(
+        "exact:"
+    ).strip()
+    subject_key = normalize_subject_key(subject)
+    library = library or AiOpeningLibrary(Path(data_dir))
+    generator = generator or generate_opening_video
+    validator = validator or validate_ai_opening
+    derivative_builder = derivative_builder or build_opening_derivative
+
+    reusable = library.find_reusable_asset(subject_key)
+    if reusable is not None:
+        library.mark_asset_used(reusable.asset_id, run_id)
+        metadata = dict(reusable.source_metadata)
+        metadata.update(
+            ai_asset_id=reusable.asset_id,
+            ai_reference=True,
+            exact_match=True,
+        )
+        result.update(
+            required_media=reusable.reference_path,
+            required_metadata=metadata,
+            ai_media=reusable.opening_path,
+            strategy="ai_library",
+            ai_generation={
+                "provider": "vertex_veo",
+                "status": "ready",
+                "asset_id": reusable.asset_id,
+                "subject_key": subject_key,
+                "model": reusable.model,
+                "reused": True,
+                "reference_source_url": reusable.source_url,
+            },
+        )
+        return result
+
     try:
         media, metadata = fetch_required_exact_media(
             identity, temp_dir / "required-exact", used_ids
         )
-        result.update(
-            required_media=media,
-            required_metadata=metadata,
-            strategy="exact_stock",
-        )
-        return result
     except RuntimeError as exc:
         exact_error = " ".join(str(exc).split())[:300]
+        result.update(
+            strategy="stock_after_exact_failure",
+            ai_generation={
+                "provider": "vertex_veo",
+                "status": "skipped_unverified_real_subject",
+                "subject_key": subject_key,
+                "exact_media_error": exact_error,
+            },
+        )
+        return result
 
-    # 텍스트만으로 만든 영상은 그럴듯해도 실제 랜드마크와 크게 다를 수 있다.
-    # 생성 영상을 사실 자료로 표시하지 않고, 기록을 남긴 뒤 일반 스톡으로 대체한다.
+    asset_id, asset_dir = library.create_asset_workspace(subject_key)
+    suffix = Path(media).suffix.lower() or ".jpg"
+    reference = asset_dir / f"reference{suffix}"
+    master = asset_dir / "master.mp4"
+    opening = asset_dir / "opening.mp4"
+    shutil.copy2(media, reference)
+    persistent_metadata = dict(metadata)
+    persistent_metadata["ai_asset_id"] = asset_id
     result.update(
-        strategy="stock_after_exact_failure",
-        ai_generation={
-            "provider": "none",
-            "status": "skipped_unverified_real_subject",
-            "exact_media_error": exact_error,
-        },
+        required_media=reference,
+        required_metadata=persistent_metadata,
+        strategy="exact_stock",
     )
+    prompt = ""
+    model = ""
+    validation = {}
+    try:
+        generated = generator(reference, master, subject)
+        model = generated.model
+        prompt = "verified image with identity-preserving minimal motion"
+        validation = validator(reference, master, ffmpeg_path=ffmpeg_path)
+        if not validation.get("passed"):
+            raise RuntimeError(
+                "AI opening validation failed: "
+                + ", ".join(validation.get("failures") or ["unknown"])
+            )
+        derivative_builder(master, opening, ffmpeg_path=ffmpeg_path)
+        asset = library.register_asset(metadata={
+            "asset_id": asset_id,
+            "subject_key": subject_key,
+            "reuse_scope": "exact_subject",
+            "status": "ready",
+            "reference_path": str(reference),
+            "master_path": str(master),
+            "opening_path": str(opening),
+            "source_url": metadata.get("source_url", ""),
+            "license": metadata.get("license", ""),
+            "source_metadata": metadata,
+            "model": model,
+            "prompt": prompt,
+            "validation": validation,
+        })
+        library.mark_asset_used(asset_id, run_id)
+        result.update(
+            ai_media=asset.opening_path,
+            strategy="vertex_veo_image",
+            ai_generation={
+                "provider": "vertex_veo",
+                "status": "ready",
+                "asset_id": asset_id,
+                "subject_key": subject_key,
+                "model": generated.model,
+                "duration_sec": generated.duration_sec,
+                "estimated_cost_usd": generated.estimated_cost_usd,
+                "reused": False,
+                "validation": validation,
+                "reference_source_url": metadata.get("source_url", ""),
+            },
+        )
+    except Exception as exc:
+        error = " ".join(str(exc).split())[:500]
+        library.register_asset(metadata={
+            "asset_id": asset_id,
+            "subject_key": subject_key,
+            "reuse_scope": "exact_subject",
+            "status": "rejected",
+            "reference_path": str(reference),
+            "master_path": str(master),
+            "opening_path": str(opening),
+            "source_url": metadata.get("source_url", ""),
+            "license": metadata.get("license", ""),
+            "source_metadata": metadata,
+            "model": model,
+            "prompt": prompt,
+            "validation": validation,
+            "error": error,
+        })
+        result.update(
+            strategy="stock_after_veo_failure",
+            ai_generation={
+                "provider": "vertex_veo",
+                "status": "failed",
+                "asset_id": asset_id,
+                "subject_key": subject_key,
+                "error": error,
+                "reference_source_url": metadata.get("source_url", ""),
+            },
+        )
     return result
+
+
+def _opening_segment_durations(
+    intro_duration: float,
+    has_ai: bool,
+    max_ai_duration: float,
+) -> tuple[float, float]:
+    total = max(0.0, float(intro_duration))
+    if not has_ai:
+        return 0.0, round(total, 3)
+    ai_duration = min(total, max(0.0, float(max_ai_duration)))
+    return round(ai_duration, 3), round(total - ai_duration, 3)
 
 
 def normalize_story_cta(value: str | None) -> tuple[str, bool]:
@@ -855,7 +1003,15 @@ async def run_story_producer(
         tmp_path = Path(tmpdir)
         mark_temp_owner(tmp_path)
         used_ids: set[str] = set()
-        opening_source = _select_opening_source(identity, tmp_path, used_ids)
+        opening_source = _select_opening_source(
+            identity,
+            topic,
+            Path(data_dir),
+            tmp_path,
+            used_ids,
+            ffmpeg_path=ffmpeg_path,
+            run_id=run_id,
+        )
         required_media = opening_source["required_media"]
         required_metadata = opening_source["required_metadata"]
         tts_results = []
@@ -1011,13 +1167,38 @@ async def run_story_producer(
         if first_media is None or last_media is None:
             raise RuntimeError("CTA 엔딩에 재사용할 마지막 시각 소스가 없습니다")
         intro_visual = tmp_path / "intro-visual.mp4"
-        _encode_visual(
-            first_media,
-            intro_visual,
-            story_timing["intro_duration"],
-            ffmpeg_path,
-            preserve_full=first_metadata.get("provider") == "wikimedia_image",
+        try:
+            max_ai_duration = float(os.getenv("VEO_OPENING_MAX_SEC", "3.0"))
+        except ValueError:
+            max_ai_duration = 3.0
+        ai_media = opening_source["ai_media"]
+        ai_duration, stock_duration = _opening_segment_durations(
+            story_timing["intro_duration"], bool(ai_media), max_ai_duration
         )
+        if ai_media is not None and stock_duration > 0:
+            ai_segment = tmp_path / "intro-ai-segment.mp4"
+            stock_segment = tmp_path / "intro-stock-segment.mp4"
+            _encode_visual(ai_media, ai_segment, ai_duration, ffmpeg_path)
+            _encode_visual(
+                first_media,
+                stock_segment,
+                stock_duration,
+                ffmpeg_path,
+                preserve_full=first_metadata.get("provider") == "wikimedia_image",
+            )
+            _concat_files([ai_segment, stock_segment], intro_visual, ffmpeg_path, tmp_path)
+        elif ai_media is not None:
+            _encode_visual(ai_media, intro_visual, ai_duration, ffmpeg_path)
+        else:
+            _encode_visual(
+                first_media,
+                intro_visual,
+                story_timing["intro_duration"],
+                ffmpeg_path,
+                preserve_full=first_metadata.get("provider") == "wikimedia_image",
+            )
+        if opening_source["ai_generation"] is not None:
+            opening_source["ai_generation"]["used_duration_sec"] = ai_duration
         intro_video = tmp_path / "scene-intro.mp4"
         _attach_narration(
             intro_visual,

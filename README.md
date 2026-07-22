@@ -38,7 +38,7 @@ Python 에이전트 모듈이 각 단계를 담당하며, 무료 스톡과 Googl
 ② 대본 작가 모듈 ────────── 60~75초 스토리 대본 + 제목/설명/태그 생성
         │
         ▼
-③ 영상 제작 모듈 ────────── Google 여성 TTS + 무료 스톡·AI 오프닝 + 자막
+③ 영상 제작 모듈 ────────── Google 여성 TTS + 실제 이미지 기반 AI 오프닝 + 자막
         │                    → ffmpeg로 합성 (D:\ms\ffmpeg-8.1.2 활용)
         ▼
 ④ 업로더 모듈 ───────────── YouTube Data API v3로 자동 업로드
@@ -59,9 +59,12 @@ Python 에이전트 모듈이 각 단계를 담당하며, 무료 스톡과 Googl
 | TTS 음성 | Google Cloud Chirp 3 HD 여성 음성, 실패 시 gTTS | 무료 크레딧/무료 폴백 |
 | 영상 합성 | ffmpeg (이미 보유: D:\ms\ffmpeg-8.1.2) | 오픈소스 |
 | 이미지 소스 | Pexels/Pixabay API | 무료 API 키 |
+| AI 오프닝 | Vertex AI Veo 이미지→영상, 실패 시 무료 스톡 | Google Cloud 크레딧 사용 |
 | 업로드 | YouTube Data API v3 | 프로젝트 쿼터 범위에서 일 4회 운영 |
 | 데이터 저장 | SQLite | 파일 기반, 설치 불필요 |
 | 분석 | YouTube Analytics API | 무료 |
+
+AI 오프닝은 검증된 실제 이미지를 첫 프레임으로 사용하고 작은 카메라 움직임만 생성한다. 결과물은 `data/media/ai_openings/`에 영구 보관해 같은 실제 대상에서 재사용하며, API 실패나 크레딧 소진 시 업로드를 중단하지 않고 무료 스톡으로 폴백한다.
 
 ---
 

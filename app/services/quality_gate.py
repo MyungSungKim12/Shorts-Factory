@@ -76,6 +76,16 @@ def validate_upload_package(work_dir: Path, ffmpeg_path: str) -> dict:
     ]
     opening_strategy = visual_relevance.get("opening_strategy")
     ai_generation = (produce.get("intro") or {}).get("ai_generation") or {}
+    if opening_strategy in {"ai_library", "vertex_veo_image"}:
+        required_ai_fields = (
+            ai_generation.get("provider") == "vertex_veo",
+            ai_generation.get("status") == "ready",
+            bool(ai_generation.get("asset_id")),
+            bool(ai_generation.get("subject_key")),
+            bool(ai_generation.get("reference_source_url")),
+        )
+        if not all(required_ai_fields):
+            failures.append("ai_opening_provenance")
     controlled_stock_fallback = (
         opening_strategy == "stock_after_veo_failure"
         and ai_generation.get("provider") == "vertex_veo"

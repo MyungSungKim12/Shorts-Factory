@@ -1,5 +1,6 @@
 """스토리 샷 계획, 렌더링 필터, 프로듀서 라우팅 테스트."""
 import asyncio
+import shutil
 from pathlib import Path
 
 import pytest
@@ -16,21 +17,93 @@ def _visual_identity():
     }
 
 
-def test_exact_stock_suppresses_veo_opening(tmp_path, monkeypatch):
+def _opening_call(tmp_path, **kwargs):
+    return story_producer._select_opening_source(
+        _visual_identity(),
+        {"topic": "Richat Structure"},
+        tmp_path,
+        tmp_path / "temporary",
+        set(),
+        ffmpeg_path="ffmpeg",
+        run_id="20260722-1",
+        **kwargs,
+    )
+
+
+def test_existing_exact_ai_asset_prevents_new_veo_call(tmp_path):
+    from app.services.ai_opening_library import AiOpeningLibrary
+
+    library = AiOpeningLibrary(tmp_path)
+    asset_id, asset_dir = library.create_asset_workspace("richat-structure-mauritania")
+    reference = asset_dir / "reference.jpg"
+    master = asset_dir / "master.mp4"
+    opening = asset_dir / "opening.mp4"
+    for path in (reference, master, opening):
+        path.write_bytes(b"asset")
+    library.register_asset(metadata={
+        "asset_id": asset_id,
+        "subject_key": "richat-structure-mauritania",
+        "reuse_scope": "exact_subject",
+        "status": "ready",
+        "reference_path": str(reference),
+        "master_path": str(master),
+        "opening_path": str(opening),
+        "source_url": "https://commons.wikimedia.org/wiki/File:Richat.jpg",
+        "license": "CC BY-SA 4.0",
+        "model": "veo-3.1-fast-generate-001",
+        "prompt": "slow push",
+    })
+
+    selected = _opening_call(
+        tmp_path,
+        library=library,
+        generator=lambda *args, **kwargs: pytest.fail("Veo must not be called"),
+    )
+
+    assert selected["strategy"] == "ai_library"
+    assert selected["ai_media"] == opening
+    assert selected["required_media"] == reference
+    assert selected["ai_generation"]["reused"] is True
+
+
+def test_verified_exact_image_can_seed_veo_opening(tmp_path, monkeypatch):
     exact = tmp_path / "exact.jpg"
     exact.write_bytes(b"image")
     monkeypatch.setattr(
         story_producer,
         "fetch_required_exact_media",
-        lambda *args: (exact, {"provider": "wikimedia_image", "exact_match": True}),
+        lambda *args: (
+            exact,
+            {
+                "provider": "wikimedia_image", "exact_match": True,
+                "source_url": "https://commons.wikimedia.org/wiki/File:Richat.jpg",
+                "license": "CC BY-SA 4.0", "media_id": "File:Richat.jpg",
+                "keyword": "Richat Structure Mauritania",
+            },
+        ),
     )
 
-    selected = story_producer._select_opening_source(
-        _visual_identity(), tmp_path, set()
+    def fake_generator(reference, output, subject):
+        from app.services.vertex_video import VeoGenerationResult
+
+        output.write_bytes(b"master")
+        return VeoGenerationResult(output, "veo-test", 4, 2.0)
+
+    def fake_derivative(master, output, **kwargs):
+        shutil.copy2(master, output)
+        return output
+
+    selected = _opening_call(
+        tmp_path,
+        generator=fake_generator,
+        validator=lambda *args, **kwargs: {"passed": True, "failures": []},
+        derivative_builder=fake_derivative,
     )
 
-    assert selected["required_media"] == exact
-    assert selected["strategy"] == "exact_stock"
+    assert selected["strategy"] == "vertex_veo_image"
+    assert selected["ai_media"].read_bytes() == b"master"
+    assert selected["required_media"].read_bytes() == b"image"
+    assert "media/ai_openings" in selected["ai_media"].as_posix()
 
 
 def test_missing_exact_stock_does_not_invent_real_subject_with_ai(
@@ -42,9 +115,7 @@ def test_missing_exact_stock_does_not_invent_real_subject_with_ai(
         lambda *args: (_ for _ in ()).throw(RuntimeError("no exact stock")),
     )
 
-    selected = story_producer._select_opening_source(
-        _visual_identity(), tmp_path, set()
-    )
+    selected = _opening_call(tmp_path)
 
     assert selected["required_media"] is None
     assert selected["strategy"] == "stock_after_exact_failure"
@@ -61,12 +132,40 @@ def test_exact_failure_stock_fallback_is_nonfatal(
         lambda *args: (_ for _ in ()).throw(RuntimeError("no exact stock")),
     )
 
-    selected = story_producer._select_opening_source(
-        _visual_identity(), tmp_path, set()
-    )
+    selected = _opening_call(tmp_path)
 
     assert selected["strategy"] == "stock_after_exact_failure"
     assert selected["ai_generation"]["status"] == "skipped_unverified_real_subject"
+
+
+def test_veo_failure_keeps_verified_exact_stock(tmp_path, monkeypatch):
+    from app.services.vertex_video import VeoGenerationFailed
+
+    exact = tmp_path / "exact.jpg"
+    exact.write_bytes(b"image")
+    monkeypatch.setattr(
+        story_producer,
+        "fetch_required_exact_media",
+        lambda *args: (
+            exact,
+            {
+                "provider": "wikimedia_image", "exact_match": True,
+                "source_url": "https://commons.wikimedia.org/wiki/File:Richat.jpg",
+                "license": "CC BY-SA 4.0", "media_id": "File:Richat.jpg",
+                "keyword": "Richat Structure Mauritania",
+            },
+        ),
+    )
+
+    def fail_generation(*args, **kwargs):
+        raise VeoGenerationFailed("quota unavailable")
+
+    selected = _opening_call(tmp_path, generator=fail_generation)
+
+    assert selected["strategy"] == "stock_after_veo_failure"
+    assert selected["required_media"].read_bytes() == b"image"
+    assert selected["ai_media"] is None
+    assert "quota unavailable" in selected["ai_generation"]["error"]
 
 
 def test_intro_title_comma_becomes_explicit_short_ssml_pause():

@@ -264,6 +264,47 @@ def test_wikimedia_download_sends_identifying_user_agent(tmp_path, monkeypatch):
     assert "ShortsFactory" in captured["headers"]["User-Agent"]
 
 
+def test_wikimedia_download_retries_original_when_thumbnail_is_rate_limited(tmp_path, monkeypatch):
+    exact = MediaCandidate(
+        provider="wikimedia_image", media_id="File:Richat Structure.jpg",
+        source_url="https://commons.wikimedia.org/wiki/File:Richat_Structure.jpg",
+        download_url="https://upload.wikimedia.org/thumb/richat.jpg",
+        width=1800, height=1200, media_type="image", keyword="Richat Structure Mauritania",
+        license="Public domain", attribution="NASA",
+        description="Richat Structure Mauritania",
+        alternate_download_url="https://upload.wikimedia.org/original/richat.jpg",
+    )
+    requested = []
+
+    class RateLimitedResponse:
+        headers = {}
+
+        def raise_for_status(self):
+            response = media_library.requests.Response()
+            response.status_code = 429
+            raise media_library.requests.HTTPError(response=response)
+
+    class OriginalResponse:
+        headers = {"Content-Length": "5"}
+
+        def raise_for_status(self):
+            return None
+
+        def iter_content(self, chunk_size):
+            yield b"image"
+
+    def fake_get(url, **kwargs):
+        requested.append(url)
+        return RateLimitedResponse() if "/thumb/" in url else OriginalResponse()
+
+    monkeypatch.setattr(media_library.requests, "get", fake_get)
+    output = tmp_path / "richat.jpg"
+
+    assert media_library._download_candidate(exact, output) == 5
+    assert output.read_bytes() == b"image"
+    assert requested == [exact.download_url, exact.alternate_download_url]
+
+
 def test_download_rejects_oversized_content_length_without_reading(tmp_path, monkeypatch):
     picked = candidate(31, 1080, 1920)
     output = tmp_path / "large.mp4"

@@ -93,6 +93,30 @@ def probe_video(path: Path, ffprobe_path: str = "ffprobe") -> dict:
     }
 
 
+def probe_ai_video(path: Path, ffprobe_path: str = "ffprobe") -> dict:
+    """무음 AI 오프닝 검증에 필요한 영상 스트림 정보만 읽는다."""
+    result = run_checked(
+        [
+            ffprobe_path, "-v", "error", "-show_streams", "-show_format",
+            "-of", "json", str(Path(path)),
+        ],
+        timeout=_probe_timeout(),
+        text=True,
+    )
+    data = json.loads(result.stdout)
+    streams = data.get("streams", [])
+    video = next((item for item in streams if item.get("codec_type") == "video"), {})
+    audio = next((item for item in streams if item.get("codec_type") == "audio"), None)
+    duration = float((data.get("format") or {}).get("duration") or video.get("duration") or 0)
+    return {
+        "width": int(video.get("width", 0)),
+        "height": int(video.get("height", 0)),
+        "duration": round(duration, 3),
+        "video_codec": video.get("codec_name", ""),
+        "has_audio": audio is not None,
+    }
+
+
 def validate_sample(report: dict) -> list[str]:
     failures = []
     if (report.get("width"), report.get("height")) != (1080, 1920):
