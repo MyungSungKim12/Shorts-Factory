@@ -245,6 +245,43 @@ def test_explicit_prepare_rejects_unsafe_target_before_generation(
         )
 
 
+def test_explicit_prepare_reuses_complete_valid_package_without_generation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    run_id = "20260721-2"
+    staged = _staging_package(tmp_path, "carryover")
+    destination = tmp_path / "work" / run_id
+    destination.parent.mkdir(parents=True)
+    staged.rename(destination)
+    quality = {"passed": True, "failures": []}
+    (destination / "prepared.json").write_text(
+        json.dumps({
+            "run_id": run_id,
+            "staging_id": "carryover",
+            "scheduled_at": "2026-07-21T17:00:00+09:00",
+            "quality_gate": quality,
+        }),
+        encoding="utf-8",
+    )
+
+    def generation_must_not_start(*args, **kwargs):
+        raise AssertionError("generation must not start for a valid prepared package")
+
+    monkeypatch.setattr(command, "run_researcher", generation_must_not_start)
+
+    result = command.prepare_slot(
+        tmp_path,
+        "ffmpeg",
+        2,
+        now_fn=lambda: datetime(2026, 7, 21, 12, tzinfo=KST),
+        use_lock=False,
+    )
+
+    assert result["run_id"] == run_id
+    assert result["destination"] == destination
+    assert result["quality_gate"] == quality
+
+
 def test_fresh_cache_database_does_not_block_prebuild(tmp_path, monkeypatch):
     from app.services.cache_warmer import warm_verified_cache
 

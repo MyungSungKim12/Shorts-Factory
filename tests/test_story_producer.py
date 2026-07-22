@@ -370,6 +370,11 @@ def test_story_subtitle_style_uses_smaller_font():
     assert "MarginV=90" in style
 
 
+def test_subtitle_style_disables_renderer_auto_wrap_inside_korean_words():
+    style = story_producer._subtitle_style("Malgun Gothic")
+    assert "WrapStyle=2" in style
+
+
 def test_subtitle_style_moves_caption_to_lower_middle():
     style = story_producer._subtitle_style("Malgun Gothic")
     assert "Alignment=2" in style

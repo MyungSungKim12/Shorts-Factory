@@ -79,6 +79,28 @@ def ensure_target_available(data_dir: Path, run_id: str) -> None:
         raise RuntimeError(f"예약 회차 작업 디렉터리가 이미 존재합니다: {run_id}")
 
 
+def load_valid_prepared_package(data_dir: Path, run_id: str) -> dict | None:
+    """완전한 사전 제작 패키지는 재생성하지 않고 그대로 반환한다."""
+    data_dir = Path(data_dir)
+    if _already_uploaded(data_dir, run_id):
+        return None
+    destination = data_dir / "work" / run_id
+    marker_path = destination / "prepared.json"
+    try:
+        marker = json.loads(marker_path.read_text(encoding="utf-8"))
+        quality = marker["quality_gate"]
+        if marker.get("run_id") != run_id or not isinstance(quality, dict):
+            return None
+        _validate_staging(destination, quality)
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError, RuntimeError):
+        return None
+    return {
+        "run_id": run_id,
+        "destination": destination,
+        "quality_gate": quality,
+    }
+
+
 def _validate_staging(staging: Path, quality: dict) -> None:
     if not quality.get("passed") or quality.get("failures"):
         raise RuntimeError("품질검사를 통과하지 못한 영상은 예약할 수 없습니다")

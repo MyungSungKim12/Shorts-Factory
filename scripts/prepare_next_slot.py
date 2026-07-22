@@ -28,6 +28,7 @@ from app.services.notifications import safe_error, send_alert  # noqa: E402
 from app.services.slot_prebuild import (  # noqa: E402
     KST,
     ensure_target_available,
+    load_valid_prepared_package,
     next_scheduled_slot,
     promote_staging,
     scheduled_run,
@@ -220,6 +221,15 @@ def _prepare(
                 "target",
                 lambda: _ensure_future_slot(initial_scheduled_at, now_fn(), slot),
             )
+            existing = _run_stage(
+                "target",
+                lambda: load_valid_prepared_package(data_dir, initial_run_id),
+            )
+            if existing is not None:
+                return {
+                    **existing,
+                    "scheduled_at": initial_scheduled_at,
+                }
             _run_stage(
                 "target", lambda: ensure_target_available(data_dir, initial_run_id)
             )

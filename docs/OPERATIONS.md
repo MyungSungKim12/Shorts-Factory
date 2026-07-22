@@ -185,7 +185,7 @@ ssh -i "D:\ms\ssh-key-2026-07-10.key" ubuntu@168.107.15.146 "df -h / | tail -1; 
 | `TTS_SPEED` | 나레이션 배속 (기본 1.3) |
 | `CHANNEL_NAME` | 오프닝 브랜딩 (비우면 생략, 현재 비어있음) |
 | `UPLOAD_PRIVACY` | `public` |
-| `DAILY_UPLOAD_LIMIT` | 6 (코드가 상한 강제) |
+| `DAILY_UPLOAD_LIMIT` | 4 (운영 회차, 코드의 기술적 상한은 6) |
 | `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_LOCATION` | Vertex AI 프로젝트와 리전 |
 | `VEO_OPENING_ENABLED` / `VEO_MODEL` | 실제 이미지 기반 AI 오프닝 활성화와 모델 |
 | `VEO_OPENING_MAX_SEC` | 제목 인트로에서 AI 편집본을 사용할 최대 길이(기본 3초) |

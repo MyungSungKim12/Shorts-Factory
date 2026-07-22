@@ -843,7 +843,8 @@ def _write_srt(
 def _subtitle_style(font: str) -> str:
     return (
         f"FontName={font},FontSize=16,Bold=1,PrimaryColour=&H00FFFFFF,"
-        "OutlineColour=&H00000000,Outline=3,Shadow=1,Alignment=2,MarginV=90"
+        "OutlineColour=&H00000000,Outline=3,Shadow=1,Alignment=2,MarginV=90,"
+        "WrapStyle=2"
     )
 
 
