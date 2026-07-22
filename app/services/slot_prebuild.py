@@ -12,7 +12,12 @@ from zoneinfo import ZoneInfo
 
 
 KST = ZoneInfo("Asia/Seoul")
-SCHEDULE = ((1, time(11, 0)), (2, time(17, 0)), (3, time(21, 0)))
+SCHEDULE = (
+    (1, time(11, 0)),
+    (4, time(14, 0)),
+    (2, time(17, 0)),
+    (3, time(21, 0)),
+)
 REQUIRED_FILES = ("topic.json", "script.json", "produce_log.json", "output.mp4")
 
 

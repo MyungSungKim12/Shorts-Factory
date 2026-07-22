@@ -77,7 +77,7 @@ async def run_pipeline(data_dir: Path, ffmpeg_path: str, slot: int = None) -> di
     Args:
         data_dir: 데이터 저장 경로
         ffmpeg_path: ffmpeg 실행 파일 경로
-        slot: 오늘의 회차 (cron이 1/2/3 지정, None이면 자동 선택)
+        slot: 오늘의 회차 (cron이 1/4/2/3 지정, None이면 자동 선택)
 
     Returns:
         run_log dict (각 단계 결과)

@@ -289,9 +289,9 @@ def main() -> None:
     os.chdir(ROOT)
     load_dotenv()
     parser = argparse.ArgumentParser(
-        description="검증된 영상을 다음 11/17/21시 예약 회차에 사전 배치"
+        description="검증된 영상을 다음 11/14/17/21시 예약 회차에 사전 배치"
     )
-    parser.add_argument("--slot", type=int, choices=(1, 2, 3))
+    parser.add_argument("--slot", type=int, choices=(1, 2, 3, 4))
     parser.add_argument("--lock-wait-seconds", type=int, default=5400)
     args = parser.parse_args()
 

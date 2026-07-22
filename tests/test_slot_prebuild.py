@@ -23,7 +23,8 @@ def _token():
     ("hour", "expected_run_id", "expected_hour"),
     [
         (10, "20260721-1", 11),
-        (12, "20260721-2", 17),
+        (12, "20260721-4", 14),
+        (13, "20260721-4", 14),
         (18, "20260721-3", 21),
         (22, "20260722-1", 11),
     ],
@@ -45,13 +46,18 @@ def test_exact_slot_time_skips_the_running_slot() -> None:
         datetime(2026, 7, 21, 11, 0, tzinfo=KST)
     )
 
-    assert run_id == "20260721-2"
-    assert scheduled_at.hour == 17
+    assert run_id == "20260721-4"
+    assert scheduled_at.hour == 14
 
 
 @pytest.mark.parametrize(
     ("hour", "slot", "run_id"),
-    [(9, 1, "20260721-1"), (15, 2, "20260721-2"), (19, 3, "20260721-3")],
+    [
+        (9, 1, "20260721-1"),
+        (12, 4, "20260721-4"),
+        (15, 2, "20260721-2"),
+        (19, 3, "20260721-3"),
+    ],
 )
 def test_prebuild_targets_explicit_same_day_slot(
     hour: int, slot: int, run_id: str
@@ -180,9 +186,9 @@ def test_prepare_command_builds_in_staging_and_never_uploads(
         ("writer", "staging"),
         ("producer", "staging"),
     ]
-    assert result["run_id"] == "20260721-2"
-    assert result["scheduled_at"].hour == 17
-    assert result["destination"] == tmp_path / "work" / "20260721-2"
+    assert result["run_id"] == "20260721-4"
+    assert result["scheduled_at"].hour == 14
+    assert result["destination"] == tmp_path / "work" / "20260721-4"
 
 
 def test_prepare_command_tags_the_failed_pipeline_stage(tmp_path: Path, monkeypatch) -> None:
