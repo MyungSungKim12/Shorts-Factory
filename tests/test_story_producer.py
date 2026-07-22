@@ -8,6 +8,80 @@ from app.agents import producer
 from app.agents import story_producer
 
 
+def _visual_identity():
+    return {
+        "required_exact": True,
+        "exact_queries": ["exact: Richat Structure Mauritania"],
+        "safe_fallbacks": ["desert aerial"],
+    }
+
+
+def test_exact_stock_suppresses_veo_opening(tmp_path, monkeypatch):
+    exact = tmp_path / "exact.jpg"
+    exact.write_bytes(b"image")
+    monkeypatch.setattr(
+        story_producer,
+        "fetch_required_exact_media",
+        lambda *args: (exact, {"provider": "wikimedia_image", "exact_match": True}),
+    )
+
+    selected = story_producer._select_opening_source(
+        _visual_identity(), tmp_path, set()
+    )
+
+    assert selected["required_media"] == exact
+    assert selected["strategy"] == "exact_stock"
+
+
+def test_missing_exact_stock_does_not_invent_real_subject_with_ai(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        story_producer,
+        "fetch_required_exact_media",
+        lambda *args: (_ for _ in ()).throw(RuntimeError("no exact stock")),
+    )
+
+    selected = story_producer._select_opening_source(
+        _visual_identity(), tmp_path, set()
+    )
+
+    assert selected["required_media"] is None
+    assert selected["strategy"] == "stock_after_exact_failure"
+    assert selected["ai_generation"]["status"] == "skipped_unverified_real_subject"
+    assert "no exact stock" in selected["ai_generation"]["exact_media_error"]
+
+
+def test_exact_failure_stock_fallback_is_nonfatal(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        story_producer,
+        "fetch_required_exact_media",
+        lambda *args: (_ for _ in ()).throw(RuntimeError("no exact stock")),
+    )
+
+    selected = story_producer._select_opening_source(
+        _visual_identity(), tmp_path, set()
+    )
+
+    assert selected["strategy"] == "stock_after_exact_failure"
+    assert selected["ai_generation"]["status"] == "skipped_unverified_real_subject"
+
+
+def test_intro_title_comma_becomes_explicit_short_ssml_pause():
+    assert story_producer._intro_pause_ssml(
+        "사하라의 눈, 리차트 구조의 비밀"
+    ) == (
+        '<speak>사하라의 눈<break time="250ms"/>'
+        "리차트 구조의 비밀</speak>"
+    )
+
+
+def test_intro_title_without_separator_keeps_plain_text_input():
+    assert story_producer._intro_pause_ssml("끝까지 보면 놀라운 이야기") is None
+
+
 def test_story_cta_keeps_topic_aware_copy_with_both_actions():
     value, fallback = story_producer.normalize_story_cta(
         "이런 자연의 비밀이 더 궁금하다면 구독과 좋아요 부탁드립니다."

@@ -1,4 +1,6 @@
 """Google Neural2 ADC 어댑터와 gTTS 폴백 테스트."""
+import base64
+
 import pytest
 
 from app.services import tts
@@ -24,9 +26,86 @@ def test_google_provider_uses_configured_defaults(tmp_path, monkeypatch):
     assert result.path.read_bytes() == b"mp3"
     assert seen == {
         "text": "안녕하세요.",
-        "voice": "ko-KR-Neural2-C",
-        "rate": 1.05,
-        "pitch": -0.5,
+        "voice": "ko-KR-Chirp3-HD-Kore",
+        "rate": 1.0,
+        "pitch": 0.0,
+    }
+
+
+def test_chirp3_request_omits_unsupported_audio_controls(tmp_path, monkeypatch):
+    seen = {}
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"audioContent": base64.b64encode(b"mp3").decode("ascii")}
+
+    class Session:
+        def __init__(self, credentials):
+            pass
+
+        def post(self, url, json, timeout):
+            seen.update(url=url, body=json, timeout=timeout)
+            return Response()
+
+    monkeypatch.setattr(tts.google.auth, "default", lambda scopes: (object(), None))
+    monkeypatch.setattr(tts, "AuthorizedSession", Session)
+
+    output = tmp_path / "chirp.mp3"
+    effective_rate = tts._synthesize_google(
+        "차분한 여성 내레이션",
+        output,
+        "ko-KR-Chirp3-HD-Kore",
+        1.05,
+        -0.5,
+    )
+
+    assert seen["body"]["audioConfig"] == {"audioEncoding": "MP3"}
+    assert seen["body"]["voice"]["name"] == "ko-KR-Chirp3-HD-Kore"
+    assert output.read_bytes() == b"mp3"
+    assert effective_rate == 1.0
+
+
+def test_chirp3_title_ssml_sends_explicit_pause(tmp_path, monkeypatch):
+    seen = {}
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"audioContent": base64.b64encode(b"mp3").decode("ascii")}
+
+    class Session:
+        def __init__(self, credentials):
+            pass
+
+        def post(self, url, json, timeout):
+            seen.update(body=json)
+            return Response()
+
+    monkeypatch.setattr(tts.google.auth, "default", lambda scopes: (object(), None))
+    monkeypatch.setattr(tts, "AuthorizedSession", Session)
+
+    tts._synthesize_google(
+        "사하라의 눈, 리차트 구조의 비밀",
+        tmp_path / "title.mp3",
+        "ko-KR-Chirp3-HD-Kore",
+        1.0,
+        0.0,
+        ssml=(
+            '<speak>사하라의 눈<break time="250ms"/>'
+            "리차트 구조의 비밀</speak>"
+        ),
+    )
+
+    assert seen["body"]["input"] == {
+        "ssml": (
+            '<speak>사하라의 눈<break time="250ms"/>'
+            "리차트 구조의 비밀</speak>"
+        )
     }
 
 

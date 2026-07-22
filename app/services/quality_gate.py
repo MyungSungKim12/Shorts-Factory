@@ -74,9 +74,24 @@ def validate_upload_package(work_dir: Path, ffmpeg_path: str) -> dict:
         and source.get("exact_match")
         and not exact_source_matches(source)
     ]
+    opening_strategy = visual_relevance.get("opening_strategy")
+    ai_generation = (produce.get("intro") or {}).get("ai_generation") or {}
+    controlled_stock_fallback = (
+        opening_strategy == "stock_after_veo_failure"
+        and ai_generation.get("provider") == "vertex_veo"
+        and ai_generation.get("status") == "failed"
+        and bool(ai_generation.get("error"))
+    )
+    controlled_exact_fallback = (
+        opening_strategy == "stock_after_exact_failure"
+        and ai_generation.get("status") == "skipped_unverified_real_subject"
+        and bool(ai_generation.get("exact_media_error"))
+    )
     if (
         visual_relevance.get("required_exact")
         and not exact_sources
+        and not controlled_stock_fallback
+        and not controlled_exact_fallback
     ):
         failures.append("visual_exact_source")
     if (

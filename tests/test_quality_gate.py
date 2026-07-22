@@ -74,6 +74,83 @@ def test_quality_gate_rejects_missing_required_exact_source(tmp_path, monkeypatc
     assert "visual_exact_source" in saved["quality_gate"]["failures"]
 
 
+def test_quality_gate_rejects_text_only_veo_as_exact_real_subject(
+    tmp_path, monkeypatch
+):
+    _, produce = _package(tmp_path)
+    produce["visual_relevance"] = {
+        "required_exact": True,
+        "exact_source_count": 0,
+        "generic_fallback_count": 4,
+        "unrelated_fallback_count": 0,
+        "opening_strategy": "vertex_veo",
+    }
+    produce["intro"]["ai_generation"] = {
+        "provider": "vertex_veo",
+        "model": "veo-3.1-fast-generate-001",
+        "subject_aligned": True,
+    }
+    (tmp_path / "produce_log.json").write_text(
+        json.dumps(produce, ensure_ascii=False), encoding="utf-8"
+    )
+    monkeypatch.setattr(quality_gate, "probe_video", lambda *args: _valid_probe())
+
+    with pytest.raises(RuntimeError, match="visual_exact_source"):
+        quality_gate.validate_upload_package(tmp_path, "ffmpeg")
+
+
+def test_quality_gate_accepts_logged_stock_fallback_when_exact_media_is_unavailable(
+    tmp_path, monkeypatch
+):
+    _, produce = _package(tmp_path)
+    produce["visual_relevance"] = {
+        "required_exact": True,
+        "exact_source_count": 0,
+        "generic_fallback_count": 4,
+        "unrelated_fallback_count": 0,
+        "opening_strategy": "stock_after_exact_failure",
+    }
+    produce["intro"]["ai_generation"] = {
+        "provider": "vertex_veo",
+        "status": "skipped_unverified_real_subject",
+        "exact_media_error": "required exact Wikimedia media is unavailable",
+    }
+    (tmp_path / "produce_log.json").write_text(
+        json.dumps(produce, ensure_ascii=False), encoding="utf-8"
+    )
+    monkeypatch.setattr(quality_gate, "probe_video", lambda *args: _valid_probe())
+
+    result = quality_gate.validate_upload_package(tmp_path, "ffmpeg")
+
+    assert result["passed"] is True
+
+
+def test_quality_gate_accepts_logged_stock_fallback_after_veo_failure(
+    tmp_path, monkeypatch
+):
+    _, produce = _package(tmp_path)
+    produce["visual_relevance"] = {
+        "required_exact": True,
+        "exact_source_count": 0,
+        "generic_fallback_count": 4,
+        "unrelated_fallback_count": 0,
+        "opening_strategy": "stock_after_veo_failure",
+    }
+    produce["intro"]["ai_generation"] = {
+        "provider": "vertex_veo",
+        "status": "failed",
+        "error": "quota unavailable",
+    }
+    (tmp_path / "produce_log.json").write_text(
+        json.dumps(produce, ensure_ascii=False), encoding="utf-8"
+    )
+    monkeypatch.setattr(quality_gate, "probe_video", lambda *args: _valid_probe())
+
+    result = quality_gate.validate_upload_package(tmp_path, "ffmpeg")
+
+    assert result["passed"] is True
+
+
 def test_quality_gate_rejects_unrelated_visual_fallback(tmp_path, monkeypatch):
     _, produce = _package(tmp_path)
     produce["visual_relevance"] = {

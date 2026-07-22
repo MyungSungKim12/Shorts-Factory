@@ -1,5 +1,6 @@
 """단일 소재 스토리형 Shorts 렌더러."""
 import hashlib
+import html
 import json
 import math
 import os
@@ -33,6 +34,46 @@ STORY_LAYOUT = {
     "video_height": 1330,
     "bottom_band": 330,
 }
+
+
+def _select_opening_source(
+    identity: dict,
+    temp_dir: Path,
+    used_ids: set[str],
+) -> dict:
+    """검증된 실제 자료를 우선하고 부정확한 랜드마크 재현은 거부한다."""
+    result = {
+        "required_media": None,
+        "required_metadata": {},
+        "ai_generation": None,
+        "strategy": "stock_only",
+    }
+    if not identity.get("required_exact"):
+        return result
+    try:
+        media, metadata = fetch_required_exact_media(
+            identity, temp_dir / "required-exact", used_ids
+        )
+        result.update(
+            required_media=media,
+            required_metadata=metadata,
+            strategy="exact_stock",
+        )
+        return result
+    except RuntimeError as exc:
+        exact_error = " ".join(str(exc).split())[:300]
+
+    # 텍스트만으로 만든 영상은 그럴듯해도 실제 랜드마크와 크게 다를 수 있다.
+    # 생성 영상을 사실 자료로 표시하지 않고, 기록을 남긴 뒤 일반 스톡으로 대체한다.
+    result.update(
+        strategy="stock_after_exact_failure",
+        ai_generation={
+            "provider": "none",
+            "status": "skipped_unverified_real_subject",
+            "exact_media_error": exact_error,
+        },
+    )
+    return result
 
 
 def normalize_story_cta(value: str | None) -> tuple[str, bool]:
@@ -170,6 +211,15 @@ def _shot_duration_range(role: str) -> tuple[float, float]:
 
 def _spoken_intro(title: str) -> str:
     return re.sub(r"[?!。]+$", "", str(title)).strip()
+
+
+def _intro_pause_ssml(title: str) -> str | None:
+    """본문 억양은 건드리지 않고 제목의 쉼표에만 명확한 휴지를 넣는다."""
+    parts = [part.strip() for part in str(title).split(",")]
+    if len(parts) < 2 or any(not part for part in parts):
+        return None
+    pause = '<break time="250ms"/>'
+    return "<speak>" + pause.join(html.escape(part) for part in parts) + "</speak>"
 
 
 def _scene_shots(scene: dict, duration: float | None = None) -> list[dict]:
@@ -805,12 +855,9 @@ async def run_story_producer(
         tmp_path = Path(tmpdir)
         mark_temp_owner(tmp_path)
         used_ids: set[str] = set()
-        required_media = None
-        required_metadata = {}
-        if identity["required_exact"]:
-            required_media, required_metadata = fetch_required_exact_media(
-                identity, tmp_path / "required-exact", used_ids
-            )
+        opening_source = _select_opening_source(identity, tmp_path, used_ids)
+        required_media = opening_source["required_media"]
+        required_metadata = opening_source["required_metadata"]
         tts_results = []
         narration_files = {}
         scene_tts_results = {}
@@ -820,12 +867,17 @@ async def run_story_producer(
         spoken_intro = _spoken_intro(script["title"])
         intro_raw = tmp_path / "narration-intro-raw.mp3"
         intro_narration = tmp_path / "narration-intro.wav"
-        intro_result = synthesize(_tts_text(spoken_intro), intro_raw)
+        intro_tts_text = _tts_text(spoken_intro)
+        intro_result = synthesize(
+            intro_tts_text,
+            intro_raw,
+            ssml=_intro_pause_ssml(intro_tts_text),
+        )
         _trim_narration(intro_raw, intro_narration, ffmpeg_path)
         tts_results.append(intro_result)
         intro_audio_duration = _duration(intro_narration, ffmpeg_path)
 
-        safe_print("  → Neural2 스토리 나레이션 생성 중...")
+        safe_print("  → Chirp 3 HD 여성 스토리 나레이션 생성 중...")
         for scene in script.get("scenes", []):
             narration_raw = tmp_path / f"narration-{scene['n']:02d}-raw.mp3"
             narration = tmp_path / f"narration-{scene['n']:02d}.wav"
@@ -1066,6 +1118,7 @@ async def run_story_producer(
                 "speaking_rate": intro_result.speaking_rate,
             },
             "visual_source": first_metadata,
+            "ai_generation": opening_source["ai_generation"],
         },
         "cta": {
             "text": cta_text,
@@ -1080,7 +1133,10 @@ async def run_story_producer(
             "visual_source": last_metadata,
         },
         "sources": sources,
-        "visual_relevance": build_visual_relevance(identity, sources, scene_queries),
+        "visual_relevance": {
+            **build_visual_relevance(identity, sources, scene_queries),
+            "opening_strategy": opening_source["strategy"],
+        },
         "fallback_shots": sum(1 for item in sources if item.get("fallback")),
         "experiment": "story_v1_retention",
     }
