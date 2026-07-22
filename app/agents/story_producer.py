@@ -550,9 +550,11 @@ _UNIT_RULES = [
     (re.compile(r"(?<=\d)\s*%"), "퍼센트"),
     (re.compile(r"(?<=\d)\s*℃"), "도"),
 ]
+_GROUPED_NUMBER = re.compile(r"(?<!\d)\d{1,3}(?:,\d{3})+(?!\d)")
 
 
 def _tts_text(text: str) -> str:
+    text = _GROUPED_NUMBER.sub(lambda match: match.group(0).replace(",", ""), text)
     for pattern, replacement in _UNIT_RULES:
         text = pattern.sub(replacement, text)
     return text
