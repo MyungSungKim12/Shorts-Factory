@@ -3,7 +3,7 @@
 흐름:
 - 그라운딩 검색 성공 → 검증된 topic(항목·수치·출처)을 여기 저장 (method=grounded_search)
 - 그라운딩 할당량 소진 → 캐시에서 최근에 안 쓴 검증된 소재를 꺼내 재사용 (method=verified_cache)
-- 캐시에도 쓸 게 없으면 → 해당 회차 중단 (model_memory 업로드는 규칙상 금지)
+- 캐시에도 쓸 게 없으면 → 리서처가 불변 기록·수치에 한해 보수 모드(model_memory)로 진행
 
 videos.sqlite의 verified_topics 테이블에 저장한다.
 """

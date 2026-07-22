@@ -57,7 +57,7 @@ class TopicContract(BaseModel):
         return self
 
     def is_uploadable(self) -> bool:
-        """규칙상 업로드 허용 여부 — 검증되지 않은(model_memory) 소재는 불가."""
+        """규칙상 업로드 허용 여부. model_memory는 불변 기록·수치 소재에만 사용한다."""
         return self.verification_method in UPLOADABLE_VERIFICATION
 
 
@@ -162,6 +162,8 @@ class StoryTopicContract(BaseModel):
     hook_angle: str = Field(min_length=5)
     target_keyword: str = Field(min_length=2)
     core_question: str = Field(min_length=5)
+    interest_score: int = Field(default=0, ge=0, le=30)
+    selection_reason: str = ""
     facts: list[StoryFact] = Field(min_length=1)
     visual_plan: list[StoryVisualPlan] = Field(min_length=1)
     visual_identity: VisualIdentity | None = None

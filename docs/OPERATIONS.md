@@ -1,6 +1,6 @@
 # Shorts Factory 운영 매뉴얼
 
-자동 랭킹 숏츠 파이프라인의 규칙·현황·명령어 모음. 문제 생겼을 때 여기부터 본다.
+자동 스토리형 숏츠 파이프라인의 규칙·현황·명령어 모음. 문제 생겼을 때 여기부터 본다.
 
 > 모든 SSH 명령의 접속 키: `D:\ms\ssh-key-2026-07-10.key`, 서버: `ubuntu@168.107.15.146`
 > 편의상 아래 예시는 `ssh -i "D:\ms\ssh-key-2026-07-10.key" ubuntu@168.107.15.146 "..."` 형태.
@@ -295,7 +295,7 @@ TELEGRAM_CHAT_ID=
 1. `/home/ubuntu/backups/<timestamp>/` 아래에 `app`, `scripts`, `tests`, `config`, `.env`, `credentials`, `data`와 현재 `crontab -l` 출력을 백업한다.
 2. 백업 디렉터리의 필수 항목과 용량만 확인하고 비밀 파일 내용은 출력하지 않는다.
 3. 추적된 Git 파일만 배포하고 서버의 `.env`, `credentials`, `data`, `venv`는 보존한다.
-4. 원격 전체 테스트와 `compileall`, 대시보드 재시작, `/api/health` 확인 후에만 cron을 변경한다.
+4. 변경 범위 테스트와 `compileall`, 대시보드 재시작, `/api/health` 확인 후에만 cron을 변경한다.
 5. 원복 시 백업 코드를 복원하고 cron은 직전 3회 운영(11:00·17:00·21:00)으로 되돌린다. DB·준비본은 백업본과 현재 상태를 비교한 뒤 복원한다.
 
 ### 감독 검증

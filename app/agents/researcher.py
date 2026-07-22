@@ -23,39 +23,30 @@ def _is_daily_quota_error(error: Exception) -> bool:
         "daily", "perday", "quotaexceeded", "일일", "할당초과",
     ))
 
-# 회차별 고정 카테고리 — 매일 3개 영상이 서로 다른 결로 나오고, 카테고리별 성과 비교(A/B)도 됨.
-# desc는 "무료 스톡(Pexels) 영상이 존재하는 대상"으로 유도하는 게 핵심.
+# 회차별 스토리 방향. 무료 스톡 확보성보다 클릭 욕구와 반전을 먼저 평가한다.
 SLOT_CATEGORIES = {
     1: {
-        "name": "동물/펫",
-        "desc": "강아지·고양이·아기동물·희귀동물·귀여운 동물의 순위. "
-                "전 연령이 좋아하고 공유가 잘 되는 대중적 소재.",
-        "examples": "가장 비싼 반려견 품종, 가장 큰 고양이 품종, 가장 오래 사는 동물, "
-                    "가장 빠른 동물, 가장 귀여운 아기동물",
-        "visual_fallback": "cute animal",   # 검색 실패 시 안전 대체 영상어
+        "name": "극한 생존/위험한 동물",
+        "desc": "포식, 독, 기생, 극한 환경 생존처럼 본능적으로 위험과 호기심을 느끼는 이야기.",
+        "examples": "몸이 잘려도 살아남는 원리, 포식자를 역으로 이용하는 생존법, 인간에게 치명적인 작은 동물",
+        "visual_fallback": "wild animal survival",
     },
     2: {
-        "name": "여행/명소",
-        "desc": "가고 싶은 도시·해변·야경·랜드마크·이색 명소의 순위. "
-                "20~30대 버킷리스트 소구, 스톡 영상 풍부.",
-        "examples": "죽기 전 꼭 가봐야 할 여행지, 세계에서 가장 아름다운 해변, "
-                    "야경이 예쁜 도시, 이색적인 호텔",
-        "visual_fallback": "travel landscape",
+        "name": "금지된 장소/거대 구조",
+        "desc": "사람이 접근하기 어렵거나 상식 밖 규모와 목적을 가진 장소·구조의 이야기.",
+        "examples": "지도에서 사라진 시설, 버려진 거대 구조물, 불가능해 보이는 고대 공법",
+        "visual_fallback": "massive abandoned structure",
     },
     3: {
-        "name": "역사",
-        "desc": "고대 문명·유적·왕조·역사적 사건·발명의 순위. "
-                "스토리성이 강해 체류시간 유리. 시각은 유적·유물·자연 등 일반 스톡으로 표현.",
-        "examples": "가장 오래된 문명, 역사상 가장 거대했던 제국, 세계 7대 불가사의, "
-                    "가장 오래된 건축물",
-        "visual_fallback": "ancient ruins",
+        "name": "역사적 반전/재난/치명적 실수",
+        "desc": "한 번의 판단이 거대한 결과를 만든 사건, 재난, 생존과 역사적 반전 이야기.",
+        "examples": "사소한 실수로 무너진 작전, 모두가 틀렸던 발견, 살아남을 수 없던 곳의 생존 기록",
+        "visual_fallback": "historic disaster ruins",
     },
     4: {
-        "name": "미스터리",
-        "desc": "미해결 사건·불가사의·기이한 현상·수수께끼의 순위. "
-                "궁금증 유발이 커 끝까지 보게 함. 분위기 있는 일반 스톡(안개·심해·우주 등)으로 표현.",
-        "examples": "아직도 못 푼 세계의 미스터리, 사라진 문명, 설명 불가능한 자연현상, "
-                    "미스터리한 심해 생물",
+        "name": "미스터리/기이한 기록",
+        "desc": "처음 들으면 거짓말 같지만 검증 가능한 이상 현상, 수수께끼와 기이한 기록 이야기.",
+        "examples": "흔적 없이 사라진 장소, 설명 뒤에도 더 이상해지는 현상, 현실에 남은 불가능한 기록",
         "visual_fallback": "dark foggy atmosphere",
     },
 }
@@ -133,10 +124,10 @@ def run_researcher(
     if category:
         safe_print(f"  · 회차 {slot} 카테고리: {category['name']}")
 
-    # 사실 검증 규칙(CLAUDE.md): 검증된 소재만 업로드. 검증 경로는 2가지뿐:
+    # 사실 검증 규칙(AGENTS.md): 검증 방식과 근거를 항상 기록한다.
     #   1) 그라운딩 검색 성공 → 검증 + 캐시에 저장 (grounded_search)
     #   2) 그라운딩 실패 → 검증 캐시에서 재사용 (verified_cache)
-    #   둘 다 안 되면 회차 중단 (model_memory 업로드 금지)
+    #   3) 둘 다 없으면 불변 기록·수치 소재만 보수적으로 생성 (model_memory)
     from app.models import validate_topic
     from app.services.fact_cache import save_verified, pick_cached, cache_size
     from app.services.json_extract import extract_json
@@ -215,13 +206,44 @@ def _story_researcher_prompt(context: dict, grounded: bool = True) -> str:
         "within that same real-world subject family."
     )
     recent = context.get("recent_topics") or []
+    category = context.get("category") or {}
+    category_block = (
+        f"- 이번 회차 방향: {category.get('name')}\n"
+        f"- 방향 설명: {category.get('desc')}\n"
+        f"- 좋은 출발점: {category.get('examples')}"
+        if category else
+        "- 이번 회차 방향: 위험, 반전, 거대한 규모 중 하나가 분명한 이야기"
+    )
     return f"""당신은 실재 장소·자연현상·역사 구조물·동물 생존 원리를 조사하는 한국어 Shorts 리서처다.
 
 [목표]
-- 하나의 강한 질문으로 60~75초 설명이 가능한 소재 1개를 고른다.
+- 사람들이 제목만 보고도 "왜? 어떻게?"라고 묻게 되는 소재 1개를 고른다.
+- 최종 JSON을 쓰기 전에 서로 다른 후보를 반드시 8개 만든 뒤 내부에서 비교한다.
+- 후보 평가 과정은 출력하지 말고 최고점 소재 하나만 JSON으로 출력한다.
 - Pexels/Pixabay 무료 스톡에서 실제 대상과 주변 환경을 여러 장면으로 찾을 수 있어야 한다.
-- 우선 비율은 실재 장소·자연현상 70%, 역사 구조물 20%, 동물 생존 10%다.
+- 무료 영상 확보성은 필수 조건이지만 재미와 반전보다 먼저 소재를 결정하지 않는다.
 - 최근 사용 소재와 중복하지 않는다: {recent if recent else '없음'}
+
+[이번 회차]
+{category_block}
+
+[재미 점수 — 후보마다 각 0~5점, 총 30점]
+1. 첫 3초 호기심: 설명을 듣기 전에도 결말이 궁금한가?
+2. 상식 반전: 대부분의 예상과 실제 답이 다른가?
+3. 위험·규모·충격: 생존, 죽음, 거대한 크기, 치명적 실수 중 하나가 있는가?
+4. 남성 시청자 관심: 위험, 기술, 구조, 전쟁, 재난, 미스터리 본능을 자극하는가?
+5. 무료 영상 확보: 실제 대상 또는 같은 사건군의 화면을 여러 장면 구할 수 있는가?
+6. 차별성: 최근 소재와 다르고 너무 흔하게 소비된 설명이 아닌가?
+- 총점 24점 이상을 목표로 한다. 모든 후보가 24점 미만이어도 추가 호출하거나 회차를 중단하지 말고, 그중 최고점 후보를 반드시 선택한다.
+- 최종 JSON의 interest_score에는 최고 후보의 실제 합계를 기록한다.
+- selection_reason에는 클릭을 부르는 반전·위험·규모를 한 문장으로 적는다.
+
+[바로 탈락]
+- 단순히 색이 다른 이유, 이름의 유래, 평범한 지형 형성 과정만 설명하는 소재
+- 제목을 읽은 순간 답이 예상되는 교과서형 질문
+- "신비롭다", "놀랍다" 같은 형용사 외에 구체적인 위험·반전·규모가 없는 소재
+- 무료 스톡이 많다는 이유만으로 고른 평범한 자연 풍경이나 귀여운 동물 소개
+- 이미 너무 유명해 결말까지 알려진 상투적인 미스터리
 
 [금지]
 - 최신 뉴스, 실시간 순위, 연예인, 기업 실적, 스포츠 결과처럼 변하는 소재
@@ -242,6 +264,8 @@ def _story_researcher_prompt(context: dict, grounded: bool = True) -> str:
   "hook_angle": "비가 거의 오지 않는데 호수는 남아 있다",
   "target_keyword": "desert lake",
   "core_question": "물은 어디에서 공급되는가",
+  "interest_score": 26,
+  "selection_reason": "죽을 수 있는 극한 환경에서 상식과 반대되는 생존 원리가 드러난다",
   "facts": [
     {{
       "claim": "검증된 주장",

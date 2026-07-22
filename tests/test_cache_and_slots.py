@@ -42,8 +42,8 @@ def test_캐시_회차_분리():
         assert pick_cached(d, 3, []) ["topic"] == "역사소재"
 
 def test_회차_카테고리_매핑():
-    assert SLOT_CATEGORIES[1]["name"] == "동물/펫"
-    assert SLOT_CATEGORIES[4]["name"] == "미스터리"
+    assert SLOT_CATEGORIES[1]["name"] == "극한 생존/위험한 동물"
+    assert SLOT_CATEGORIES[4]["name"] == "미스터리/기이한 기록"
     # 모든 카테고리에 영상 폴백어 존재
     for c in SLOT_CATEGORIES.values():
         assert c.get("visual_fallback")
