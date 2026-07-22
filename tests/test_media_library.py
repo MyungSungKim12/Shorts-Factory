@@ -157,6 +157,7 @@ def test_exact_keyword_prefers_licensed_wikimedia_image(tmp_path, monkeypatch):
         keyword="Blood Falls Antarctica",
         license="CC BY-SA 4.0",
         attribution="Jane Scientist",
+        description="Blood Falls Antarctica",
     )
     generic = candidate(88, 1080, 1920)
     monkeypatch.setattr(media_library, "_wikimedia_image_candidates", lambda keyword: [exact])
@@ -200,6 +201,9 @@ def test_exact_candidate_rejects_unrelated_title():
         ("Lake Baikal Russia", "File:Lake Tahoe in summer.jpg"),
         ("Mount Fuji Japan", "File:Mount Everest from base camp.jpg"),
         ("Blood Falls Antarctica", "File:Blood donation campaign.jpg"),
+        ("Great Barrier Reef", "File:Great Barrier Island.jpg"),
+        ("Golden Gate Bridge", "File:Golden Gate Park.jpg"),
+        ("desert lake aerial", "File:Sahara desert dunes.jpg"),
     ],
 )
 def test_exact_candidate_rejects_context_only_overlap(query, media_id):
@@ -240,6 +244,7 @@ def test_wikimedia_download_sends_identifying_user_agent(tmp_path, monkeypatch):
         download_url="https://upload.wikimedia.org/blood-falls.jpg",
         width=1600, height=1200, media_type="image", keyword="Blood Falls Antarctica",
         license="Public domain", attribution="US Antarctic Program",
+        description="Blood Falls Antarctica",
     )
     captured = {}
 

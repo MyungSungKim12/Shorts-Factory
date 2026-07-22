@@ -13,10 +13,9 @@ DEFAULT_MAX_IMAGE_BYTES = 15 * 1024 * 1024
 DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 _QUERY_NOISE_TOKENS = frozenset({
     "file", "image", "photo", "landscape", "the", "of", "in", "at",
+    "aerial", "view", "closeup", "drone",
 })
-_GENERIC_EXACT_TOKENS = _QUERY_NOISE_TOKENS | frozenset({
-    "structure", "lake", "mount", "mountain",
-})
+_GENERIC_EXACT_TOKENS = _QUERY_NOISE_TOKENS
 
 
 class MediaTooLarge(requests.RequestException):
@@ -35,6 +34,7 @@ class MediaCandidate:
     keyword: str
     license: str = ""
     attribution: str = ""
+    description: str = ""
 
     @property
     def unique_id(self) -> str:
@@ -51,22 +51,20 @@ def _distinctive_tokens(value: str) -> set[str]:
 
 
 def _canonical_anchor_tokens(value: str) -> set[str]:
-    """Extract the complete named subject, excluding a trailing location context."""
-    tokens = [
+    """Extract every canonical subject term while dropping search-only modifiers."""
+    return {
         token
         for token in re.findall(r"[^\W_]+", (value or "").lower())
-        if token not in _QUERY_NOISE_TOKENS
-    ]
-    if len(tokens) >= 3:
-        tokens = tokens[:-1]
-    return {token for token in tokens if token not in _GENERIC_EXACT_TOKENS}
+        if token not in _GENERIC_EXACT_TOKENS
+    }
 
 
 def exact_candidate_matches(query: str, candidate: MediaCandidate) -> bool:
     """Require a Wikimedia title to share the query's canonical subject anchor."""
     normalized_query = (query or "").removeprefix("exact:").strip()
     anchors = _canonical_anchor_tokens(normalized_query)
-    return bool(anchors) and anchors.issubset(_distinctive_tokens(candidate.media_id))
+    evidence = _distinctive_tokens(f"{candidate.media_id} {candidate.description}")
+    return bool(anchors) and anchors.issubset(evidence)
 
 
 def exact_source_matches(source: dict) -> bool:
@@ -86,6 +84,7 @@ def exact_source_matches(source: dict) -> bool:
         height=0,
         media_type="image",
         keyword=query,
+        description=str(source.get("subject_evidence") or ""),
     )
     return exact_candidate_matches(query, candidate)
 
@@ -288,6 +287,10 @@ def _wikimedia_image_candidates(keyword: str) -> list[MediaCandidate]:
                 attribution=_plain_text(
                     (metadata.get("Artist") or metadata.get("Credit") or {}).get("value", "")
                 ),
+                description=" ".join(filter(None, (
+                    _plain_text((metadata.get("ObjectName") or {}).get("value", "")),
+                    _plain_text((metadata.get("ImageDescription") or {}).get("value", "")),
+                ))),
             ))
         return candidates
     except (requests.RequestException, ValueError, TypeError):
@@ -421,6 +424,8 @@ async def fetch_story_media(
                     metadata["license"] = candidate.license
                 if candidate.attribution:
                     metadata["attribution"] = candidate.attribution
+                if candidate.description:
+                    metadata["subject_evidence"] = candidate.description
                 if exact and candidate.provider == "wikimedia_image":
                     metadata["exact_match"] = True
                 return output, metadata
@@ -485,6 +490,8 @@ def fetch_required_exact_media(
             }
             if candidate.attribution:
                 metadata["attribution"] = candidate.attribution
+            if candidate.description:
+                metadata["subject_evidence"] = candidate.description
             return output, metadata
 
     raise RuntimeError("required exact Wikimedia media is unavailable")

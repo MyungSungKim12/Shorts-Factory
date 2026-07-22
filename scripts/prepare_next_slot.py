@@ -102,6 +102,11 @@ def _failure_alert_fields(exc: Exception) -> tuple[str, str, str]:
     return stage, category, diagnostic
 
 
+def _ensure_future_slot(scheduled_at: datetime, current: datetime, slot: int) -> None:
+    if scheduled_at <= current.astimezone(KST):
+        raise RuntimeError(f"이미 지난 예약 회차: {slot}")
+
+
 def _read_alert_metadata(result: dict) -> tuple[str, str, str]:
     """Read only the fields approved for a prebuild notification."""
     title = "unknown"
@@ -211,8 +216,10 @@ def _prepare(
 
     try:
         if slot is not None:
-            if initial_scheduled_at <= now_fn().astimezone(KST):
-                raise RuntimeError(f"이미 지난 예약 회차: {slot}")
+            _run_stage(
+                "target",
+                lambda: _ensure_future_slot(initial_scheduled_at, now_fn(), slot),
+            )
             _run_stage(
                 "target", lambda: ensure_target_available(data_dir, initial_run_id)
             )
@@ -252,10 +259,14 @@ def _prepare(
             lambda: validate_upload_package(staging_dir, ffmpeg_path),
         )
         if slot is None:
-            run_id, scheduled_at = next_scheduled_slot(now_fn())
+            run_id, scheduled_at = _run_stage(
+                "target", lambda: next_scheduled_slot(now_fn())
+            )
         else:
-            if initial_scheduled_at <= now_fn().astimezone(KST):
-                raise RuntimeError(f"이미 지난 예약 회차: {slot}")
+            _run_stage(
+                "target",
+                lambda: _ensure_future_slot(initial_scheduled_at, now_fn(), slot),
+            )
             run_id, scheduled_at = initial_run_id, initial_scheduled_at
         destination = _run_stage(
             "promotion",

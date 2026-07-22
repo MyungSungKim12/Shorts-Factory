@@ -361,6 +361,38 @@ def test_explicit_prepare_keeps_the_initial_target_after_rendering(
     assert result["run_id"] == "20260721-2"
 
 
+def test_explicit_prepare_tags_target_when_slot_expires_after_rendering(
+    tmp_path: Path, monkeypatch
+) -> None:
+    times = iter([
+        datetime(2026, 7, 21, 16, 0, tzinfo=KST),
+        datetime(2026, 7, 21, 16, 0, tzinfo=KST),
+        datetime(2026, 7, 21, 16, 0, tzinfo=KST),
+        datetime(2026, 7, 21, 17, 1, tzinfo=KST),
+    ])
+    monkeypatch.setattr(command, "run_researcher", lambda *args, **kwargs: None)
+    monkeypatch.setattr(command, "run_writer", lambda *args, **kwargs: None)
+
+    async def fake_producer(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(command, "run_producer", fake_producer)
+    monkeypatch.setattr(
+        command, "validate_upload_package", lambda *args: {"passed": True, "failures": []}
+    )
+
+    with pytest.raises(RuntimeError) as captured:
+        command.prepare_slot(
+            tmp_path,
+            "ffmpeg",
+            2,
+            now_fn=lambda: next(times),
+            use_lock=False,
+        )
+
+    assert captured.value.prebuild_stage == "target"
+
+
 def test_prepare_cli_alerts_success_with_allowlisted_summary(
     tmp_path: Path, monkeypatch
 ) -> None:
