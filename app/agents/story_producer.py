@@ -684,6 +684,30 @@ def _split_caption(text: str, max_len: int = 22) -> list[str]:
     return chunks or [text]
 
 
+def _wrap_caption(text: str, width: int = 13) -> str:
+    """자막 한 조각을 어절 경계에서 여러 줄로 나눈다.
+
+    렌더러의 자동 줄바꿈을 끈 상태에서도 화면 폭을 넘지 않게 하되,
+    한국어 단어 중간은 자르지 않는다.
+    """
+    words = text.split()
+    if not words:
+        return text
+
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        candidate = f"{current} {word}".strip()
+        if current and len(candidate) > width:
+            lines.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+    return "\n".join(lines)
+
+
 HIGHLIGHT_PATTERN = re.compile(
     r"\d[\d,.]*(?:년|개월|일|시간|분|초|명|개|km|m|%|배)?|비밀|하지만|놀랍게도"
 )
@@ -799,7 +823,7 @@ def _write_srt(
         lines.extend([
             str(cue),
             f"{_srt_time(0)} --> {_srt_time(intro['audio_end'])}",
-            _highlight_caption(intro["text"]),
+            _highlight_caption(_wrap_caption(intro["text"])),
             "",
         ])
         current = float(intro["body_start"])
@@ -816,7 +840,7 @@ def _write_srt(
             lines.extend([
                 str(cue),
                 f"{_srt_time(cursor)} --> {_srt_time(cursor + chunk_duration)}",
-                _highlight_caption(chunk),
+                _highlight_caption(_wrap_caption(chunk)),
                 "",
             ])
             cursor += chunk_duration
@@ -833,7 +857,7 @@ def _write_srt(
             lines.extend([
                 str(cue),
                 f"{_srt_time(cursor)} --> {_srt_time(cursor + chunk_duration)}",
-                _highlight_caption(chunk),
+                _highlight_caption(_wrap_caption(chunk)),
                 "",
             ])
             cursor += chunk_duration

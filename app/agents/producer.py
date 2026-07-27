@@ -403,10 +403,12 @@ def _build_srt(script: dict, scene_videos: list, ffmpeg_path: str, srt_path: Pat
         chunk_start = current
         for chunk in chunks:
             chunk_dur = duration * len(chunk) / total_chars
+            # 한 조각이 화면 폭을 넘겨 '한 줄로' 잘리지 않게 ~13자씩 여러 줄로 줄바꿈
+            wrapped = "\n".join(_wrap_text(chunk, 13))
             cue_no += 1
             lines.append(str(cue_no))
             lines.append(f"{_srt_time(chunk_start)} --> {_srt_time(chunk_start + chunk_dur)}")
-            lines.append(chunk)
+            lines.append(wrapped)
             lines.append("")
             chunk_start += chunk_dur
 

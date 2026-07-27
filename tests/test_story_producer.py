@@ -375,6 +375,16 @@ def test_subtitle_style_disables_renderer_auto_wrap_inside_korean_words():
     assert "WrapStyle=2" in style
 
 
+def test_wrap_caption_breaks_only_between_words():
+    wrapped = story_producer._wrap_caption(
+        "사하라의 눈 리차트 구조의 놀라운 비밀",
+        width=13,
+    )
+
+    assert wrapped == "사하라의 눈 리차트\n구조의 놀라운 비밀"
+    assert "리차\n트" not in wrapped
+
+
 def test_subtitle_style_moves_caption_to_lower_middle():
     style = story_producer._subtitle_style("Malgun Gothic")
     assert "Alignment=2" in style
@@ -696,7 +706,7 @@ def test_story_srt_starts_with_title_and_shifts_body(tmp_path):
 
     subtitles = output.read_text(encoding="utf-8")
     assert "00:00:00,000 --> 00:00:03,000" in subtitles
-    assert "Spoken story title" in subtitles
+    assert "Spoken story title" in subtitles.replace(chr(10), " ")
     assert "00:00:03,150" in subtitles
 
 

@@ -1,7 +1,9 @@
 """업로더 에이전트 — YouTube Data API v3 자동 업로드."""
 import json
 import os
+import re
 import sqlite3
+from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
 
@@ -15,6 +17,50 @@ from app.services.quality_gate import validate_upload_package
 
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 CRED_DIR = Path("credentials")
+
+
+def _description_with_hashtags(
+    description: str,
+    tags: Iterable[object],
+    *,
+    max_hashtags: int = 5,
+    max_length: int = 5000,
+) -> str:
+    """기존 설명을 보존하면서 정제된 주제 해시태그를 마지막 줄에 추가한다."""
+    base = str(description or "").rstrip()
+    existing = {
+        hashtag.casefold()
+        for hashtag in re.findall(r"#([\w가-힣]+)", base)
+    }
+    hashtags: list[str] = []
+    seen = set(existing)
+
+    for raw in tags or []:
+        clean = re.sub(
+            r"[^\w가-힣]",
+            "",
+            str(raw).strip().lstrip("#"),
+        )
+        key = clean.casefold()
+        if not clean or key in seen:
+            continue
+
+        candidate = f"#{clean}"
+        suffix = " ".join([*hashtags, candidate])
+        combined = f"{base}\n\n{suffix}" if base else suffix
+        if len(combined) > max_length:
+            continue
+
+        hashtags.append(candidate)
+        seen.add(key)
+        if len(hashtags) >= max_hashtags:
+            break
+
+    if not hashtags:
+        return base
+
+    suffix = " ".join(hashtags)
+    return f"{base}\n\n{suffix}" if base else suffix
 
 
 def run_uploader(data_dir: Path, date_str: str) -> dict:
@@ -45,13 +91,14 @@ def run_uploader(data_dir: Path, date_str: str) -> dict:
         if existing:
             return {"status": "skipped", "video_id": existing[0], "reason": "오늘 영상 이미 업로드됨"}
 
-        # 2. 일 업로드 한도 확인 — API 쿼터상 절대 한도 6건을 설정으로도 초과 불가
+        # 2. 일 업로드 한도 확인 — API 쿼터상 절대 한도 6건을 설정으로도 초과 불가.
+        #    카운트는 '실제 업로드된 달력 날짜(uploaded_at)' 기준 — YouTube 쿼터가 달력 하루 단위이고,
+        #    과거 회차(예: 어제 영상)를 오늘 재업로드해도 오늘 몫으로 정확히 집계되게 하기 위함.
         limit = min(int(os.getenv("DAILY_UPLOAD_LIMIT", "6")), 6)
-        today = datetime.now().strftime("%Y%m%d")
-        # date는 회차 포함 형식("20260713-2")이므로 오늘 전체는 LIKE로 집계
+        today = datetime.now().strftime("%Y-%m-%d")
         today_count = db.execute(
-            "SELECT COUNT(*) FROM videos WHERE date LIKE ? AND status = 'uploaded'",
-            (f"{today}%",),
+            "SELECT COUNT(*) FROM videos WHERE status = 'uploaded' AND substr(uploaded_at, 1, 10) = ?",
+            (today,),
         ).fetchone()[0]
         if today_count >= limit:
             return {"status": "skipped", "reason": f"일 업로드 한도({limit}건) 도달 — 내일 재시도"}
@@ -103,7 +150,10 @@ def run_uploader(data_dir: Path, date_str: str) -> dict:
         body = {
             "snippet": {
                 "title": title,
-                "description": script.get("description", ""),
+                "description": _description_with_hashtags(
+                    script.get("description", ""),
+                    script.get("tags", []),
+                ),
                 "tags": tags[:30],
                 "categoryId": str(channel_cfg.get("category_id", "24")),
                 "defaultLanguage": "ko",
