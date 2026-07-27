@@ -42,11 +42,35 @@ def test_캐시_회차_분리():
         assert pick_cached(d, 3, []) ["topic"] == "역사소재"
 
 def test_회차_카테고리_매핑():
-    assert SLOT_CATEGORIES[1]["name"] == "극한 생존/위험한 동물"
-    assert SLOT_CATEGORIES[4]["name"] == "미스터리/기이한 기록"
+    assert SLOT_CATEGORIES[1]["name"] == "기묘한 자연 현상"
+    assert SLOT_CATEGORIES[4]["name"] == "과학의 경계/미해결 관측"
+    assert SLOT_CATEGORIES[2]["name"] == "숨겨진 세계/금지된 구조"
+    assert SLOT_CATEGORIES[3]["name"] == "사라진 문명/역사 미스터리"
+    assert all("동물" not in c["name"] + c["desc"] for c in SLOT_CATEGORIES.values())
     # 모든 카테고리에 영상 폴백어 존재
     for c in SLOT_CATEGORIES.values():
         assert c.get("visual_fallback")
+        assert c.get("category")
+
+
+def test_story_cache_rejects_removed_animal_category():
+    with tempfile.TemporaryDirectory() as td:
+        d = Path(td)
+        animal = _topic("과거 동물 소재")
+        animal.update({"format": "story", "category": "animal_survival"})
+        mystery = _topic("미해결 관측 소재")
+        mystery.update({"format": "story", "category": "science_mystery"})
+        save_verified(d, 0, animal)
+        save_verified(d, 0, mystery)
+
+        got = pick_cached(
+            d,
+            0,
+            exclude_topics=[],
+            allowed_categories={"science_mystery"},
+        )
+
+        assert got["topic"] == "미해결 관측 소재"
 
 
 def test_cached_topics_supports_warmer_exclusions():

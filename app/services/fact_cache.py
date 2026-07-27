@@ -47,7 +47,14 @@ def save_verified(data_dir: Path, slot, topic_dict: dict) -> None:
         db.close()
 
 
-def pick_cached(data_dir: Path, slot, exclude_topics: list, reverify_days: int = 30) -> dict | None:
+def pick_cached(
+    data_dir: Path,
+    slot,
+    exclude_topics: list,
+    reverify_days: int = 30,
+    *,
+    allowed_categories: set[str] | None = None,
+) -> dict | None:
     """해당 회차 카테고리의 검증 캐시에서 재사용할 소재 1건 선택.
 
     - exclude_topics(최근 사용분)는 제외
@@ -67,12 +74,17 @@ def pick_cached(data_dir: Path, slot, exclude_topics: list, reverify_days: int =
         for topic, payload in rows:
             if topic in exclude:
                 continue
+            data = json.loads(payload)
+            if (
+                allowed_categories is not None
+                and data.get("category") not in allowed_categories
+            ):
+                continue
             db.execute(
                 "UPDATE verified_topics SET last_used_at = ? WHERE topic = ?",
                 (datetime.now().isoformat(), topic),
             )
             db.commit()
-            data = json.loads(payload)
             data["verification_method"] = "verified_cache"
             return data
         return None

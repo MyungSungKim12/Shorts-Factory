@@ -51,8 +51,13 @@ def test_research_prompt_requires_sources_and_visual_plan():
     assert "verification_method" in prompt
     assert "visual_plan" in prompt
     assert "visual_identity" in prompt
-    assert "실재 장소·자연현상" in prompt
+    assert "검증 가능한 자연·과학" in prompt
     assert "최신 뉴스" in prompt
+    assert "이상한 지구기록" in prompt
+    assert "동물 중심 소재는 선택하지 마라" in prompt
+    assert "science_mystery" in prompt
+    assert "hidden_world" in prompt
+    assert "history_mystery" in prompt
 
 
 def test_writer_prompt_contains_retention_beats():

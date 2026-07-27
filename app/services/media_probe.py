@@ -16,6 +16,15 @@ def _probe_timeout() -> int:
         return 180
 
 
+def shorts_max_duration() -> int:
+    """Return the configured final-video ceiling within YouTube's 3-minute limit."""
+    try:
+        configured = int(os.getenv("MAX_VIDEO_SEC", "180"))
+    except ValueError:
+        configured = 180
+    return min(180, max(75, configured))
+
+
 def ffprobe_path_for(ffmpeg_path: str) -> str:
     lower = ffmpeg_path.lower()
     if lower.endswith("ffmpeg.exe"):
@@ -121,7 +130,7 @@ def validate_sample(report: dict) -> list[str]:
     failures = []
     if (report.get("width"), report.get("height")) != (1080, 1920):
         failures.append("resolution")
-    if not 60 <= float(report.get("duration", 0)) <= 75:
+    if not 60 <= float(report.get("duration", 0)) <= shorts_max_duration():
         failures.append("duration")
     if report.get("video_codec") != "h264":
         failures.append("video_codec")

@@ -21,6 +21,28 @@ def test_valid_story_video_is_accepted():
     assert validate_sample(report) == []
 
 
+def test_story_video_over_target_is_accepted_under_short_limit():
+    report = {
+        "width": 1080, "height": 1920, "duration": 77.0,
+        "video_codec": "h264", "audio_codec": "aac", "has_audio": True,
+        "black_ratio": 0.01,
+        "audio_duration": 76.9, "duration_delta": 0.1,
+        "internal_silence_max": 0.0,
+    }
+    assert validate_sample(report) == []
+
+
+def test_story_video_over_short_limit_is_rejected():
+    report = {
+        "width": 1080, "height": 1920, "duration": 180.1,
+        "video_codec": "h264", "audio_codec": "aac", "has_audio": True,
+        "black_ratio": 0.01,
+        "audio_duration": 180.0, "duration_delta": 0.1,
+        "internal_silence_max": 0.0,
+    }
+    assert "duration" in validate_sample(report)
+
+
 def test_invalid_video_lists_every_failure():
     report = {
         "width": 720, "height": 1280, "duration": 50,

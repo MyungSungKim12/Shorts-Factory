@@ -158,7 +158,12 @@ class StoryTopicContract(BaseModel):
     """단일 소재 스토리 리서처 산출물 계약."""
     format: Literal["story"] = "story"
     topic: str = Field(min_length=5)
-    category: Literal["place_nature", "history_structure", "animal_survival"]
+    category: Literal[
+        "place_nature",
+        "science_mystery",
+        "hidden_world",
+        "history_mystery",
+    ]
     hook_angle: str = Field(min_length=5)
     target_keyword: str = Field(min_length=2)
     core_question: str = Field(min_length=5)

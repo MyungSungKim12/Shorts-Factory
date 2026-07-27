@@ -1,11 +1,11 @@
 {
-  "channel_name": "",
-  "format": "ranking",
-  "niche": "랭킹/TOP N — 주제 무관 (모든 분야에서 순위 매길 수 있는 소재)",
+  "channel_name": "이상한 지구기록",
+  "format": "story",
+  "niche": "검증 가능한 기묘한 자연 현상·과학 미스터리·숨겨진 세계·역사적 수수께끼",
   "ranking_size_default": 5,
-  "target_audience": "20-40 일반 대중 (킬링타임 시청)",
+  "target_audience": "과학·탐사·미스터리에 관심 있는 20-40대",
   "category_id": "24",
   "made_for_kids": false,
-  "upload_time": "18:00",
+  "upload_time": "11:00, 14:00, 17:00, 21:00",
   "language": "ko"
 }

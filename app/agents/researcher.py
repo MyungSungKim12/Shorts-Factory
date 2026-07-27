@@ -26,28 +26,32 @@ def _is_daily_quota_error(error: Exception) -> bool:
 # 회차별 스토리 방향. 무료 스톡 확보성보다 클릭 욕구와 반전을 먼저 평가한다.
 SLOT_CATEGORIES = {
     1: {
-        "name": "극한 생존/위험한 동물",
-        "desc": "포식, 독, 기생, 극한 환경 생존처럼 본능적으로 위험과 호기심을 느끼는 이야기.",
-        "examples": "몸이 잘려도 살아남는 원리, 포식자를 역으로 이용하는 생존법, 인간에게 치명적인 작은 동물",
-        "visual_fallback": "wild animal survival",
+        "name": "기묘한 자연 현상",
+        "category": "place_nature",
+        "desc": "실제로 관측됐지만 직관과 어긋나는 지질·기상·해양·우주 자연 현상의 비밀.",
+        "examples": "스스로 움직이는 돌, 사라졌다 돌아오는 호수, 특정 조건에서만 나타나는 빛과 소리",
+        "visual_fallback": "strange geological phenomenon",
     },
     2: {
-        "name": "금지된 장소/거대 구조",
-        "desc": "사람이 접근하기 어렵거나 상식 밖 규모와 목적을 가진 장소·구조의 이야기.",
-        "examples": "지도에서 사라진 시설, 버려진 거대 구조물, 불가능해 보이는 고대 공법",
-        "visual_fallback": "massive abandoned structure",
+        "name": "숨겨진 세계/금지된 구조",
+        "category": "hidden_world",
+        "desc": "지하·심해·빙하 아래처럼 보이지 않는 곳에 실제로 존재하는 장소와 구조의 비밀.",
+        "examples": "빙하 아래 호수, 폐쇄된 지하 시설, 심해에서 확인된 거대 구조와 생태계",
+        "visual_fallback": "hidden underground structure",
     },
     3: {
-        "name": "역사적 반전/재난/치명적 실수",
-        "desc": "한 번의 판단이 거대한 결과를 만든 사건, 재난, 생존과 역사적 반전 이야기.",
-        "examples": "사소한 실수로 무너진 작전, 모두가 틀렸던 발견, 살아남을 수 없던 곳의 생존 기록",
-        "visual_fallback": "historic disaster ruins",
+        "name": "사라진 문명/역사 미스터리",
+        "category": "history_mystery",
+        "desc": "유물·기록·유적은 남았지만 목적이나 과정의 일부가 아직 논쟁 중인 역사적 수수께끼.",
+        "examples": "용도가 확정되지 않은 고대 구조, 갑자기 버려진 도시, 서로 맞지 않는 탐사 기록",
+        "visual_fallback": "ancient unexplained ruins",
     },
     4: {
-        "name": "미스터리/기이한 기록",
-        "desc": "처음 들으면 거짓말 같지만 검증 가능한 이상 현상, 수수께끼와 기이한 기록 이야기.",
-        "examples": "흔적 없이 사라진 장소, 설명 뒤에도 더 이상해지는 현상, 현실에 남은 불가능한 기록",
-        "visual_fallback": "dark foggy atmosphere",
+        "name": "과학의 경계/미해결 관측",
+        "category": "science_mystery",
+        "desc": "관측과 실험 기록은 분명하지만 원인·신호·결과 해석이 아직 완전히 합의되지 않은 과학 미스터리.",
+        "examples": "반복되지 않은 우주 신호, 예상과 달랐던 탐사 결과, 설명 후보가 여러 개인 관측 기록",
+        "visual_fallback": "unexplained scientific observation",
     },
 }
 
@@ -160,7 +164,20 @@ def run_researcher(
             ) from e
         safe_print(f"  ℹ️ 그라운딩 검증 실패({str(e)[:60]}) — 검증 캐시에서 소재 찾기")
         cache_slot = 0 if selected == "story" else slot
-        cached = pick_cached(data_dir, cache_slot, recent_topics) if use_cache else None
+        allowed_categories = (
+            {category["category"]}
+            if selected == "story" and category
+            else None
+        )
+        cached = (
+            pick_cached(
+                data_dir,
+                cache_slot,
+                recent_topics,
+                allowed_categories=allowed_categories,
+            )
+            if use_cache else None
+        )
         if cached:
             topic_dict = validate_topic(cached, selected)
             safe_print(f"  ✓ 검증 캐시 재사용: {topic_dict.get('topic', '')}")
@@ -214,7 +231,7 @@ def _story_researcher_prompt(context: dict, grounded: bool = True) -> str:
         if category else
         "- 이번 회차 방향: 위험, 반전, 거대한 규모 중 하나가 분명한 이야기"
     )
-    return f"""당신은 실재 장소·자연현상·역사 구조물·동물 생존 원리를 조사하는 한국어 Shorts 리서처다.
+    return f"""당신은 '이상한 지구기록' 채널의 한국어 Shorts 리서처다. 검증 가능한 자연·과학·숨겨진 장소·역사 미스터리만 조사한다.
 
 [목표]
 - 사람들이 제목만 보고도 "왜? 어떻게?"라고 묻게 되는 소재 1개를 고른다.
@@ -230,8 +247,8 @@ def _story_researcher_prompt(context: dict, grounded: bool = True) -> str:
 [재미 점수 — 후보마다 각 0~5점, 총 30점]
 1. 첫 3초 호기심: 설명을 듣기 전에도 결말이 궁금한가?
 2. 상식 반전: 대부분의 예상과 실제 답이 다른가?
-3. 위험·규모·충격: 생존, 죽음, 거대한 크기, 치명적 실수 중 하나가 있는가?
-4. 남성 시청자 관심: 위험, 기술, 구조, 전쟁, 재난, 미스터리 본능을 자극하는가?
+3. 위험·규모·충격: 거대한 크기, 설명되지 않은 관측, 숨겨진 구조, 역사적 반전 중 하나가 있는가?
+4. 남성 시청자 관심: 과학, 기술, 구조, 탐사, 미스터리 본능을 자극하는가?
 5. 무료 영상 확보: 실제 대상 또는 같은 사건군의 화면을 여러 장면 구할 수 있는가?
 6. 차별성: 최근 소재와 다르고 너무 흔하게 소비된 설명이 아닌가?
 - 총점 24점 이상을 목표로 한다. 모든 후보가 24점 미만이어도 추가 호출하거나 회차를 중단하지 말고, 그중 최고점 후보를 반드시 선택한다.
@@ -242,7 +259,8 @@ def _story_researcher_prompt(context: dict, grounded: bool = True) -> str:
 - 단순히 색이 다른 이유, 이름의 유래, 평범한 지형 형성 과정만 설명하는 소재
 - 제목을 읽은 순간 답이 예상되는 교과서형 질문
 - "신비롭다", "놀랍다" 같은 형용사 외에 구체적인 위험·반전·규모가 없는 소재
-- 무료 스톡이 많다는 이유만으로 고른 평범한 자연 풍경이나 귀여운 동물 소개
+- 무료 스톡이 많다는 이유만으로 고른 평범한 자연 풍경
+- 동물 중심 소재는 선택하지 마라. 동물이 배경에 등장해도 이야기의 주인공이나 핵심 반전으로 삼지 마라.
 - 이미 너무 유명해 결말까지 알려진 상투적인 미스터리
 
 [금지]
@@ -286,7 +304,7 @@ def _story_researcher_prompt(context: dict, grounded: bool = True) -> str:
   "verified_at": "검색 완료 시각"
 }}
 
-category는 place_nature, history_structure, animal_survival 중 하나만 사용하라.
+category는 place_nature, science_mystery, hidden_world, history_mystery 중 하나만 사용하라.
 """
 
 

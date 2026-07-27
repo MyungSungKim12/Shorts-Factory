@@ -638,14 +638,23 @@ def test_retime_audio_uses_atempo_and_replaces_source(tmp_path, monkeypatch):
     assert source.read_bytes() == b"after"
 
 
-def test_story_timing_rejects_total_over_75_seconds():
-    with pytest.raises(RuntimeError, match="75"):
-        story_producer.build_story_timing(4.0, 68.0, 4.0)
+def test_story_timing_allows_natural_audio_over_target_under_short_limit():
+    timing = story_producer.build_story_timing(4.0, 68.0, 4.0)
+    assert timing["total_duration"] == 76.15
 
 
-def test_cta_timing_rejects_final_video_over_75_seconds():
-    with pytest.raises(RuntimeError, match="75초 초과"):
-        story_producer.build_cta_timing(73.0, 3.0)
+def test_story_timing_rejects_total_over_180_seconds():
+    with pytest.raises(RuntimeError, match="180초 초과"):
+        story_producer.build_story_timing(4.0, 173.0, 4.0)
+
+
+def test_cta_timing_allows_natural_audio_over_target_under_short_limit():
+    assert story_producer.build_cta_timing(73.0, 3.0)["total_duration"] == 76.0
+
+
+def test_cta_timing_rejects_final_video_over_180_seconds():
+    with pytest.raises(RuntimeError, match="180초 초과"):
+        story_producer.build_cta_timing(178.0, 3.0)
 
 
 def test_cta_timing_rejects_final_video_under_60_seconds():

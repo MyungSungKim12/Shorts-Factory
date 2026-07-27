@@ -73,6 +73,19 @@ def test_story_contracts_accept_complete_documents():
     assert validate_script(story_script())["total_duration_sec"] == 64
 
 
+@pytest.mark.parametrize(
+    "category",
+    ["place_nature", "science_mystery", "hidden_world", "history_mystery"],
+)
+def test_story_contract_accepts_mystery_channel_categories(category):
+    assert validate_topic(story_topic(category=category))["category"] == category
+
+
+def test_story_contract_rejects_removed_animal_category():
+    with pytest.raises(ValueError):
+        validate_topic(story_topic(category="animal_survival"))
+
+
 def test_story_topic_derives_a_visual_identity_for_legacy_cached_documents():
     topic = validate_topic(story_topic())
 

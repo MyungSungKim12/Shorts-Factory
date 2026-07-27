@@ -25,6 +25,7 @@ from app.services.media_library import (
     fetch_required_exact_media,
     fetch_story_media,
 )
+from app.services.media_probe import shorts_max_duration
 from app.services.process_runner import run_checked
 from app.services.temp_cleanup import mark_temp_owner
 from app.services.tts import TTSResult, synthesize
@@ -254,8 +255,11 @@ def build_cta_timing(body_duration: float, audio_duration: float) -> dict[str, f
     end = round(start + float(audio_duration), 3)
     if end < 60:
         raise RuntimeError(f"CTA 포함 최종 길이 {end:.1f}초로 60초 미만")
-    if end > 75:
-        raise RuntimeError(f"CTA 포함 최종 길이 {end:.1f}초로 75초 초과")
+    max_duration = shorts_max_duration()
+    if end > max_duration:
+        raise RuntimeError(
+            f"CTA 포함 최종 길이 {end:.1f}초로 {max_duration}초 초과"
+        )
     return {"start": start, "end": end, "total_duration": end}
 
 
@@ -272,8 +276,11 @@ def build_story_timing(
     cta_end = round(cta_start + float(cta_audio_duration), 3)
     if cta_end < 60:
         raise RuntimeError(f"인트로·CTA 포함 최종 길이 {cta_end:.1f}초로 60초 미만")
-    if cta_end > 75:
-        raise RuntimeError(f"인트로·CTA 포함 최종 길이 {cta_end:.1f}초로 75초 초과")
+    max_duration = shorts_max_duration()
+    if cta_end > max_duration:
+        raise RuntimeError(
+            f"인트로·CTA 포함 최종 길이 {cta_end:.1f}초로 {max_duration}초 초과"
+        )
     return {
         "intro_duration": intro_duration,
         "body_start": body_start,
