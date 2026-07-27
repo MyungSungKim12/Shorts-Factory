@@ -325,8 +325,7 @@ def _retime_audio(source: Path, tempo: float, ffmpeg_path: str) -> None:
                 "pcm_s16le",
                 str(output),
             ],
-            timeout_seconds=180,
-            label="나레이션 길이 보정",
+            timeout=180,
         )
         output.replace(source)
     finally:

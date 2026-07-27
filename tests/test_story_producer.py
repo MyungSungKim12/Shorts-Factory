@@ -624,8 +624,9 @@ def test_retime_audio_uses_atempo_and_replaces_source(tmp_path, monkeypatch):
     source.write_bytes(b"before")
     captured = {}
 
-    def fake_run_checked(command, **kwargs):
+    def fake_run_checked(command, *, timeout, cwd=None, text=False):
         captured["command"] = command
+        captured["timeout"] = timeout
         Path(command[-1]).write_bytes(b"after")
 
     monkeypatch.setattr(story_producer, "run_checked", fake_run_checked)
@@ -633,6 +634,7 @@ def test_retime_audio_uses_atempo_and_replaces_source(tmp_path, monkeypatch):
     story_producer._retime_audio(source, 0.9, "ffmpeg")
 
     assert "atempo=0.900000" in captured["command"]
+    assert captured["timeout"] == 180
     assert source.read_bytes() == b"after"
 
 
