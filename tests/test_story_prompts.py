@@ -70,6 +70,9 @@ def test_writer_prompt_contains_retention_beats():
     assert "exact:" in prompt
     assert "visual_identity" in prompt
     assert "Wikimedia Commons" in prompt
+    assert "NARRATIVE_PATTERN:" in prompt
+    assert "CHANNEL_EDITORIAL_VIEW" in prompt
+    assert "SUBJECT_ANCHORED_VISUALS" in prompt
     assert "close 본문에는 \"\uad6c독\"과 \"좋아요\"를 절대 넣지 마라" in prompt
 
 

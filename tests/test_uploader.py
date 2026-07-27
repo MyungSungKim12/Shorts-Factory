@@ -3,6 +3,60 @@ import json
 from app.agents import uploader
 
 
+def test_wikimedia_credits_are_unique_and_include_license_and_source():
+    result = uploader._description_with_wikimedia_credits(
+        "검증된 내용입니다.",
+        [
+            {
+                "provider": "wikimedia_image",
+                "media_id": "File:Camp Century.jpg",
+                "attribution": "CRREL Researcher",
+                "license": "CC BY 2.0",
+                "source_url": "https://commons.wikimedia.org/wiki/File:Camp_Century.jpg",
+            },
+            {
+                "provider": "wikimedia_image",
+                "media_id": "File:Camp Century.jpg",
+                "attribution": "CRREL Researcher",
+                "license": "CC BY 2.0",
+                "source_url": "https://commons.wikimedia.org/wiki/File:Camp_Century.jpg",
+            },
+            {"provider": "pexels_video", "source_url": "https://pexels.com/video/1"},
+        ],
+    )
+
+    assert result.count("Camp Century.jpg") == 1
+    assert "CRREL Researcher" in result
+    assert "CC BY 2.0" in result
+    assert "https://commons.wikimedia.org/wiki/File:Camp_Century.jpg" in result
+    assert "pexels.com" not in result
+
+
+def test_synthetic_media_is_true_only_when_veo_footage_was_used():
+    used = {
+        "intro": {
+            "ai_generation": {
+                "provider": "vertex_veo",
+                "status": "ready",
+                "used_duration_sec": 3.0,
+            }
+        }
+    }
+    skipped = {
+        "intro": {
+            "ai_generation": {
+                "provider": "vertex_veo",
+                "status": "skipped_unverified_real_subject",
+                "used_duration_sec": 0.0,
+            }
+        }
+    }
+
+    assert uploader._uses_synthetic_media(used) is True
+    assert uploader._uses_synthetic_media(skipped) is False
+    assert uploader._uses_synthetic_media({}) is False
+
+
 def test_description_appends_clean_unique_topic_hashtags():
     result = uploader._description_with_hashtags(
         "리차트 구조를 살펴봅니다. #지구미스터리",
@@ -68,6 +122,30 @@ def test_run_uploader_sends_hashtags_in_youtube_description(tmp_path, monkeypatc
         ),
         encoding="utf-8",
     )
+    (work_dir / "produce_log.json").write_text(
+        json.dumps(
+            {
+                "intro": {
+                    "ai_generation": {
+                        "provider": "vertex_veo",
+                        "status": "ready",
+                        "used_duration_sec": 3.0,
+                    }
+                },
+                "sources": [
+                    {
+                        "provider": "wikimedia_image",
+                        "media_id": "File:Richat Structure.jpg",
+                        "attribution": "NASA",
+                        "license": "Public domain",
+                        "source_url": "https://commons.wikimedia.org/wiki/File:Richat.jpg",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
 
     captured = {}
 
@@ -108,6 +186,8 @@ def test_run_uploader_sends_hashtags_in_youtube_description(tmp_path, monkeypatc
 
     assert result["status"] == "uploaded"
     assert captured["part"] == "snippet,status"
-    assert captured["body"]["snippet"]["description"] == (
-        "사하라의 눈 설명\n\n#사하라의눈 #리차트구조"
-    )
+    description = captured["body"]["snippet"]["description"]
+    assert description.startswith("사하라의 눈 설명\n\n#사하라의눈 #리차트구조")
+    assert "자료 출처" in description
+    assert "NASA" in description
+    assert captured["body"]["status"]["containsSyntheticMedia"] is True

@@ -86,5 +86,5 @@ def test_middle_queries_keep_scene_visuals_before_safe_fallbacks():
 
     queries = story_scene_queries(_script(), topic)
 
-    assert queries[2][:2] == ["desert water closeup", "dry lake shore"]
-    assert set(queries[2][2:]) <= set(topic["visual_identity"]["safe_fallbacks"])
+    assert all("desert lake" in query for query in queries[2])
+    assert queries[2][0].endswith("desert water closeup")

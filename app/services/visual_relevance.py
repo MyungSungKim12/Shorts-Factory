@@ -21,6 +21,23 @@ def _exact(query: str) -> str:
     return f"exact: {value}" if value else ""
 
 
+def _subject_anchor(identity: dict) -> str:
+    for query in identity.get("exact_queries", []):
+        value = (query or "").removeprefix("exact:").strip()
+        if value:
+            return value
+    return ""
+
+
+def _anchored_stock_query(query: str, anchor: str) -> str:
+    value = (query or "").strip()
+    if not value or value.startswith("exact:") or not anchor:
+        return value
+    if anchor.casefold() in value.casefold():
+        return value
+    return f"{anchor} {value}"
+
+
 def ensure_visual_identity(topic: dict) -> dict:
     """Add deterministic anchors to a validated story topic when absent.
 
@@ -61,11 +78,18 @@ def story_scene_queries(script: dict, topic: dict) -> dict[int, list[str]]:
     """Build media-search candidates without modifying ``script.json`` data."""
     identity = ensure_visual_identity(topic)["visual_identity"]
     exact_queries = identity["exact_queries"]
-    safe_fallbacks = identity["safe_fallbacks"]
+    anchor = _subject_anchor(identity)
+    safe_fallbacks = [
+        _anchored_stock_query(query, anchor)
+        for query in identity["safe_fallbacks"]
+    ]
     queries: dict[int, list[str]] = {}
 
     for scene in script.get("scenes", []):
-        scene_queries = _unique(scene.get("visuals", []))
+        scene_queries = _unique([
+            _anchored_stock_query(query, anchor)
+            for query in scene.get("visuals", [])
+        ])
         if scene.get("role") in {"hook", "close"}:
             scene_queries = _unique([
                 *exact_queries,

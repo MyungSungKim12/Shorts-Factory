@@ -63,6 +63,51 @@ def _description_with_hashtags(
     return f"{base}\n\n{suffix}" if base else suffix
 
 
+def _description_with_wikimedia_credits(
+    description: str,
+    sources: Iterable[object],
+    *,
+    max_length: int = 5000,
+) -> str:
+    """Append public Wikimedia attribution once per source URL."""
+    base = str(description or "").rstrip()
+    credits: list[str] = []
+    seen_urls: set[str] = set()
+
+    for raw in sources or []:
+        if not isinstance(raw, dict) or raw.get("provider") != "wikimedia_image":
+            continue
+        source_url = str(raw.get("source_url") or "").strip()
+        if not source_url or source_url in seen_urls:
+            continue
+
+        title = str(raw.get("media_id") or "Wikimedia 자료").removeprefix("File:").strip()
+        attribution = str(raw.get("attribution") or "저작자 정보는 원본 페이지 참조").strip()
+        license_name = str(raw.get("license") or "라이선스는 원본 페이지 참조").strip()
+        credit = f"- {title} — {attribution} / {license_name}\n  {source_url}"
+        section = "자료 출처 (Wikimedia Commons)\n" + "\n".join([*credits, credit])
+        combined = f"{base}\n\n{section}" if base else section
+        if len(combined) > max_length:
+            continue
+        credits.append(credit)
+        seen_urls.add(source_url)
+
+    if not credits:
+        return base
+    section = "자료 출처 (Wikimedia Commons)\n" + "\n".join(credits)
+    return f"{base}\n\n{section}" if base else section
+
+
+def _uses_synthetic_media(produce_log: dict) -> bool:
+    """Return true only when realistic Veo footage is present in the render."""
+    ai_generation = (produce_log.get("intro") or {}).get("ai_generation") or {}
+    return (
+        ai_generation.get("provider") == "vertex_veo"
+        and ai_generation.get("status") == "ready"
+        and float(ai_generation.get("used_duration_sec") or 0) > 0
+    )
+
+
 def run_uploader(data_dir: Path, date_str: str) -> dict:
     """
     output.mp4를 YouTube에 업로드하고 DB에 기록한다.
@@ -137,6 +182,9 @@ def run_uploader(data_dir: Path, date_str: str) -> dict:
         quality = validate_upload_package(
             work_dir, os.getenv("FFMPEG_PATH", "ffmpeg")
         )
+        produce = json.loads(
+            (work_dir / "produce_log.json").read_text(encoding="utf-8")
+        )
 
         # 5. 채널 설정 로드
         channel_cfg = {}
@@ -147,13 +195,18 @@ def run_uploader(data_dir: Path, date_str: str) -> dict:
         # 6. 업로드 실행
         youtube = _get_youtube_client()
 
+        description = _description_with_hashtags(
+            script.get("description", ""),
+            script.get("tags", []),
+        )
+        description = _description_with_wikimedia_credits(
+            description,
+            produce.get("sources", []),
+        )
         body = {
             "snippet": {
                 "title": title,
-                "description": _description_with_hashtags(
-                    script.get("description", ""),
-                    script.get("tags", []),
-                ),
+                "description": description,
                 "tags": tags[:30],
                 "categoryId": str(channel_cfg.get("category_id", "24")),
                 "defaultLanguage": "ko",
@@ -161,6 +214,7 @@ def run_uploader(data_dir: Path, date_str: str) -> dict:
             "status": {
                 "privacyStatus": os.getenv("UPLOAD_PRIVACY", "unlisted"),
                 "selfDeclaredMadeForKids": bool(channel_cfg.get("made_for_kids", False)),
+                "containsSyntheticMedia": _uses_synthetic_media(produce),
             },
         }
 

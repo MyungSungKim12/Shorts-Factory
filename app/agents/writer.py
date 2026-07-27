@@ -1,4 +1,5 @@
 """대본 작가 에이전트 — script.json 생성."""
+import hashlib
 import json
 from pathlib import Path
 
@@ -145,6 +146,15 @@ def _story_writer_prompt(topic: dict) -> str:
         for item in topic.get("visual_plan", [])
     )
     visual_identity = topic.get("visual_identity") or {}
+    narrative_patterns = (
+        "모순 공개 → 단서 추적 → 원인 연결 → 의미 회수",
+        "결과 선공개 → 시간순 역추적 → 결정적 전환점 → 현재 의미",
+        "통념 제시 → 검증 사실로 반박 → 실제 작동 원리 → 한 줄 결론",
+        "위험·규모 제시 → 왜 가능한지 질문 → 단계별 원인 → 시청자 관점의 의미",
+    )
+    pattern_seed = str(topic.get("topic") or topic.get("target_keyword") or "")
+    pattern_hash = hashlib.sha256(pattern_seed.encode("utf-8")).hexdigest()
+    narrative_pattern = narrative_patterns[int(pattern_hash[:8], 16) % len(narrative_patterns)]
     return f"""당신은 한국어 유튜브 Shorts 스토리 작가다. 하나의 검증된 소재를 설명해 끝까지 보게 만든다. 완성 영상 목표는 60~75초다.
 
 [소재]
@@ -159,6 +169,12 @@ Verified visual_identity:
 exact_queries: {', '.join(visual_identity.get('exact_queries', []))}
 safe_fallbacks: {', '.join(visual_identity.get('safe_fallbacks', []))}
 Preserve exact_queries as the hook and close subject anchor. Use safe_fallbacks only for the same real-world subject family; do not create visual_identity in script JSON.
+
+[차별화 규칙]
+- NARRATIVE_PATTERN: {narrative_pattern}
+- CHANNEL_EDITORIAL_VIEW: 마지막 payoff 또는 close에 검증된 사실만으로 "왜 이 이야기가 중요한지"를 해석하는 채널 고유 문장 한 개를 넣어라. 새로운 사실·수치·인과관계는 만들지 마라.
+- SUBJECT_ANCHORED_VISUALS: 모든 일반 스톡 검색어에도 exact_queries의 실제 대상명 또는 같은 대상군을 식별하는 핵심 명사를 포함하라. 대상과 무관한 분위기 영상, 일몰, 일반 풍경, 캠핑, 도시 영상으로 빈 장면을 채우지 마라.
+- 위 NARRATIVE_PATTERN의 순서를 이번 영상의 중심 구조로 사용하고, 제목과 첫 문장을 매번 같은 공식으로 반복하지 마라.
 
 [잔존 구조]
 - 7~10개 씬으로 작성하고 duration_sec 합계는 반드시 53~58초다. 앞에 제목 음성 인트로, 뒤에 CTA가 붙고 Neural2 실제 발화가 계획보다 길어질 여유를 남긴다.

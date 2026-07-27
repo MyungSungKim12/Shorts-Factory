@@ -16,6 +16,11 @@ _QUERY_NOISE_TOKENS = frozenset({
     "aerial", "view", "closeup", "drone",
 })
 _GENERIC_EXACT_TOKENS = _QUERY_NOISE_TOKENS
+_STOCK_NOISE_TOKENS = _QUERY_NOISE_TOKENS | frozenset({
+    "pexels", "pixabay", "com", "www", "video", "photo", "image", "stock",
+    "natural", "nature", "wild", "moving", "footage", "portrait", "over",
+    "under", "with", "and", "from",
+})
 
 
 class MediaTooLarge(requests.RequestException):
@@ -88,6 +93,28 @@ def exact_source_matches(source: dict) -> bool:
         description=str(source.get("subject_evidence") or ""),
     )
     return exact_candidate_matches(query, candidate)
+
+
+def stock_candidate_matches(query: str, candidate: MediaCandidate) -> bool:
+    """Reject stock metadata with no meaningful query-token overlap."""
+    if not candidate.description.strip():
+        # Compatibility for injected/legacy candidates. Live collectors always
+        # populate provider metadata before this filter is reached.
+        return True
+    query_tokens = {
+        token
+        for token in re.findall(r"[^\W_]+", (query or "").lower())
+        if token not in _STOCK_NOISE_TOKENS and not token.isdigit()
+    }
+    evidence_tokens = {
+        token
+        for token in re.findall(
+            r"[^\W_]+",
+            f"{candidate.source_url} {candidate.description}".lower(),
+        )
+        if token not in _STOCK_NOISE_TOKENS and not token.isdigit()
+    }
+    return bool(query_tokens & evidence_tokens)
 
 
 def _resolution_quality(width: int, height: int) -> tuple:
@@ -166,6 +193,7 @@ def _pexels_video_candidates(keyword: str) -> list[MediaCandidate]:
                 height=int(variant.get("height", video.get("height", 0))),
                 media_type="video",
                 keyword=keyword,
+                description=str(video.get("url") or ""),
             ))
         return candidates
     except (requests.RequestException, ValueError, TypeError):
@@ -198,6 +226,7 @@ def _pixabay_video_candidates(keyword: str) -> list[MediaCandidate]:
                 height=int(variant.get("height", 0)),
                 media_type="video",
                 keyword=keyword,
+                description=str(hit.get("tags") or ""),
             ))
         return candidates
     except (requests.RequestException, ValueError, TypeError):
@@ -231,6 +260,7 @@ def _pexels_photo_candidates(keyword: str) -> list[MediaCandidate]:
                 height=int(photo.get("height", 0)),
                 media_type="image",
                 keyword=keyword,
+                description=str(photo.get("alt") or photo.get("url") or ""),
             ))
         return candidates
     except (requests.RequestException, ValueError, TypeError):
@@ -410,6 +440,13 @@ async def fetch_story_media(
                     exact
                     and candidate.provider == "wikimedia_image"
                     and not exact_candidate_matches(keyword, candidate)
+                ):
+                    rejected_candidates += 1
+                    continue
+                if (
+                    not exact
+                    and candidate.provider != "wikimedia_image"
+                    and not stock_candidate_matches(keyword, candidate)
                 ):
                     rejected_candidates += 1
                     continue

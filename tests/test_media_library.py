@@ -356,3 +356,37 @@ def test_download_stops_unknown_length_stream_at_limit(tmp_path, monkeypatch):
 
     assert not output.exists()
     assert not (tmp_path / "stream.mp4.part").exists()
+def test_stock_candidate_without_keyword_overlap_is_rejected():
+    candidate = media_library.MediaCandidate(
+        provider="pexels_video",
+        media_id="1",
+        source_url="https://www.pexels.com/video/sunset-glows-over-city-1/",
+        download_url="https://example.com/1.mp4",
+        width=1080,
+        height=1920,
+        media_type="video",
+        keyword="tiger keelback snake defensive posture",
+        description="sunset over a city",
+    )
+
+    assert media_library.stock_candidate_matches(
+        "tiger keelback snake defensive posture", candidate
+    ) is False
+
+
+def test_stock_candidate_with_subject_overlap_is_kept():
+    candidate = media_library.MediaCandidate(
+        provider="pexels_video",
+        media_id="2",
+        source_url="https://www.pexels.com/video/snake-moving-over-planks-2/",
+        download_url="https://example.com/2.mp4",
+        width=1080,
+        height=1920,
+        media_type="video",
+        keyword="tiger keelback snake defensive posture",
+        description="close up snake moving",
+    )
+
+    assert media_library.stock_candidate_matches(
+        "tiger keelback snake defensive posture", candidate
+    ) is True

@@ -5,7 +5,7 @@ output.mp4를 YouTube Data API v3로 업로드한다. 메타데이터를 정확�
 쿼터를 관리하며, 업로드 결과(video_id)를 기록한다.
 
 ## 입출력 계약
-- **입력**: `data/work/{date}/output.mp4`, `script.json`(title/description/tags)
+- **입력**: `data/work/{date}/output.mp4`, `script.json`(title/description/tags), `produce_log.json`(AI 사용·출처)
 - **출력**: `data/videos.sqlite`에 레코드 추가 — `{video_id, date, title, topic, status}`
 
 ## API 준비 (1회 설정, 무료)
@@ -30,6 +30,8 @@ output.mp4를 YouTube Data API v3로 업로드한다. 메타데이터를 정확�
    - categoryId: 채널 설정값 ({category_id})
    - madeForKids: false (설정 파일 값 따름)
    - privacyStatus: {privacy} — 초기엔 "public", 테스트 중엔 "unlisted"
+   - 실제 사용된 Vertex Veo 오프닝은 containsSyntheticMedia=true
+   - Wikimedia 소스는 자료명·저작자·라이선스·원본 URL을 설명란에 중복 없이 추가
 4. 응답의 video_id를 DB에 기록. 실패 시 HTTP 에러 코드별 대응:
    - 401/403 → token 갱신 시도 1회 후 실패 보고
    - quotaExceeded → 내일로 이월 기록
