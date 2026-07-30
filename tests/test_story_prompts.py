@@ -79,6 +79,8 @@ def test_writer_prompt_contains_retention_beats():
     assert "CHANNEL_EDITORIAL_VIEW" in prompt
     assert "SUBJECT_ANCHORED_VISUALS" in prompt
     assert "close 본문에는 \"\uad6c독\"과 \"좋아요\"를 절대 넣지 마라" in prompt
+    assert '"title": "100자 이하 제목"' not in prompt
+    assert '"title": "10분만 머물러도 위험한 지하 수정 동굴의 비밀"' in prompt
 
 
 def test_writer_routes_story_format_and_saves_validated_json(tmp_path, monkeypatch):

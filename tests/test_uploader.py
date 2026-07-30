@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from app.agents import uploader
 
 
@@ -191,3 +193,41 @@ def test_run_uploader_sends_hashtags_in_youtube_description(tmp_path, monkeypatc
     assert "자료 출처" in description
     assert "NASA" in description
     assert captured["body"]["status"]["containsSyntheticMedia"] is True
+
+
+def test_run_uploader_rejects_prompt_instruction_title_before_youtube_call(
+    tmp_path, monkeypatch
+):
+    data_dir = tmp_path / "data"
+    work_dir = data_dir / "work" / "20260729-2"
+    work_dir.mkdir(parents=True)
+    (work_dir / "output.mp4").write_bytes(b"video")
+    (work_dir / "script.json").write_text(
+        json.dumps(
+            {
+                "title": "100자 이하 제목: 지하 수정 동굴의 비밀",
+                "description": "설명",
+                "tags": [],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (work_dir / "topic.json").write_text(
+        json.dumps(
+            {
+                "topic": "지하 수정 동굴의 비밀",
+                "verification_method": "grounded_search",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        uploader,
+        "_get_youtube_client",
+        lambda: pytest.fail("잘못된 제목으로 YouTube 호출이 시작됨"),
+    )
+
+    with pytest.raises(ValueError, match="제목 지시문"):
+        uploader.run_uploader(data_dir, "20260729-2")

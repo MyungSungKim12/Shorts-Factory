@@ -195,7 +195,7 @@ Preserve exact_queries as the hook and close subject anchor. Use safe_fallbacks 
 [JSON만 출력]
 {{
   "format": "story",
-  "title": "100자 이하 제목",
+  "title": "10분만 머물러도 위험한 지하 수정 동굴의 비밀",
   "description": "검증 내용과 출처를 요약한 설명",
   "tags": ["태그1", "태그2", "태그3"],
   "hook": "첫 3초 문장",

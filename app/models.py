@@ -3,11 +3,25 @@
 agents/*.md의 "입출력 계약" 섹션에 대한 단일 코드 구현.
 검증 실패 = ValueError 발생 = 파이프라인 중단 (불량 영상이 업로드되는 것보다 하루 쉬는 게 낫다).
 """
+import re
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 _PLACEHOLDERS = {"...", "항목명", "N/A", "없음", "unknown", "TBD"}
+_TITLE_INSTRUCTION_PATTERNS = (
+    re.compile(r"^\s*\d+\s*자\s*(?:이하|이내)\s*제목\s*[:：]?"),
+    re.compile(r"^\s*제목\s*[:：]"),
+    re.compile(r"^\s*글자\s*수\s*\d+\s*자\s*(?:이하|이내)?"),
+)
+
+
+def validate_public_title(value: object) -> str:
+    """모델의 JSON 작성 지시가 실제 공개 제목으로 새는 것을 차단한다."""
+    title = " ".join(str(value or "").split())
+    if any(pattern.search(title) for pattern in _TITLE_INSTRUCTION_PATTERNS):
+        raise ValueError("제목 지시문이 실제 제목에 포함됨")
+    return title
 
 
 # 업로드가 허용되는 검증 방식.
@@ -87,6 +101,11 @@ class ScriptContract(BaseModel):
     cta: str = ""
     # 숏츠 상한은 180초 — 목표는 40~60초지만 초과해도 오류로 막지 않고 통과시킴
     total_duration_sec: float = Field(gt=0, le=180)
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def _public_title_only(cls, value: object) -> str:
+        return validate_public_title(value)
 
     @model_validator(mode="after")
     def _structure_rules(self):
@@ -206,6 +225,11 @@ class StoryScriptContract(BaseModel):
     scenes: list[StoryScene] = Field(min_length=7, max_length=10)
     cta: str = ""
     total_duration_sec: float = Field(ge=53, le=75)
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def _public_title_only(cls, value: object) -> str:
+        return validate_public_title(value)
 
     @model_validator(mode="after")
     def _story_structure(self):

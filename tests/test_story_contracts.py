@@ -74,6 +74,19 @@ def test_story_contracts_accept_complete_documents():
 
 
 @pytest.mark.parametrize(
+    "title",
+    [
+        "100자 이하 제목: 지하 수정 동굴의 비밀",
+        "제목: 지하 수정 동굴의 비밀",
+        "글자 수 50자 이내 지하 수정 동굴의 비밀",
+    ],
+)
+def test_story_title_rejects_prompt_instruction_leak(title):
+    with pytest.raises(ValueError, match="제목 지시문"):
+        validate_script(story_script(title=title), "story")
+
+
+@pytest.mark.parametrize(
     "category",
     ["place_nature", "science_mystery", "hidden_world", "history_mystery"],
 )

@@ -14,6 +14,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
 from app.services.quality_gate import validate_upload_package
+from app.models import validate_public_title
 
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 CRED_DIR = Path("credentials")
@@ -162,7 +163,7 @@ def run_uploader(data_dir: Path, date_str: str) -> dict:
             raise ValueError(f"허용되지 않은 검증 방식(verification_method={vmethod}) — 업로드 불가")
 
         # 3. 업로드 전 메타데이터 검증
-        title = script.get("title", "").strip()
+        title = validate_public_title(script.get("title", ""))
         if not title:
             raise ValueError("script.json에 title이 없습니다")
         if len(title) > 100:
