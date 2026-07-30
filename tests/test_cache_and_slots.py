@@ -42,10 +42,15 @@ def test_캐시_회차_분리():
         assert pick_cached(d, 3, []) ["topic"] == "역사소재"
 
 def test_회차_카테고리_매핑():
-    assert SLOT_CATEGORIES[1]["name"] == "기묘한 자연 현상"
-    assert SLOT_CATEGORIES[4]["name"] == "과학의 경계/미해결 관측"
-    assert SLOT_CATEGORIES[2]["name"] == "숨겨진 세계/금지된 구조"
-    assert SLOT_CATEGORIES[3]["name"] == "사라진 문명/역사 미스터리"
+    assert [
+        SLOT_CATEGORIES[slot]["category"]
+        for slot in (1, 4, 2, 3)
+    ] == [
+        "science_mystery",
+        "hidden_world",
+        "science_mystery",
+        "hidden_world",
+    ]
     assert all("동물" not in c["name"] + c["desc"] for c in SLOT_CATEGORIES.values())
     # 모든 카테고리에 영상 폴백어 존재
     for c in SLOT_CATEGORIES.values():

@@ -23,36 +23,26 @@ def _is_daily_quota_error(error: Exception) -> bool:
         "daily", "perday", "quotaexceeded", "일일", "할당초과",
     ))
 
-# 회차별 스토리 방향. 무료 스톡 확보성보다 클릭 욕구와 반전을 먼저 평가한다.
+# 새 미스터리 영상의 조회·좋아요 상위 두 소재군을 하루 두 번씩 운영한다.
+_SCIENCE_MYSTERY = {
+    "name": "과학의 경계/미해결 관측",
+    "category": "science_mystery",
+    "desc": "관측과 실험 기록은 분명하지만 원인·신호·결과 해석이 아직 완전히 합의되지 않은 과학 미스터리.",
+    "examples": "반복되지 않은 우주 신호, 예상과 달랐던 탐사 결과, 설명 후보가 여러 개인 관측 기록",
+    "visual_fallback": "unexplained scientific observation",
+}
+_HIDDEN_WORLD = {
+    "name": "숨겨진 세계/금지된 구조",
+    "category": "hidden_world",
+    "desc": "지하·심해·빙하 아래처럼 보이지 않는 곳에 실제로 존재하는 장소와 구조의 비밀.",
+    "examples": "빙하 아래 호수, 폐쇄된 지하 시설, 심해에서 확인된 거대 구조와 생태계",
+    "visual_fallback": "hidden underground structure",
+}
 SLOT_CATEGORIES = {
-    1: {
-        "name": "기묘한 자연 현상",
-        "category": "place_nature",
-        "desc": "실제로 관측됐지만 직관과 어긋나는 지질·기상·해양·우주 자연 현상의 비밀.",
-        "examples": "스스로 움직이는 돌, 사라졌다 돌아오는 호수, 특정 조건에서만 나타나는 빛과 소리",
-        "visual_fallback": "strange geological phenomenon",
-    },
-    2: {
-        "name": "숨겨진 세계/금지된 구조",
-        "category": "hidden_world",
-        "desc": "지하·심해·빙하 아래처럼 보이지 않는 곳에 실제로 존재하는 장소와 구조의 비밀.",
-        "examples": "빙하 아래 호수, 폐쇄된 지하 시설, 심해에서 확인된 거대 구조와 생태계",
-        "visual_fallback": "hidden underground structure",
-    },
-    3: {
-        "name": "사라진 문명/역사 미스터리",
-        "category": "history_mystery",
-        "desc": "유물·기록·유적은 남았지만 목적이나 과정의 일부가 아직 논쟁 중인 역사적 수수께끼.",
-        "examples": "용도가 확정되지 않은 고대 구조, 갑자기 버려진 도시, 서로 맞지 않는 탐사 기록",
-        "visual_fallback": "ancient unexplained ruins",
-    },
-    4: {
-        "name": "과학의 경계/미해결 관측",
-        "category": "science_mystery",
-        "desc": "관측과 실험 기록은 분명하지만 원인·신호·결과 해석이 아직 완전히 합의되지 않은 과학 미스터리.",
-        "examples": "반복되지 않은 우주 신호, 예상과 달랐던 탐사 결과, 설명 후보가 여러 개인 관측 기록",
-        "visual_fallback": "unexplained scientific observation",
-    },
+    1: dict(_SCIENCE_MYSTERY),
+    4: dict(_HIDDEN_WORLD),
+    2: dict(_SCIENCE_MYSTERY),
+    3: dict(_HIDDEN_WORLD),
 }
 
 

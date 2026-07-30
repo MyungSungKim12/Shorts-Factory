@@ -11,7 +11,13 @@ from pathlib import Path
 
 from googleapiclient.discovery import build
 
-from app.agents.researcher import SLOT_CATEGORIES
+_CATEGORY_NAMES = {
+    "science_mystery": "과학의 경계/미해결 관측",
+    "hidden_world": "숨겨진 세계/금지된 구조",
+    "place_nature": "기묘한 자연 현상",
+    "history_mystery": "사라진 문명/역사 미스터리",
+    "legacy_unclassified": "과거 미분류",
+}
 
 
 def _youtube_readonly_client():
@@ -39,13 +45,16 @@ def run_analyst(data_dir: Path) -> dict:
     try:
         # 성과 컬럼이 없으면 추가 (조회수 스냅샷 저장용)
         cols = [r[1] for r in db.execute("PRAGMA table_info(videos)")]
+        if "category" not in cols:
+            db.execute("ALTER TABLE videos ADD COLUMN category TEXT")
         for col in ("views", "likes", "comments", "stats_updated_at"):
             if col not in cols:
                 db.execute(f"ALTER TABLE videos ADD COLUMN {col} INTEGER")
         db.commit()
 
         rows = db.execute(
-            "SELECT video_id, date, title, topic FROM videos WHERE status = 'uploaded'"
+            "SELECT video_id, date, title, topic, category "
+            "FROM videos WHERE status = 'uploaded'"
         ).fetchall()
         if not rows:
             return {"message": "업로드된 영상 없음"}
@@ -77,14 +86,17 @@ def run_analyst(data_dir: Path) -> dict:
         # 3. 카테고리(회차)별 집계
         cat_agg = {}
         per_video = []
-        for vid, date, title, topic in rows:
+        for vid, date, title, topic, stored_category in rows:
             if vid not in stats:
                 continue
-            slot = _slot_of(date)
-            cat = SLOT_CATEGORIES.get(slot, {}).get("name", "기타")
+            category_key = stored_category or "legacy_unclassified"
+            cat = _category_name(category_key)
             st = stats[vid]
             per_video.append({
-                "video_id": vid, "category": cat, "topic": topic or title,
+                "video_id": vid,
+                "category": cat,
+                "category_key": category_key,
+                "topic": topic or title,
                 "views": st["views"], "likes": st["likes"], "comments": st["comments"],
                 "url": f"https://youtube.com/shorts/{vid}",
             })
@@ -128,6 +140,11 @@ def run_analyst(data_dir: Path) -> dict:
         return report
     finally:
         db.close()
+
+
+def _category_name(category: str | None) -> str:
+    key = category or "legacy_unclassified"
+    return _CATEGORY_NAMES.get(key, key)
 
 
 def _slot_of(date: str) -> int | None:

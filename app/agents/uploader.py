@@ -242,16 +242,29 @@ def run_uploader(data_dir: Path, date_str: str) -> dict:
 
         # 7. DB 기록 (video_id 수신 = 업로드 성공 기준). topic은 분석가의 소재별 성과 비교용.
         topic_str = ""
+        category_str = None
         topic_file = work_dir / "topic.json"
         if topic_file.exists():
             try:
-                topic_str = json.loads(topic_file.read_text(encoding="utf-8")).get("topic", "")
+                topic_payload = json.loads(topic_file.read_text(encoding="utf-8"))
+                topic_str = topic_payload.get("topic", "")
+                category_str = topic_payload.get("category")
             except (json.JSONDecodeError, OSError):
                 pass
 
         db.execute(
-            "INSERT INTO videos (video_id, date, title, topic, status, uploaded_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (video_id, date_str, title, topic_str, "uploaded", datetime.now().isoformat()),
+            "INSERT INTO videos "
+            "(video_id, date, title, topic, category, status, uploaded_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                video_id,
+                date_str,
+                title,
+                topic_str,
+                category_str,
+                "uploaded",
+                datetime.now().isoformat(),
+            ),
         )
         db.commit()
 
@@ -276,14 +289,18 @@ def _init_db(data_dir: Path) -> sqlite3.Connection:
             date TEXT NOT NULL,
             title TEXT,
             topic TEXT,
+            category TEXT,
             status TEXT NOT NULL,
             uploaded_at TEXT
         )
     """)
-    # 기존 DB에 topic 컬럼이 없으면 추가
+    # 기존 DB에 분석용 소재·카테고리 열이 없으면 추가한다.
     cols = [row[1] for row in db.execute("PRAGMA table_info(videos)")]
     if "topic" not in cols:
         db.execute("ALTER TABLE videos ADD COLUMN topic TEXT")
+    if "category" not in cols:
+        db.execute("ALTER TABLE videos ADD COLUMN category TEXT")
+    if "topic" not in cols or "category" not in cols:
         db.commit()
     return db
 

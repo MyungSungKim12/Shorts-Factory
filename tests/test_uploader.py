@@ -137,6 +137,7 @@ def test_run_uploader_sends_hashtags_in_youtube_description(tmp_path, monkeypatc
         json.dumps(
             {
                 "topic": "사하라의 눈",
+                "category": "hidden_world",
                 "verification_method": "grounded_search",
             },
             ensure_ascii=False,
@@ -212,6 +213,38 @@ def test_run_uploader_sends_hashtags_in_youtube_description(tmp_path, monkeypatc
     assert "자료 출처" in description
     assert "NASA" in description
     assert captured["body"]["status"]["containsSyntheticMedia"] is True
+    db = uploader._init_db(data_dir)
+    try:
+        saved = db.execute(
+            "SELECT category FROM videos WHERE video_id = ?",
+            ("video-123",),
+        ).fetchone()
+    finally:
+        db.close()
+    assert saved == ("hidden_world",)
+
+
+def test_init_db_adds_category_to_legacy_table(tmp_path):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    import sqlite3
+
+    legacy = sqlite3.connect(data_dir / "videos.sqlite")
+    legacy.execute(
+        "CREATE TABLE videos (video_id TEXT PRIMARY KEY, date TEXT NOT NULL, "
+        "title TEXT, topic TEXT, status TEXT NOT NULL, uploaded_at TEXT)"
+    )
+    legacy.close()
+
+    db = uploader._init_db(data_dir)
+    try:
+        columns = {
+            row[1] for row in db.execute("PRAGMA table_info(videos)")
+        }
+    finally:
+        db.close()
+
+    assert "category" in columns
 
 
 def test_run_uploader_rejects_prompt_instruction_title_before_youtube_call(
