@@ -82,7 +82,7 @@ def _description_with_wikimedia_credits(
         if not source_url or source_url in seen_urls:
             continue
 
-        title = str(raw.get("media_id") or "Wikimedia 자료").removeprefix("File:").strip()
+        title = _public_wikimedia_title(raw.get("media_id"))
         attribution = str(raw.get("attribution") or "저작자 정보는 원본 페이지 참조").strip()
         license_name = str(raw.get("license") or "라이선스는 원본 페이지 참조").strip()
         credit = f"- {title} — {attribution} / {license_name}\n  {source_url}"
@@ -97,6 +97,18 @@ def _description_with_wikimedia_credits(
         return base
     section = "자료 출처 (Wikimedia Commons)\n" + "\n".join(credits)
     return f"{base}\n\n{section}" if base else section
+
+
+def _public_wikimedia_title(media_id: object) -> str:
+    """공개 설명에서는 Commons의 기술 접두사와 이미지 확장자를 숨긴다."""
+    title = re.sub(r"^File:\s*", "", str(media_id or ""), flags=re.IGNORECASE)
+    title = re.sub(
+        r"\.(?:jpe?g|png|webp|gif|tiff?)$",
+        "",
+        title,
+        flags=re.IGNORECASE,
+    ).strip()
+    return title or "Wikimedia Commons 이미지 자료"
 
 
 def _uses_synthetic_media(produce_log: dict) -> bool:

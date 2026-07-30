@@ -27,11 +27,30 @@ def test_wikimedia_credits_are_unique_and_include_license_and_source():
         ],
     )
 
-    assert result.count("Camp Century.jpg") == 1
+    assert result.count("Camp Century") == 1
+    assert "- File:Camp Century.jpg" not in result
+    assert "- Camp Century.jpg" not in result
     assert "CRREL Researcher" in result
     assert "CC BY 2.0" in result
     assert "https://commons.wikimedia.org/wiki/File:Camp_Century.jpg" in result
     assert "pexels.com" not in result
+
+
+def test_wikimedia_credit_hides_internal_image_filename():
+    result = uploader._description_with_wikimedia_credits(
+        "설명",
+        [{
+            "provider": "wikimedia_image",
+            "media_id": "File:Nan Madol 11.png",
+            "attribution": "Example Author",
+            "license": "CC BY-SA 4.0",
+            "source_url": "https://commons.wikimedia.org/wiki/File:Nan_Madol_11.png",
+        }],
+    )
+
+    assert "Nan Madol 11" in result
+    assert "- File:Nan Madol 11.png" not in result
+    assert "- Nan Madol 11.png" not in result
 
 
 def test_synthetic_media_is_true_only_when_veo_footage_was_used():
