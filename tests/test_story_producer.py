@@ -633,9 +633,37 @@ def test_retime_audio_uses_atempo_and_replaces_source(tmp_path, monkeypatch):
 
     story_producer._retime_audio(source, 0.9, "ffmpeg")
 
-    assert "atempo=0.900000" in captured["command"]
+    audio_filter = captured["command"][
+        captured["command"].index("-filter:a") + 1
+    ]
+    assert "atempo=0.900000" in audio_filter
+    assert "alimiter=limit=0.841395" in audio_filter
     assert captured["timeout"] == 180
     assert source.read_bytes() == b"after"
+
+
+def test_normalize_narration_targets_consistent_shortform_loudness(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "narration.wav"
+    source.write_bytes(b"before")
+    captured = {}
+
+    def fake_run_checked(command, *, timeout, cwd=None, text=False):
+        captured["command"] = command
+        captured["timeout"] = timeout
+        Path(command[-1]).write_bytes(b"normalized")
+
+    monkeypatch.setattr(story_producer, "run_checked", fake_run_checked)
+
+    story_producer._normalize_narration(source, "ffmpeg")
+
+    audio_filter = captured["command"][
+        captured["command"].index("-filter:a") + 1
+    ]
+    assert audio_filter == "loudnorm=I=-16.0:LRA=7:TP=-1.5"
+    assert captured["timeout"] == 180
+    assert source.read_bytes() == b"normalized"
 
 
 def test_story_timing_allows_natural_audio_over_target_under_short_limit():

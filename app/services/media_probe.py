@@ -62,7 +62,7 @@ def probe_video(path: Path, ffprobe_path: str = "ffprobe") -> dict:
         [
             _ffmpeg_path_for(ffprobe_path), "-hide_banner", "-i", str(path),
             "-vf", "blackdetect=d=0.5:pix_th=0.10",
-            "-af", "silencedetect=noise=-45dB:d=1.2",
+            "-af", "silencedetect=noise=-45dB:d=1.2,ebur128=peak=true",
             "-f", "null", os.devnull,
         ],
         timeout=_probe_timeout(),
@@ -88,6 +88,19 @@ def probe_video(path: Path, ffprobe_path: str = "ffprobe") -> dict:
         )
         if start > 0.25 and end < duration - 0.25
     ]
+    loudness_text = black.stderr or ""
+    integrated_match = re.findall(
+        r"Integrated loudness:\s+I:\s*(-?[0-9.]+)\s+LUFS",
+        loudness_text,
+    )
+    range_match = re.findall(
+        r"Loudness range:\s+LRA:\s*([0-9.]+)\s+LU",
+        loudness_text,
+    )
+    peak_match = re.findall(
+        r"True peak:\s+Peak:\s*(-?[0-9.]+)\s+dBFS",
+        loudness_text,
+    )
     return {
         "width": int(video.get("width", 0)),
         "height": int(video.get("height", 0)),
@@ -99,6 +112,11 @@ def probe_video(path: Path, ffprobe_path: str = "ffprobe") -> dict:
         "audio_duration": round(audio_duration, 3),
         "duration_delta": round(abs(duration - audio_duration), 3),
         "internal_silence_max": round(max(internal_silences, default=0.0), 3),
+        "integrated_loudness_lufs": (
+            float(integrated_match[-1]) if integrated_match else None
+        ),
+        "loudness_range_lu": float(range_match[-1]) if range_match else None,
+        "true_peak_dbfs": float(peak_match[-1]) if peak_match else None,
     }
 
 
@@ -142,4 +160,7 @@ def validate_sample(report: dict) -> list[str]:
         failures.append("audio_duration_delta")
     if float(report.get("internal_silence_max", 0)) >= 1.2:
         failures.append("internal_silence")
+    loudness_range = report.get("loudness_range_lu")
+    if loudness_range is not None and float(loudness_range) > 10.0:
+        failures.append("audio_loudness_range")
     return failures

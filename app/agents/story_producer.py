@@ -327,7 +327,39 @@ def _retime_audio(source: Path, tempo: float, ffmpeg_path: str) -> None:
                 "-i",
                 str(source),
                 "-filter:a",
-                f"atempo={tempo:.6f}",
+                f"atempo={tempo:.6f},alimiter=limit=0.841395",
+                "-c:a",
+                "pcm_s16le",
+                str(output),
+            ],
+            timeout=180,
+        )
+        output.replace(source)
+    finally:
+        output.unlink(missing_ok=True)
+
+
+def _narration_target_lufs() -> float:
+    try:
+        target = float(os.getenv("NARRATION_TARGET_LUFS", "-16"))
+    except ValueError:
+        return -16.0
+    return target if -24.0 <= target <= -12.0 else -16.0
+
+
+def _normalize_narration(source: Path, ffmpeg_path: str) -> None:
+    """각 TTS 조각을 같은 체감 음량으로 맞춘 뒤 원본 WAV를 교체한다."""
+    output = source.with_name(f".{source.stem}.normalized{source.suffix}")
+    target = _narration_target_lufs()
+    try:
+        run_checked(
+            [
+                ffmpeg_path,
+                "-y",
+                "-i",
+                str(source),
+                "-filter:a",
+                f"loudnorm=I={target:.1f}:LRA=7:TP=-1.5",
                 "-c:a",
                 "pcm_s16le",
                 str(output),
@@ -1063,6 +1095,7 @@ async def run_story_producer(
             ssml=_intro_pause_ssml(intro_tts_text),
         )
         _trim_narration(intro_raw, intro_narration, ffmpeg_path)
+        _normalize_narration(intro_narration, ffmpeg_path)
         tts_results.append(intro_result)
         intro_audio_duration = _duration(intro_narration, ffmpeg_path)
 
@@ -1072,6 +1105,7 @@ async def run_story_producer(
             narration = tmp_path / f"narration-{scene['n']:02d}.wav"
             result = synthesize(_tts_text(scene["narration"]), narration_raw)
             _trim_narration(narration_raw, narration, ffmpeg_path)
+            _normalize_narration(narration, ffmpeg_path)
             tts_results.append(result)
             scene_tts_results[scene["n"]] = result
             narration_files[scene["n"]] = narration
@@ -1091,6 +1125,7 @@ async def run_story_producer(
             cta_narration = tmp_path / "narration-cta.wav"
             cta_result = synthesize(_tts_text(cta_text), cta_raw)
             _trim_narration(cta_raw, cta_narration, ffmpeg_path)
+            _normalize_narration(cta_narration, ffmpeg_path)
             tts_results.append(cta_result)
             cta_audio_duration = _duration(cta_narration, ffmpeg_path)
 

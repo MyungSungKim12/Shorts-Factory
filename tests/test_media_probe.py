@@ -70,7 +70,18 @@ def test_probe_reports_internal_silence_and_stream_duration_delta(tmp_path, monk
         }), "stderr": "", "returncode": 0})(),
         type("Result", (), {
             "stdout": "", "returncode": 0,
-            "stderr": "black_duration:1.0\nsilence_start: 12.0\nsilence_end: 13.4 | silence_duration: 1.4\n",
+            "stderr": (
+                "black_duration:1.0\n"
+                "silence_start: 12.0\n"
+                "silence_end: 13.4 | silence_duration: 1.4\n"
+                "Summary:\n\n"
+                "  Integrated loudness:\n"
+                "    I:         -16.2 LUFS\n"
+                "  Loudness range:\n"
+                "    LRA:         4.8 LU\n"
+                "  True peak:\n"
+                "    Peak:       -1.1 dBFS\n"
+            ),
         })(),
     ])
     monkeypatch.setattr(media_probe, "run_checked", lambda *args, **kwargs: next(outputs))
@@ -80,3 +91,19 @@ def test_probe_reports_internal_silence_and_stream_duration_delta(tmp_path, monk
     assert report["audio_duration"] == 65.7
     assert report["duration_delta"] == 0.3
     assert report["internal_silence_max"] == 1.4
+    assert report["integrated_loudness_lufs"] == -16.2
+    assert report["loudness_range_lu"] == 4.8
+    assert report["true_peak_dbfs"] == -1.1
+
+
+def test_story_video_with_large_loudness_range_is_rejected():
+    report = {
+        "width": 1080, "height": 1920, "duration": 66.2,
+        "video_codec": "h264", "audio_codec": "aac", "has_audio": True,
+        "black_ratio": 0.01,
+        "audio_duration": 66.1, "duration_delta": 0.1,
+        "internal_silence_max": 0.0,
+        "loudness_range_lu": 10.1,
+    }
+
+    assert "audio_loudness_range" in validate_sample(report)
