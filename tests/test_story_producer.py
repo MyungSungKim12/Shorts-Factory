@@ -327,6 +327,35 @@ def test_video_motion_alternates_by_shot_index():
     assert "crop=1080:1330" in second
 
 
+def test_encode_visual_rerenders_dark_shot_with_limited_brightness_fix(
+    tmp_path, monkeypatch
+):
+    media = tmp_path / "space.mp4"
+    output = tmp_path / "shot.mp4"
+    media.write_bytes(b"video")
+    commands = []
+    luma_values = iter([24.0, 56.0])
+
+    def fake_run_ffmpeg(command, cwd=None, timeout=None):
+        commands.append(command)
+        Path(command[-1]).write_bytes(b"encoded")
+
+    monkeypatch.setattr(story_producer, "_run_ffmpeg", fake_run_ffmpeg)
+    monkeypatch.setattr(
+        story_producer,
+        "_average_content_luma",
+        lambda *args, **kwargs: next(luma_values),
+    )
+
+    story_producer._encode_visual(media, output, 3.0, "ffmpeg")
+
+    assert len(commands) == 2
+    first_filter = commands[0][commands[0].index("-vf") + 1]
+    second_filter = commands[1][commands[1].index("-vf") + 1]
+    assert "eq=brightness" not in first_filter
+    assert "eq=brightness=0.06:gamma=1.15" in second_filter
+
+
 def test_exact_landscape_image_can_preserve_full_composition():
     vf = story_producer.visual_filter("blood-falls.jpg", duration=3.0, preserve_full=True)
     assert "force_original_aspect_ratio=decrease" in vf

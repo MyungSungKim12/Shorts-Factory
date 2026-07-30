@@ -61,7 +61,11 @@ def probe_video(path: Path, ffprobe_path: str = "ffprobe") -> dict:
     black = run_checked(
         [
             _ffmpeg_path_for(ffprobe_path), "-hide_banner", "-i", str(path),
-            "-vf", "blackdetect=d=0.5:pix_th=0.10",
+            "-vf", (
+                "blackdetect=d=0.5:pix_th=0.10,"
+                "crop=1080:1330:0:260,fps=1,signalstats,"
+                "metadata=print:key=lavfi.signalstats.YAVG"
+            ),
             "-af", "silencedetect=noise=-45dB:d=1.2,ebur128=peak=true",
             "-f", "null", os.devnull,
         ],
@@ -101,6 +105,19 @@ def probe_video(path: Path, ffprobe_path: str = "ffprobe") -> dict:
         r"True peak:\s+Peak:\s*(-?[0-9.]+)\s+dBFS",
         loudness_text,
     )
+    luma_values = [
+        float(value)
+        for value in re.findall(
+            r"lavfi\.signalstats\.YAVG=([0-9.]+)",
+            loudness_text,
+        )
+    ]
+    dark_flags = [value < 40.0 for value in luma_values]
+    longest_dark_run = 0
+    current_dark_run = 0
+    for is_dark in dark_flags:
+        current_dark_run = current_dark_run + 1 if is_dark else 0
+        longest_dark_run = max(longest_dark_run, current_dark_run)
     return {
         "width": int(video.get("width", 0)),
         "height": int(video.get("height", 0)),
@@ -117,6 +134,14 @@ def probe_video(path: Path, ffprobe_path: str = "ffprobe") -> dict:
         ),
         "loudness_range_lu": float(range_match[-1]) if range_match else None,
         "true_peak_dbfs": float(peak_match[-1]) if peak_match else None,
+        "dark_content_ratio": (
+            round(sum(dark_flags) / len(dark_flags), 4)
+            if dark_flags
+            else None
+        ),
+        "max_dark_content_seconds": (
+            float(longest_dark_run) if dark_flags else None
+        ),
     }
 
 
@@ -163,4 +188,12 @@ def validate_sample(report: dict) -> list[str]:
     loudness_range = report.get("loudness_range_lu")
     if loudness_range is not None and float(loudness_range) > 10.0:
         failures.append("audio_loudness_range")
+    dark_ratio = report.get("dark_content_ratio")
+    dark_seconds = report.get("max_dark_content_seconds")
+    if (
+        dark_ratio is not None
+        and dark_seconds is not None
+        and (float(dark_ratio) > 0.25 or float(dark_seconds) >= 6.0)
+    ):
+        failures.append("dark_content")
     return failures

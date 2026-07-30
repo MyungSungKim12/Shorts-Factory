@@ -81,6 +81,9 @@ def test_probe_reports_internal_silence_and_stream_duration_delta(tmp_path, monk
                 "    LRA:         4.8 LU\n"
                 "  True peak:\n"
                 "    Peak:       -1.1 dBFS\n"
+                "lavfi.signalstats.YAVG=55.0\n"
+                "lavfi.signalstats.YAVG=34.0\n"
+                "lavfi.signalstats.YAVG=52.0\n"
             ),
         })(),
     ])
@@ -94,6 +97,8 @@ def test_probe_reports_internal_silence_and_stream_duration_delta(tmp_path, monk
     assert report["integrated_loudness_lufs"] == -16.2
     assert report["loudness_range_lu"] == 4.8
     assert report["true_peak_dbfs"] == -1.1
+    assert report["dark_content_ratio"] == 0.3333
+    assert report["max_dark_content_seconds"] == 1.0
 
 
 def test_story_video_with_large_loudness_range_is_rejected():
@@ -107,3 +112,31 @@ def test_story_video_with_large_loudness_range_is_rejected():
     }
 
     assert "audio_loudness_range" in validate_sample(report)
+
+
+def test_story_video_with_long_dark_content_is_rejected():
+    report = {
+        "width": 1080, "height": 1920, "duration": 66.2,
+        "video_codec": "h264", "audio_codec": "aac", "has_audio": True,
+        "black_ratio": 0.01,
+        "audio_duration": 66.1, "duration_delta": 0.1,
+        "internal_silence_max": 0.0,
+        "dark_content_ratio": 0.35,
+        "max_dark_content_seconds": 8.0,
+    }
+
+    assert "dark_content" in validate_sample(report)
+
+
+def test_story_video_allows_short_dark_transition():
+    report = {
+        "width": 1080, "height": 1920, "duration": 66.2,
+        "video_codec": "h264", "audio_codec": "aac", "has_audio": True,
+        "black_ratio": 0.01,
+        "audio_duration": 66.1, "duration_delta": 0.1,
+        "internal_silence_max": 0.0,
+        "dark_content_ratio": 0.04,
+        "max_dark_content_seconds": 2.0,
+    }
+
+    assert "dark_content" not in validate_sample(report)

@@ -474,9 +474,11 @@ def visual_filter(
     preserve_full: bool = False,
     darken: bool = False,
     motion_index: int = 0,
+    brighten: bool = False,
 ) -> str:
     """세로 전체화면 영상 또는 정지 이미지 모션 필터를 만든다."""
     overlay = ",drawbox=color=black@0.35:t=fill" if darken else ""
+    tone = ",eq=brightness=0.06:gamma=1.15" if brighten else ""
     pad = ",pad=1080:1920:0:260:black"
     if str(media_file).lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
         frames = max(1, round(duration * 30))
@@ -500,14 +502,14 @@ def visual_filter(
                 "[bg][fg]overlay=(W-w)/2:(H-h)/2,"
                 "zoompan=z='min(zoom+0.0003,1.03)':"
                 f"x='{x_expr}':y='{y_expr}':"
-                f"d={frames}:s=1080x1330:fps=30{overlay}{pad},setsar=1,format=yuv420p[vout]"
+                f"d={frames}:s=1080x1330:fps=30{overlay}{tone}{pad},setsar=1,format=yuv420p[vout]"
             )
         return (
             "scale=1200:1478:force_original_aspect_ratio=increase,"
             "crop=1200:1478,"
             "zoompan=z='min(zoom+0.0008,1.08)':"
             f"x='{x_expr}':y='{y_expr}':"
-            f"d={frames}:s=1080x1330:fps=30{overlay}{pad},setsar=1,format=yuv420p"
+            f"d={frames}:s=1080x1330:fps=30{overlay}{tone}{pad},setsar=1,format=yuv420p"
         )
     seconds = max(0.1, float(duration))
     x_expr = (
@@ -518,7 +520,7 @@ def visual_filter(
     return (
         "scale=1124:1383:force_original_aspect_ratio=increase,"
         "crop=1124:1383,"
-        f"crop=1080:1330:x='{x_expr}':y=26,fps=30{overlay}{pad},"
+        f"crop=1080:1330:x='{x_expr}':y=26,fps=30{overlay}{tone}{pad},"
         "setsar=1,format=yuv420p"
     )
 
@@ -638,28 +640,71 @@ def _encode_visual(
     motion_index: int = 0,
 ) -> None:
     is_image = media.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
-    cmd = [ffmpeg_path]
-    if is_image:
-        cmd += ["-loop", "1", "-i", str(media)]
-    else:
-        cmd += ["-stream_loop", "-1", "-i", str(media)]
-    cmd += ["-an"]
-    if preserve_full and is_image:
+
+    def build_command(*, brighten: bool) -> list[str]:
+        cmd = [ffmpeg_path]
+        if is_image:
+            cmd += ["-loop", "1", "-i", str(media)]
+        else:
+            cmd += ["-stream_loop", "-1", "-i", str(media)]
+        cmd += ["-an"]
+        vf = visual_filter(
+            str(media),
+            duration,
+            preserve_full,
+            darken,
+            motion_index,
+            brighten,
+        )
+        if preserve_full and is_image:
+            cmd += ["-filter_complex", vf, "-map", "[vout]"]
+        else:
+            cmd += ["-vf", vf]
         cmd += [
-            "-filter_complex",
-            visual_filter(str(media), duration, preserve_full, darken, motion_index),
-            "-map", "[vout]",
+            "-t", f"{duration:.3f}",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "25",
+            "-pix_fmt", "yuv420p", "-r", "30", "-y", str(output),
         ]
-    else:
-        cmd += [
-            "-vf", visual_filter(str(media), duration, preserve_full, darken, motion_index)
-        ]
-    cmd += [
-        "-t", f"{duration:.3f}",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "25",
-        "-pix_fmt", "yuv420p", "-r", "30", "-y", str(output),
+        return cmd
+
+    _run_ffmpeg(build_command(brighten=False))
+    if darken:
+        return
+    average_luma = _average_content_luma(output, ffmpeg_path)
+    if average_luma is not None and average_luma < 40.0:
+        _run_ffmpeg(build_command(brighten=True))
+        _average_content_luma(output, ffmpeg_path)
+
+
+def _average_content_luma(path: Path, ffmpeg_path: str) -> float | None:
+    """고정 검은 띠를 제외한 짧은 샷의 평균 휘도를 측정한다."""
+    result = run_checked(
+        [
+            ffmpeg_path,
+            "-hide_banner",
+            "-i",
+            str(path),
+            "-vf",
+            (
+                "crop=1080:1330:0:260,fps=1,signalstats,"
+                "metadata=print:key=lavfi.signalstats.YAVG"
+            ),
+            "-an",
+            "-f",
+            "null",
+            os.devnull,
+        ],
+        timeout=_timeout("MEDIA_PROBE_TIMEOUT_SEC", 180),
+        text=True,
+    )
+    values = [
+        float(value)
+        for value in re.findall(
+            r"lavfi\.signalstats\.YAVG=([0-9.]+)",
+            result.stderr or "",
+        )
     ]
-    _run_ffmpeg(cmd)
+    return round(sum(values) / len(values), 3) if values else None
 
 
 def _concat_files(files: list[Path], output: Path, ffmpeg_path: str, tmp_path: Path) -> None:
