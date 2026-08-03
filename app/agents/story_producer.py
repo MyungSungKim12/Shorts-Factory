@@ -1173,7 +1173,7 @@ async def run_story_producer(
         tts_results.append(intro_result)
         intro_audio_duration = _duration(intro_narration, ffmpeg_path)
 
-        safe_print("  → Chirp 3 HD 여성 스토리 나레이션 생성 중...")
+        safe_print("  → 설정된 여성 스토리 나레이션 생성 중...")
         for scene in script.get("scenes", []):
             narration_raw = tmp_path / f"narration-{scene['n']:02d}-raw.mp3"
             narration = tmp_path / f"narration-{scene['n']:02d}.wav"
