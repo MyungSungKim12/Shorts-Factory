@@ -10,6 +10,11 @@ def test_ffprobe_path_is_derived_from_ffmpeg():
     assert ffprobe_path_for(r"C:\tools\ffmpeg.exe") == r"C:\tools\ffprobe.exe"
 
 
+def test_default_short_duration_ceiling_is_90_seconds(monkeypatch):
+    monkeypatch.delenv("MAX_VIDEO_SEC", raising=False)
+    assert media_probe.shorts_max_duration() == 90
+
+
 def test_valid_story_video_is_accepted():
     report = {
         "width": 1080, "height": 1920, "duration": 66.2,

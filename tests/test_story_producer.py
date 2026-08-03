@@ -678,7 +678,7 @@ def test_story_timing_places_spoken_title_before_body_and_cta():
     }
 
 
-def test_short_neural_audio_gets_natural_bounded_tempo_adjustment():
+def test_story_audio_uses_fixed_1_2_speed_without_slowdown():
     tempo = story_producer.story_tempo_adjustment(
         intro_audio_duration=3.0,
         body_audio_duration=45.0,
@@ -687,16 +687,26 @@ def test_short_neural_audio_gets_natural_bounded_tempo_adjustment():
         padding=0.15,
     )
 
-    assert tempo == pytest.approx(0.867, abs=0.001)
+    assert tempo == 1.2
 
 
-def test_audio_at_or_above_minimum_is_not_retimed():
-    assert story_producer.story_tempo_adjustment(4.0, 53.0, 4.0, 7) == 1.0
+def test_audio_at_or_above_minimum_still_uses_fixed_speed():
+    assert story_producer.story_tempo_adjustment(4.0, 53.0, 4.0, 7) == 1.2
 
 
-def test_excessive_slowdown_is_rejected_instead_of_sounding_unnatural():
-    with pytest.raises(RuntimeError, match="감속 한도"):
-        story_producer.story_tempo_adjustment(2.0, 38.0, 3.0, 7)
+def test_audio_slightly_over_90_seconds_still_uses_fixed_speed(monkeypatch):
+    monkeypatch.setenv("MAX_VIDEO_SEC", "90")
+
+    tempo = story_producer.story_tempo_adjustment(4.0, 84.0, 3.0, 7)
+
+    assert tempo == 1.2
+
+
+def test_audio_still_over_90_seconds_at_1_2_speed_is_rejected(monkeypatch):
+    monkeypatch.setenv("MAX_VIDEO_SEC", "90")
+
+    with pytest.raises(RuntimeError, match="1.2"):
+        story_producer.story_tempo_adjustment(4.0, 103.0, 3.0, 7)
 
 
 def test_retime_audio_uses_atempo_and_replaces_source(tmp_path, monkeypatch):
@@ -751,18 +761,18 @@ def test_story_timing_allows_natural_audio_over_target_under_short_limit():
     assert timing["total_duration"] == 76.15
 
 
-def test_story_timing_rejects_total_over_180_seconds():
-    with pytest.raises(RuntimeError, match="180초 초과"):
-        story_producer.build_story_timing(4.0, 173.0, 4.0)
+def test_story_timing_rejects_total_over_90_seconds():
+    with pytest.raises(RuntimeError, match="90초 초과"):
+        story_producer.build_story_timing(4.0, 83.0, 4.0)
 
 
 def test_cta_timing_allows_natural_audio_over_target_under_short_limit():
     assert story_producer.build_cta_timing(73.0, 3.0)["total_duration"] == 76.0
 
 
-def test_cta_timing_rejects_final_video_over_180_seconds():
-    with pytest.raises(RuntimeError, match="180초 초과"):
-        story_producer.build_cta_timing(178.0, 3.0)
+def test_cta_timing_rejects_final_video_over_90_seconds():
+    with pytest.raises(RuntimeError, match="90초 초과"):
+        story_producer.build_cta_timing(88.0, 3.0)
 
 
 def test_cta_timing_rejects_final_video_under_60_seconds():

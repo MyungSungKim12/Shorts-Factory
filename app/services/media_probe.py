@@ -17,11 +17,11 @@ def _probe_timeout() -> int:
 
 
 def shorts_max_duration() -> int:
-    """Return the configured final-video ceiling within YouTube's 3-minute limit."""
+    """Return the configured channel ceiling within YouTube's 3-minute limit."""
     try:
-        configured = int(os.getenv("MAX_VIDEO_SEC", "180"))
+        configured = int(os.getenv("MAX_VIDEO_SEC", "90"))
     except ValueError:
-        configured = 180
+        configured = 90
     return min(180, max(75, configured))
 
 

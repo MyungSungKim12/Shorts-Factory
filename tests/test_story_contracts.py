@@ -73,6 +73,32 @@ def test_story_contracts_accept_complete_documents():
     assert validate_script(story_script())["total_duration_sec"] == 64
 
 
+def test_story_contract_rejects_scene_narration_over_55_characters():
+    data = story_script()
+    data["scenes"][0]["narration"] = "가" * 56
+
+    with pytest.raises(ValueError, match="55"):
+        validate_script(data, "story")
+
+
+def test_story_contract_rejects_total_body_narration_over_400_characters():
+    data = story_script()
+    lengths = [50, 50, 50, 50, 50, 50, 50, 51]
+    for scene, length in zip(data["scenes"], lengths):
+        scene["narration"] = "가" * length
+
+    with pytest.raises(ValueError, match="400"):
+        validate_script(data, "story")
+
+
+def test_story_contract_accepts_total_body_narration_at_400_characters():
+    data = story_script()
+    for scene in data["scenes"]:
+        scene["narration"] = "가" * 50
+
+    assert validate_script(data, "story")["total_duration_sec"] == 64
+
+
 @pytest.mark.parametrize(
     "title",
     [

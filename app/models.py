@@ -206,6 +206,14 @@ class StoryScene(BaseModel):
     duration_sec: float = Field(ge=2, le=15)
     emphasis: list[str] = Field(default_factory=list, max_length=4)
 
+    @field_validator("narration")
+    @classmethod
+    def _narration_within_spoken_budget(cls, value: str) -> str:
+        normalized = " ".join((value or "").split())
+        if len(normalized) > 55:
+            raise ValueError("씬 narration은 공백 포함 55자 이하여야 함")
+        return normalized
+
     @field_validator("visuals")
     @classmethod
     def _visuals_are_searchable(cls, values: list[str]) -> list[str]:
@@ -241,6 +249,11 @@ class StoryScriptContract(BaseModel):
             raise ValueError("첫 씬 role은 hook이어야 함")
         if self.scenes[-1].role != "close":
             raise ValueError("마지막 씬 role은 close여야 함")
+        narration_chars = sum(len(scene.narration) for scene in self.scenes)
+        if narration_chars > 400:
+            raise ValueError(
+                f"본문 narration 합계 {narration_chars}자 — 400자 상한 초과"
+            )
         total = round(sum(scene.duration_sec for scene in self.scenes), 1)
         if not 53 <= total <= 75:
             raise ValueError(f"씬 duration 합계 {total:.1f}초 — story 본문 목표(53~75초) 벗어남")

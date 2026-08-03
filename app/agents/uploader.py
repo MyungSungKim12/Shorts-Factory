@@ -322,8 +322,8 @@ def _validate_video_file(video_file: Path) -> None:
     info = json.loads(result.stdout)
 
     duration = float(info.get("format", {}).get("duration", 0))
-    # 숏츠 상한 180초. 목표는 35~50초지만 넘쳐도 업로드(영상 안 날림). 상한 초과·너무 짧은 것만 차단.
-    max_sec = int(os.getenv("MAX_VIDEO_SEC", "180"))
+    # 채널 운영 상한 90초. 상한 초과·너무 짧은 영상은 업로드 전에 차단한다.
+    max_sec = int(os.getenv("MAX_VIDEO_SEC", "90"))
     if not 15 <= duration <= max_sec:
         raise ValueError(f"영상 길이 {duration:.1f}초 — 허용 범위(15~{max_sec}초) 위반")
 

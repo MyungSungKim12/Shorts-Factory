@@ -13,7 +13,7 @@
 - Story body narration is at most 400 normalized characters.
 - Each story scene narration is at most 55 normalized characters.
 - Final video target is 70–80 seconds and the hard maximum is 90 seconds.
-- TTS speed-up is limited to 1.12x and preserves pitch.
+- Gemini TTS uses the youthful `Leda` voice at 1.2x, preserves pitch, is never slowed down, and is never accelerated beyond 1.2x.
 - Do not change topic selection, media selection, Veo, captions, schedules, credit handling, or unrelated agent behavior.
 
 ---
@@ -55,20 +55,22 @@ Expected: all selected tests pass.
 
 **Files:**
 - Modify: `app/agents/story_producer.py`
+- Modify: `app/services/tts.py`
 - Modify: `app/services/media_probe.py`
 - Modify: `app/agents/producer.py`
 - Modify: `app/agents/uploader.py`
 - Modify: `.env.example`
 - Test: `tests/test_story_producer.py`
+- Test: `tests/test_tts_premium.py`
 - Test: `tests/test_quality_gate.py`
 
 **Interfaces:**
 - Consumes: `story_tempo_adjustment(intro_audio_duration, body_audio_duration, cta_audio_duration, scene_count)`
-- Produces: an `atempo` factor in `[0.80, 1.12]`, or raises when 90 seconds cannot be reached naturally
+- Produces: an `atempo` factor of `1.2`, or raises when the final video cannot fit within 90 seconds at that speed
 
 - [ ] **Step 1: Write failing tempo-boundary tests**
 
-Use hand-calculated durations to prove: audio below 90 seconds remains at 1.0x, a small overshoot returns the exact required factor, and a required factor above 1.12 raises `RuntimeError`.
+Use hand-calculated durations to prove: normal audio returns 1.2x without slowdown and audio that still exceeds 90 seconds at 1.2x raises `RuntimeError`.
 
 - [ ] **Step 2: Run the focused tests and verify RED**
 
@@ -78,7 +80,7 @@ Expected: the current function returns 1.0 for all over-90-second inputs.
 
 - [ ] **Step 3: Implement bounded speed-up and shared ceiling**
 
-Calculate the speed-up from measured audio plus scene padding, pass factors above 1.0 through the existing pitch-preserving `_retime_audio`, and reject factors above 1.12. Set the default and documented `MAX_VIDEO_SEC` to 90 so producer, quality gate, and uploader share one boundary.
+Apply the fixed 1.2x factor through the existing pitch-preserving `_retime_audio`, remove the old slowdown-to-60-seconds behavior, and reject audio that remains over 90 seconds after that adjustment. Change the Gemini TTS voice from `Kore` to youthful `Leda` and remove the calm/long-pause style in favor of natural conversational pacing with short sentence-boundary pauses. Set the default and documented `MAX_VIDEO_SEC` to 90 so producer, quality gate, and uploader share one boundary.
 
 - [ ] **Step 4: Run focused and full tests**
 

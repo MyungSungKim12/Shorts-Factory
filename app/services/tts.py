@@ -113,7 +113,7 @@ def synthesize(
     if selected not in {"auto", "google", "gtts"}:
         raise ValueError(f"지원하지 않는 TTS_PROVIDER: {selected}")
 
-    voice = os.getenv("TTS_VOICE", "ko-KR-Chirp3-HD-Kore")
+    voice = os.getenv("TTS_VOICE", "ko-KR-Chirp3-HD-Leda")
     rate = float(os.getenv("TTS_SPEAKING_RATE", "1.0"))
     pitch = float(os.getenv("TTS_PITCH", "0.0"))
     output_path = Path(output_path)
@@ -123,11 +123,11 @@ def synthesize(
         Path(os.getenv("DATA_DIR", "./data"))
     ):
         model = os.getenv("GEMINI_TTS_MODEL", "gemini-2.5-flash-tts").strip()
-        gemini_voice = os.getenv("GEMINI_TTS_VOICE", "Kore").strip()
+        gemini_voice = os.getenv("GEMINI_TTS_VOICE", "Leda").strip()
         style = os.getenv(
             "GEMINI_TTS_STYLE_PROMPT",
-            "차분하고 자연스러운 한국인 여성 미스터리 다큐멘터리 진행자처럼 말한다. "
-            "첫 문장은 호기심을 강하게 전달하고, 쉼표와 문장 경계에서 자연스럽게 쉬며, "
+            "젊고 자연스러운 한국인 여성 미스터리 다큐멘터리 진행자처럼 말한다. "
+            "기존 숏츠와 같은 보통 대화 속도를 유지하고 문장 경계에서만 짧게 쉬며, "
             "과장된 광고 말투나 기계적인 억양은 사용하지 않는다.",
         )
         reservation = reserve_cost(

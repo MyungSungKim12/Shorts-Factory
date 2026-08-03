@@ -62,7 +62,9 @@ def test_research_prompt_requires_sources_and_visual_plan():
 
 def test_writer_prompt_contains_retention_beats():
     prompt = writer._story_writer_prompt(_topic())
-    assert "완성 영상 목표는 60~75초" in prompt
+    assert "완성 영상 목표는 70~80초" in prompt
+    assert "400자 이하" in prompt
+    assert "55자 이하" in prompt
     assert "duration_sec 합계는 반드시 53~58초" in prompt
     assert "구독" in prompt
     assert "좋아요" in prompt
@@ -98,7 +100,7 @@ def test_writer_routes_story_format_and_saves_validated_json(tmp_path, monkeypat
     result = writer.run_writer(tmp_path, run_id, content_format="story")
 
     assert result["format"] == "story"
-    assert "60~75초" in captured["prompt"]
+    assert "70~80초" in captured["prompt"]
     assert json.loads((work_dir / "script.json").read_text(encoding="utf-8"))["format"] == "story"
 
 
