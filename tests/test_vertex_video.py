@@ -89,7 +89,25 @@ def test_image_generation_is_vertical_four_seconds_without_audio(
     assert config.generate_audio is False
     assert config.person_generation == "dont_allow"
     assert result.output.read_bytes() == b"video"
-    assert result.estimated_cost_usd == 2.0
+    assert result.estimated_cost_usd == 0.32
+
+
+def test_credit_free_mode_prevents_new_veo_call(tmp_path, monkeypatch):
+    from app.services.vertex_video import VeoUnavailable, generate_opening_video
+
+    monkeypatch.setenv("VEO_OPENING_ENABLED", "true")
+    monkeypatch.setenv("AI_CREDIT_MODE", "free")
+    reference = tmp_path / "reference.jpg"
+    reference.write_bytes(b"image")
+
+    with pytest.raises(VeoUnavailable, match="credit"):
+        generate_opening_video(
+            reference,
+            tmp_path / "output.mp4",
+            "Richat Structure",
+            client=FakeClient(),
+            sdk_types=FakeTypes,
+        )
 
 
 def test_generation_timeout_is_normalized(tmp_path, monkeypatch):

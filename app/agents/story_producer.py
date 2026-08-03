@@ -122,90 +122,119 @@ def _select_opening_source(
         )
         return result
 
-    asset_id, asset_dir = library.create_asset_workspace(subject_key)
-    suffix = Path(media).suffix.lower() or ".jpg"
-    reference = asset_dir / f"reference{suffix}"
-    master = asset_dir / "master.mp4"
-    opening = asset_dir / "opening.mp4"
-    shutil.copy2(media, reference)
+    try:
+        candidate_count = min(2, max(1, int(os.getenv("VEO_CANDIDATES", "1"))))
+    except ValueError:
+        candidate_count = 1
+    prompt = "verified image with identity-preserving minimal motion"
+    ready_candidates = []
+    errors = []
+    first_reference = None
+    for candidate_index in range(candidate_count):
+        asset_id, asset_dir = library.create_asset_workspace(subject_key)
+        suffix = Path(media).suffix.lower() or ".jpg"
+        reference = asset_dir / f"reference{suffix}"
+        master = asset_dir / "master.mp4"
+        opening = asset_dir / "opening.mp4"
+        shutil.copy2(media, reference)
+        first_reference = first_reference or reference
+        model = ""
+        validation = {}
+        try:
+            generated = generator(reference, master, subject)
+            model = generated.model
+            validation = validator(reference, master, ffmpeg_path=ffmpeg_path)
+            if not validation.get("passed"):
+                raise RuntimeError(
+                    "AI opening validation failed: "
+                    + ", ".join(validation.get("failures") or ["unknown"])
+                )
+            derivative_builder(master, opening, ffmpeg_path=ffmpeg_path)
+            asset = library.register_asset(metadata={
+                "asset_id": asset_id,
+                "subject_key": subject_key,
+                "reuse_scope": "exact_subject",
+                "status": "ready",
+                "reference_path": str(reference),
+                "master_path": str(master),
+                "opening_path": str(opening),
+                "source_url": metadata.get("source_url", ""),
+                "license": metadata.get("license", ""),
+                "source_metadata": metadata,
+                "model": model,
+                "prompt": prompt,
+                "validation": validation,
+            })
+            report = validation.get("report") or {}
+            distance = report.get("reference_frame_distance")
+            distance = float(distance) if isinstance(distance, (int, float)) else 9999.0
+            dark_ratio = float(report.get("dark_content_ratio") or 0.0)
+            ready_candidates.append(
+                (distance, dark_ratio, candidate_index, asset, generated, validation)
+            )
+        except Exception as exc:
+            error = " ".join(str(exc).split())[:500]
+            errors.append(error)
+            library.register_asset(metadata={
+                "asset_id": asset_id,
+                "subject_key": subject_key,
+                "reuse_scope": "exact_subject",
+                "status": "rejected",
+                "reference_path": str(reference),
+                "master_path": str(master),
+                "opening_path": str(opening),
+                "source_url": metadata.get("source_url", ""),
+                "license": metadata.get("license", ""),
+                "source_metadata": metadata,
+                "model": model,
+                "prompt": prompt,
+                "validation": validation,
+                "error": error,
+            })
+
     persistent_metadata = dict(metadata)
-    persistent_metadata["ai_asset_id"] = asset_id
     result.update(
-        required_media=reference,
+        required_media=first_reference,
         required_metadata=persistent_metadata,
         strategy="exact_stock",
     )
-    prompt = ""
-    model = ""
-    validation = {}
-    try:
-        generated = generator(reference, master, subject)
-        model = generated.model
-        prompt = "verified image with identity-preserving minimal motion"
-        validation = validator(reference, master, ffmpeg_path=ffmpeg_path)
-        if not validation.get("passed"):
-            raise RuntimeError(
-                "AI opening validation failed: "
-                + ", ".join(validation.get("failures") or ["unknown"])
-            )
-        derivative_builder(master, opening, ffmpeg_path=ffmpeg_path)
-        asset = library.register_asset(metadata={
-            "asset_id": asset_id,
-            "subject_key": subject_key,
-            "reuse_scope": "exact_subject",
-            "status": "ready",
-            "reference_path": str(reference),
-            "master_path": str(master),
-            "opening_path": str(opening),
-            "source_url": metadata.get("source_url", ""),
-            "license": metadata.get("license", ""),
-            "source_metadata": metadata,
-            "model": model,
-            "prompt": prompt,
-            "validation": validation,
-        })
-        library.mark_asset_used(asset_id, run_id)
+    if ready_candidates:
+        _, _, _, asset, generated, validation = min(
+            ready_candidates, key=lambda item: (item[0], item[1], item[2])
+        )
+        persistent_metadata["ai_asset_id"] = asset.asset_id
+        result["required_media"] = asset.reference_path
+        result["required_metadata"] = persistent_metadata
+        library.mark_asset_used(asset.asset_id, run_id)
         result.update(
             ai_media=asset.opening_path,
             strategy="vertex_veo_image",
             ai_generation={
                 "provider": "vertex_veo",
                 "status": "ready",
-                "asset_id": asset_id,
+                "asset_id": asset.asset_id,
                 "subject_key": subject_key,
                 "model": generated.model,
                 "duration_sec": generated.duration_sec,
-                "estimated_cost_usd": generated.estimated_cost_usd,
+                "estimated_cost_usd": sum(
+                    item[4].estimated_cost_usd for item in ready_candidates
+                ),
+                "candidate_count": candidate_count,
+                "ready_candidate_count": len(ready_candidates),
                 "reused": False,
                 "validation": validation,
                 "reference_source_url": metadata.get("source_url", ""),
             },
         )
-    except Exception as exc:
-        error = " ".join(str(exc).split())[:500]
-        library.register_asset(metadata={
-            "asset_id": asset_id,
-            "subject_key": subject_key,
-            "reuse_scope": "exact_subject",
-            "status": "rejected",
-            "reference_path": str(reference),
-            "master_path": str(master),
-            "opening_path": str(opening),
-            "source_url": metadata.get("source_url", ""),
-            "license": metadata.get("license", ""),
-            "source_metadata": metadata,
-            "model": model,
-            "prompt": prompt,
-            "validation": validation,
-            "error": error,
-        })
+    else:
+        error = " | ".join(errors)[:500] or "Veo candidate generation failed"
         result.update(
             strategy="stock_after_veo_failure",
             ai_generation={
                 "provider": "vertex_veo",
                 "status": "failed",
-                "asset_id": asset_id,
                 "subject_key": subject_key,
+                "candidate_count": candidate_count,
                 "error": error,
                 "reference_source_url": metadata.get("source_url", ""),
             },

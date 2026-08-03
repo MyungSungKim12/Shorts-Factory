@@ -106,6 +106,57 @@ def test_verified_exact_image_can_seed_veo_opening(tmp_path, monkeypatch):
     assert "media/ai_openings" in selected["ai_media"].as_posix()
 
 
+def test_two_veo_candidates_keep_both_and_select_closest_reference(
+    tmp_path, monkeypatch
+):
+    exact = tmp_path / "exact.jpg"
+    exact.write_bytes(b"image")
+    monkeypatch.setenv("VEO_CANDIDATES", "2")
+    monkeypatch.setattr(
+        story_producer,
+        "fetch_required_exact_media",
+        lambda *args: (
+            exact,
+            {
+                "provider": "wikimedia_image",
+                "exact_match": True,
+                "source_url": "https://commons.wikimedia.org/wiki/File:Richat.jpg",
+                "license": "CC BY-SA 4.0",
+                "media_id": "File:Richat.jpg",
+            },
+        ),
+    )
+    generated_count = 0
+
+    def fake_generator(reference, output, subject):
+        nonlocal generated_count
+        from app.services.vertex_video import VeoGenerationResult
+
+        generated_count += 1
+        output.write_bytes(f"candidate-{generated_count}".encode())
+        return VeoGenerationResult(output, "veo-test", 4, 0.32)
+
+    def fake_validator(reference, master, **kwargs):
+        distance = 30 if master.read_bytes() == b"candidate-1" else 8
+        return {
+            "passed": True,
+            "failures": [],
+            "report": {"reference_frame_distance": distance, "dark_content_ratio": 0.0},
+        }
+
+    selected = _opening_call(
+        tmp_path,
+        generator=fake_generator,
+        validator=fake_validator,
+        derivative_builder=lambda master, output, **kwargs: shutil.copy2(master, output),
+    )
+
+    assert generated_count == 2
+    assert selected["ai_media"].read_bytes() == b"candidate-2"
+    assert selected["ai_generation"]["candidate_count"] == 2
+    assert len(list((tmp_path / "media" / "ai_openings").iterdir())) == 2
+
+
 def test_missing_exact_stock_does_not_invent_real_subject_with_ai(
     tmp_path, monkeypatch
 ):

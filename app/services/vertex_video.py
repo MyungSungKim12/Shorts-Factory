@@ -7,6 +7,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from app.services.credit_guard import (
+    PaidFeatureDisabled,
+    cancel_cost,
+    commit_cost,
+    paid_features_enabled,
+    reserve_cost,
+)
+
 
 class VeoUnavailable(RuntimeError):
     """설정, SDK 또는 인증 문제로 Veo를 호출할 수 없음."""
@@ -26,6 +34,17 @@ class VeoGenerationResult:
 
 def _enabled(value: str | None) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _video_cost_usd(model: str, duration: int, resolution: str = "720p") -> float:
+    name = model.lower()
+    if "lite" in name:
+        per_second = 0.03 if resolution == "720p" else 0.05
+    elif "fast" in name:
+        per_second = 0.08 if resolution == "720p" else 0.10
+    else:
+        per_second = 0.20
+    return round(duration * per_second, 4)
 
 
 def motion_prompt(subject: str) -> str:
@@ -86,6 +105,21 @@ def generate_opening_video(
 
     model = os.getenv("VEO_MODEL", "veo-3.1-fast-generate-001").strip()
     duration = 4
+    estimated_cost = _video_cost_usd(model, duration)
+    reservation = None
+    if os.getenv("AI_CREDIT_MODE"):
+        data_dir = Path(os.getenv("DATA_DIR", "./data"))
+        if not paid_features_enabled(data_dir):
+            raise VeoUnavailable("credit guard disabled new Veo generation")
+        try:
+            reservation = reserve_cost(
+                data_dir,
+                "veo_3_1_fast" if "fast" in model.lower() else "veo_3_1",
+                estimated_cost,
+                os.getenv("PIPELINE_RUN_ID", subject),
+            )
+        except PaidFeatureDisabled as exc:
+            raise VeoUnavailable(f"credit guard disabled new Veo generation: {exc}") from exc
     timeout = max(1.0, float(os.getenv("VEO_TIMEOUT_SEC", "900")))
     poll = max(1.0, float(os.getenv("VEO_POLL_SEC", "15")))
     destination = Path(output)
@@ -131,13 +165,20 @@ def generate_opening_video(
         if not destination.is_file() or destination.stat().st_size == 0:
             raise VeoGenerationFailed("Veo output file is empty")
     except (VeoUnavailable, VeoGenerationFailed):
+        if reservation is not None:
+            cancel_cost(reservation)
         raise
     except Exception as exc:
+        if reservation is not None:
+            cancel_cost(reservation)
         raise VeoGenerationFailed(f"Veo request failed: {exc}") from exc
+
+    if reservation is not None:
+        commit_cost(reservation, actual_usd=estimated_cost)
 
     return VeoGenerationResult(
         output=destination,
         model=model,
         duration_sec=duration,
-        estimated_cost_usd=round(duration * 0.50, 2),
+        estimated_cost_usd=estimated_cost,
     )
