@@ -7,10 +7,19 @@
 """
 import os
 import time
+from pathlib import Path
 
+import google.auth
 import requests
+from google.auth.transport.requests import AuthorizedSession
 
 from app.console import safe_print
+from app.services.credit_guard import (
+    cancel_cost,
+    commit_cost,
+    paid_features_enabled,
+    reserve_cost,
+)
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
@@ -66,6 +75,7 @@ def call_agent(
     Returns:
         모델의 응답 텍스트 (JSON 문자열 또는 JSON 포함 텍스트)
     """
+    premium = paid_features_enabled(Path(os.getenv("DATA_DIR", "./data")))
     if grounded:
         # 검색 경로는 Gemini 그라운딩만 (Groq compound는 무료 티어에서 413으로 상시 실패해 제거).
         # 그라운딩 할당량이 소진되면 이 호출은 실패하고, 리서처가 보수 모드로 폴백한다.
@@ -83,6 +93,17 @@ def call_agent(
             ("groq", lambda: _groq_call(prompt, max_tokens, agent_name)),
         ]
 
+    if premium:
+        providers.insert(
+            0,
+            (
+                "vertex-gemini",
+                lambda: _vertex_gemini_call(
+                    prompt, max_tokens, agent_name, grounded
+                ),
+            ),
+        )
+
     errors = []
     for name, fn in providers:
         try:
@@ -92,6 +113,62 @@ def call_agent(
             safe_print(f"  ⚠️ [{agent_name}] 제공자 {name} 실패 → 다음 제공자로")
 
     raise RuntimeError(f"모든 LLM 제공자 실패: {' | '.join(errors)}")
+
+
+def _vertex_gemini_call(
+    prompt: str,
+    max_tokens: int,
+    agent_name: str,
+    grounded: bool,
+) -> str:
+    """ADC를 사용해 Vertex Gemini를 호출하고 실제 토큰 비용을 기록한다."""
+    data_dir = Path(os.getenv("DATA_DIR", "./data"))
+    project = os.getenv("GOOGLE_CLOUD_PROJECT", "").strip()
+    location = os.getenv("GOOGLE_CLOUD_LOCATION", "global").strip() or "global"
+    model = os.getenv("VERTEX_GEMINI_MODEL", "gemini-2.5-flash").strip()
+    if not project:
+        raise RuntimeError("GOOGLE_CLOUD_PROJECT 미설정")
+    reservation = reserve_cost(
+        data_dir,
+        "vertex_gemini_grounded" if grounded else "vertex_gemini",
+        0.05,
+        os.getenv("PIPELINE_RUN_ID", agent_name),
+    )
+    try:
+        credentials, _ = google.auth.default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+        session = AuthorizedSession(credentials)
+        url = (
+            f"https://aiplatform.googleapis.com/v1/projects/{project}/locations/"
+            f"{location}/publishers/google/models/{model}:generateContent"
+        )
+        generation = {"maxOutputTokens": max_tokens, "temperature": 0.7}
+        body = {
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": generation,
+        }
+        if grounded:
+            body["tools"] = [{"googleSearch": {}}]
+        else:
+            generation["responseMimeType"] = "application/json"
+        response = session.post(url, json=body, timeout=120)
+        response.raise_for_status()
+        result = response.json()
+        candidates = result.get("candidates") or []
+        parts = candidates[0].get("content", {}).get("parts", []) if candidates else []
+        text = "".join(part.get("text", "") for part in parts).strip()
+        if not text:
+            raise RuntimeError("Vertex Gemini 응답이 비어 있음")
+        usage = result.get("usageMetadata") or {}
+        input_tokens = int(usage.get("promptTokenCount") or 0)
+        output_tokens = int(usage.get("candidatesTokenCount") or 0)
+        actual = input_tokens * 0.30 / 1_000_000 + output_tokens * 2.50 / 1_000_000
+        commit_cost(reservation, actual_usd=max(actual, 0.000001))
+        return text
+    except Exception:
+        cancel_cost(reservation)
+        raise
 
 
 # ---------------------------------------------------------------- Gemini
