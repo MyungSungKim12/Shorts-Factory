@@ -6,6 +6,7 @@ def test_auto_provider_uses_prompt_controlled_gemini_female_voice_in_premium_mod
 ):
     seen = {}
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("GEMINI_TTS_STYLE_PROMPT", raising=False)
     monkeypatch.setattr(tts, "paid_features_enabled", lambda data_dir: True)
     monkeypatch.setattr(tts, "reserve_cost", lambda *args, **kwargs: object())
     monkeypatch.setattr(tts, "commit_cost", lambda *args, **kwargs: None)

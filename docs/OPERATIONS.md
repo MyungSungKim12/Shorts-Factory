@@ -190,6 +190,12 @@ ssh -i "D:\ms\ssh-key-2026-07-10.key" ubuntu@168.107.15.146 "df -h / | tail -1; 
 | `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_LOCATION` | Vertex AI 프로젝트와 리전 |
 | `VEO_OPENING_ENABLED` / `VEO_MODEL` | 실제 이미지 기반 AI 오프닝 활성화와 모델 |
 | `VEO_OPENING_MAX_SEC` | 제목 인트로에서 AI 편집본을 사용할 최대 길이(기본 3초) |
+| `AI_CREDIT_MODE` | `auto`는 예상 잔액에 따라 프리미엄/무료 자동 전환, `free`는 신규 유료 호출 금지 |
+| `CLOUD_CREDIT_START_KRW` / `CLOUD_CREDIT_FLOOR_KRW` | 로컬 원장의 시작 잔액과 자동 무료 전환 하한(운영 80,000원) |
+| `CLOUD_USD_TO_KRW` | 유료 호출 예상비용 원화 환산율 |
+| `GEMINI_TTS_MODEL` / `GEMINI_TTS_VOICE` | 프리미엄 내레이션 모델과 여성 음성 |
+| `VEO_CANDIDATES` | 동일한 검증 이미지로 생성·비교할 Veo 후보 수(최대 2) |
+| `DISK_USAGE_WARN_PERCENT` / `AI_LIBRARY_WARN_BYTES` | AI 자산을 삭제하지 않고 Telegram 경고만 보낼 저장공간 기준 |
 | `DASHBOARD_TOKEN` | 대시보드 수동실행 보호 토큰 |
 
 ### credentials/ (서버, 커밋 금지)

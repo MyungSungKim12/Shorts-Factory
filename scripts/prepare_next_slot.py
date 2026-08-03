@@ -197,6 +197,8 @@ def _prepare(
     initial_slot = initial_run_id.rsplit("-", 1)[1]
     staging_id = f"prebuild-{now_fn().strftime('%Y%m%d-%H%M%S')}-{initial_slot}"
     staging_dir = data_dir / "staging" / staging_id
+    previous_pipeline_run_id = os.environ.get("PIPELINE_RUN_ID")
+    os.environ["PIPELINE_RUN_ID"] = initial_run_id
     lock_path = data_dir / "recovery" / "pipeline.lock"
     lock_owner = f"staging:{staging_id}"
     lock_owned = False
@@ -291,6 +293,10 @@ def _prepare(
             "quality_gate": quality,
         }
     finally:
+        if previous_pipeline_run_id is None:
+            os.environ.pop("PIPELINE_RUN_ID", None)
+        else:
+            os.environ["PIPELINE_RUN_ID"] = previous_pipeline_run_id
         if lock_owned:
             release_owned_lock(lock_path, lock_owner, os.getpid())
 

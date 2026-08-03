@@ -75,3 +75,13 @@ def test_manual_free_mode_disables_paid_features_but_reports_assets_reusable(
 
     assert paid_features_enabled(tmp_path) is False
     assert credit_status(tmp_path)["reuse_existing_ai_assets"] is True
+
+
+def test_mode_transition_is_reported_once(tmp_path, monkeypatch):
+    from app.services.credit_guard import consume_mode_transition
+
+    _configure(monkeypatch)
+    assert consume_mode_transition(tmp_path) is None
+    monkeypatch.setenv("AI_CREDIT_MODE", "free")
+    assert consume_mode_transition(tmp_path) == ("premium", "free")
+    assert consume_mode_transition(tmp_path) is None

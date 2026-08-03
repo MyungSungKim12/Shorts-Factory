@@ -67,6 +67,7 @@ def test_image_generation_is_vertical_four_seconds_without_audio(
     from app.services.vertex_video import generate_opening_video
 
     monkeypatch.setenv("VEO_OPENING_ENABLED", "true")
+    monkeypatch.delenv("AI_CREDIT_MODE", raising=False)
     monkeypatch.setenv("VEO_MODEL", "veo-3.1-fast-generate-001")
     reference = tmp_path / "reference.jpg"
     reference.write_bytes(b"image")
@@ -114,6 +115,7 @@ def test_generation_timeout_is_normalized(tmp_path, monkeypatch):
     from app.services.vertex_video import VeoGenerationFailed, generate_opening_video
 
     monkeypatch.setenv("VEO_OPENING_ENABLED", "true")
+    monkeypatch.delenv("AI_CREDIT_MODE", raising=False)
     monkeypatch.setenv("VEO_TIMEOUT_SEC", "1")
     reference = tmp_path / "reference.jpg"
     reference.write_bytes(b"image")

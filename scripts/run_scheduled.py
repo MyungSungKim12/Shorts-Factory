@@ -19,6 +19,8 @@ load_dotenv()
 from app.services.recovery import run_with_recovery  # noqa: E402
 from app.services.notifications import safe_error, send_alert  # noqa: E402
 from app.services.temp_cleanup import cleanup_stale_temp_dirs  # noqa: E402
+from app.services.ai_storage_monitor import storage_status  # noqa: E402
+from app.services.credit_guard import consume_mode_transition, credit_status  # noqa: E402
 from scripts.run_daily import cleanup_old_work  # noqa: E402
 
 
@@ -104,6 +106,28 @@ def main() -> None:
     data_dir = Path(os.getenv("DATA_DIR", "./data"))
     ffmpeg_path = os.getenv("FFMPEG_PATH", "ffmpeg")
     delay_seconds = int(os.getenv("RECOVERY_DELAY_SECONDS", "900"))
+    transition = consume_mode_transition(data_dir)
+    if transition is not None:
+        before, after = transition
+        credit = credit_status(data_dir)
+        _notify(
+            data_dir,
+            f"credit-mode:{after}:{datetime.now():%Y%m%d}",
+            f"AI credit mode changed\nfrom: {before}\nto: {after}"
+            f"\nexpected_remaining_krw: {credit['expected_remaining_krw']:.0f}"
+            f"\nfloor_krw: {credit['floor_krw']:.0f}",
+        )
+    storage = storage_status(data_dir)
+    if storage["warnings"]:
+        _notify(
+            data_dir,
+            f"ai-storage:{datetime.now():%Y%m%d}",
+            "AI storage warning"
+            f"\nwarnings: {','.join(storage['warnings'])}"
+            f"\ndisk_used_percent: {storage['disk_used_percent']}"
+            f"\nai_library_bytes: {storage['ai_library_bytes']}"
+            "\nauto_delete: false",
+        )
     cleanup = cleanup_stale_temp_dirs()
     print(
         f"임시 작업 정리: {cleanup['removed_dirs']}개, "

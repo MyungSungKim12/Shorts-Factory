@@ -123,6 +123,22 @@ def paid_features_enabled(data_dir: Path) -> bool:
     return credit_status(data_dir)["mode"] == "premium"
 
 
+def consume_mode_transition(data_dir: Path) -> tuple[str, str] | None:
+    """모드가 실제로 바뀐 첫 호출에만 이전/현재 모드를 반환한다."""
+    data_dir = Path(data_dir)
+    with _LOCK:
+        current = credit_status(data_dir)["mode"]
+        state, valid = _read_state(data_dir)
+        if not valid:
+            return None
+        previous = state.get("last_mode")
+        state["last_mode"] = current
+        _write_state(data_dir, state)
+        if previous in {"premium", "free"} and previous != current:
+            return previous, current
+        return None
+
+
 def reserve_cost(
     data_dir: Path,
     feature: str,
