@@ -282,8 +282,6 @@ def build_cta_timing(body_duration: float, audio_duration: float) -> dict[str, f
     """본문 직후 CTA를 배치하고 최종 Shorts 길이 범위를 검증한다."""
     start = round(float(body_duration), 3)
     end = round(start + float(audio_duration), 3)
-    if end < 60:
-        raise RuntimeError(f"CTA 포함 최종 길이 {end:.1f}초로 60초 미만")
     max_duration = shorts_max_duration()
     if end > max_duration:
         raise RuntimeError(
@@ -303,8 +301,6 @@ def build_story_timing(
     body_start = intro_duration
     cta_start = round(body_start + float(body_duration), 3)
     cta_end = round(cta_start + float(cta_audio_duration), 3)
-    if cta_end < 60:
-        raise RuntimeError(f"인트로·CTA 포함 최종 길이 {cta_end:.1f}초로 60초 미만")
     max_duration = shorts_max_duration()
     if cta_end > max_duration:
         raise RuntimeError(

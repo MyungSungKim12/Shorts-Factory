@@ -26,6 +26,17 @@ def test_valid_story_video_is_accepted():
     assert validate_sample(report) == []
 
 
+def test_short_valid_video_is_accepted_without_content_minimum():
+    report = {
+        "width": 1080, "height": 1920, "duration": 30.0,
+        "video_codec": "h264", "audio_codec": "aac", "has_audio": True,
+        "black_ratio": 0.0,
+        "audio_duration": 29.9, "duration_delta": 0.1,
+        "internal_silence_max": 0.0,
+    }
+    assert validate_sample(report) == []
+
+
 def test_story_video_over_target_is_accepted_under_short_limit():
     report = {
         "width": 1080, "height": 1920, "duration": 77.0,
@@ -50,10 +61,10 @@ def test_story_video_over_short_limit_is_rejected():
 
 def test_invalid_video_lists_every_failure():
     report = {
-        "width": 720, "height": 1280, "duration": 50,
+        "width": 720, "height": 1280, "duration": 0,
         "video_codec": "vp9", "audio_codec": "", "has_audio": False,
         "black_ratio": 0.4,
-        "audio_duration": 48, "duration_delta": 2,
+        "audio_duration": 0, "duration_delta": 2,
         "internal_silence_max": 1.5,
     }
     failures = validate_sample(report)

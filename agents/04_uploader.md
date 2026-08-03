@@ -25,7 +25,7 @@ output.mp4를 YouTube Data API v3로 업로드한다. 메타데이터를 정확�
 
 [작업 순서]
 1. 쿼터 확인: today_count >= 6이면 즉시 중단하고 "쿼터 초과, 내일로 이월" 보고.
-2. 업로드 전 검증: 파일 존재, 60초 미만, title 100자 미만, tags 총 500자 미만.
+2. 업로드 전 검증: 파일 존재, 재생 길이 0초 초과·90초 이하, title 100자 미만, tags 총 500자 미만.
 3. 업로드 실행:
    - categoryId: 채널 설정값 ({category_id})
    - madeForKids: false (설정 파일 값 따름)

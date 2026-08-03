@@ -173,7 +173,8 @@ def validate_sample(report: dict) -> list[str]:
     failures = []
     if (report.get("width"), report.get("height")) != (1080, 1920):
         failures.append("resolution")
-    if not 60 <= float(report.get("duration", 0)) <= shorts_max_duration():
+    duration = float(report.get("duration", 0))
+    if duration <= 0 or duration > shorts_max_duration():
         failures.append("duration")
     if report.get("video_codec") != "h264":
         failures.append("video_codec")

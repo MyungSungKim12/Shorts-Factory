@@ -1,8 +1,32 @@
 import json
+import subprocess
 
 import pytest
 
 from app.agents import uploader
+
+
+def test_upload_validation_accepts_short_video_without_content_minimum(
+    tmp_path, monkeypatch
+):
+    video = tmp_path / "short.mp4"
+    video.write_bytes(b"video")
+    probe = {
+        "format": {"duration": "10.0"},
+        "streams": [
+            {"codec_type": "video", "width": 1080, "height": 1920},
+            {"codec_type": "audio"},
+        ],
+    }
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0], 0, stdout=json.dumps(probe), stderr=""
+        ),
+    )
+
+    uploader._validate_video_file(video)
 
 
 def test_wikimedia_credits_are_unique_and_include_license_and_source():

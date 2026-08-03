@@ -322,10 +322,10 @@ def _validate_video_file(video_file: Path) -> None:
     info = json.loads(result.stdout)
 
     duration = float(info.get("format", {}).get("duration", 0))
-    # 채널 운영 상한 90초. 상한 초과·너무 짧은 영상은 업로드 전에 차단한다.
+    # 콘텐츠 최소 길이는 두지 않는다. 손상된 0초 파일과 채널 상한 초과만 차단한다.
     max_sec = int(os.getenv("MAX_VIDEO_SEC", "90"))
-    if not 15 <= duration <= max_sec:
-        raise ValueError(f"영상 길이 {duration:.1f}초 — 허용 범위(15~{max_sec}초) 위반")
+    if duration <= 0 or duration > max_sec:
+        raise ValueError(f"영상 길이 {duration:.1f}초 — 허용 범위(0초 초과~{max_sec}초) 위반")
 
     video_stream = next((s for s in info.get("streams", []) if s.get("codec_type") == "video"), None)
     if not video_stream:

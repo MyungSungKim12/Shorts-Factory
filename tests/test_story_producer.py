@@ -766,6 +766,11 @@ def test_story_timing_rejects_total_over_90_seconds():
         story_producer.build_story_timing(4.0, 83.0, 4.0)
 
 
+def test_story_timing_accepts_final_video_under_60_seconds():
+    timing = story_producer.build_story_timing(3.0, 51.0, 3.0)
+    assert timing["total_duration"] == 57.15
+
+
 def test_cta_timing_allows_natural_audio_over_target_under_short_limit():
     assert story_producer.build_cta_timing(73.0, 3.0)["total_duration"] == 76.0
 
@@ -775,9 +780,8 @@ def test_cta_timing_rejects_final_video_over_90_seconds():
         story_producer.build_cta_timing(88.0, 3.0)
 
 
-def test_cta_timing_rejects_final_video_under_60_seconds():
-    with pytest.raises(RuntimeError, match="60초 미만"):
-        story_producer.build_cta_timing(55.0, 3.0)
+def test_cta_timing_accepts_final_video_under_60_seconds():
+    assert story_producer.build_cta_timing(55.0, 3.0)["total_duration"] == 58.0
 
 
 def test_story_srt_appends_cta_for_exact_audio_window(tmp_path):
