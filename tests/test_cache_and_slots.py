@@ -6,6 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.services.fact_cache import save_verified, pick_cached, cache_size
+from app.agents import researcher
 from app.agents.researcher import SLOT_CATEGORIES
 
 
@@ -56,6 +57,22 @@ def test_회차_카테고리_매핑():
     for c in SLOT_CATEGORIES.values():
         assert c.get("visual_fallback")
         assert c.get("category")
+
+
+def test_하루_네_회차는_서로_다른_하위영역을_사용한다():
+    domains = [researcher.story_focus_domain(f"20260804-{slot}")["key"] for slot in (1, 2, 3, 4)]
+
+    assert len(set(domains)) == 4
+
+
+def test_이틀_동안_여덟_하위영역을_한번씩_순환한다():
+    domains = {
+        researcher.story_focus_domain(f"{day}-{slot}")["key"]
+        for day in ("20260804", "20260805")
+        for slot in (1, 2, 3, 4)
+    }
+
+    assert len(domains) == 8
 
 
 def test_story_cache_rejects_removed_animal_category():

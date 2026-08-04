@@ -45,6 +45,35 @@ SLOT_CATEGORIES = {
     4: dict(_HIDDEN_WORLD),
 }
 
+_SCIENCE_FOCUS_DOMAINS = (
+    {"key": "atmosphere_weather", "name": "대기·기상", "desc": "극한 기상과 설명하기 어려운 대기 관측", "examples": "상층 번개, 원통 구름, 비정상적인 대기파"},
+    {"key": "geology_extreme", "name": "지질·극한 자연", "desc": "사막·화산·암석·지각에서 확인된 상식 밖 현상", "examples": "움직이는 돌, 불타는 분화구, 거대 균열"},
+    {"key": "space_astronomy", "name": "우주·천문", "desc": "실제 관측 기록으로 남은 우주와 천체의 미해결 현상", "examples": "정체불명 신호, 비정상 궤도, 설명되지 않은 별빛"},
+    {"key": "anomalous_physics", "name": "변칙 물리·기술", "desc": "기존 예상과 어긋난 실험·탐사·공학 관측", "examples": "예상 밖 가속, 측정 장비의 반복 이상, 극한 기술 기록"},
+)
+
+_HIDDEN_FOCUS_DOMAINS = (
+    {"key": "ancient_engineering", "name": "고대 구조·기술", "desc": "실제로 확인된 고대 건축·도시·공학의 숨겨진 구조", "examples": "매몰 도시, 거석 구조, 고대 수로"},
+    {"key": "underground_forbidden", "name": "지하·금지 시설", "desc": "지하와 산속에 감춰진 실제 시설·터널·공간", "examples": "폐쇄 지하기지, 암반 터널, 비공개 저장 시설"},
+    {"key": "ocean_depth", "name": "바다·심해", "desc": "바다와 심해에서 확인된 구조·환경·관측 기록", "examples": "해저 구조, 심해 열수구, 수중 지형"},
+    {"key": "ice_polar", "name": "빙하·극지", "desc": "빙하와 극지 아래 실제로 보존되거나 발견된 세계", "examples": "빙하 아래 호수, 얼음 터널, 극지 퇴적층"},
+)
+
+
+def story_focus_domain(run_id: str) -> dict[str, str] | None:
+    """Rotate eight subdomains across two days without changing the four slots."""
+    try:
+        date_text, slot_text = str(run_id).rsplit("-", 1)
+        slot = int(slot_text)
+        phase = (datetime.strptime(date_text, "%Y%m%d").toordinal() % 2) * 2
+    except (ValueError, TypeError):
+        return None
+    if slot in (1, 3):
+        return dict(_SCIENCE_FOCUS_DOMAINS[phase + (0 if slot == 1 else 1)])
+    if slot in (2, 4):
+        return dict(_HIDDEN_FOCUS_DOMAINS[phase + (0 if slot == 2 else 1)])
+    return None
+
 
 def _load_recent_topics(data_dir: Path, days: int = 14) -> list:
     """최근 업로드된 영상 제목을 DB에서 조회 (소재 중복 방지용)."""
@@ -58,14 +87,26 @@ def _load_recent_topics(data_dir: Path, days: int = 14) -> list:
     cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
     db = sqlite3.connect(db_file)
     try:
+        columns = {row[1] for row in db.execute("PRAGMA table_info(videos)")}
+        topic_column = "topic" if "topic" in columns else "NULL"
         rows = db.execute(
-            "SELECT title FROM videos WHERE date >= ? ORDER BY date DESC", (cutoff,)
+            f"SELECT title, {topic_column} FROM videos "
+            "WHERE date >= ? AND status = 'uploaded' ORDER BY date DESC",
+            (cutoff,),
         ).fetchall()
     except sqlite3.OperationalError:
         return []
     finally:
         db.close()
-    return [r[0] for r in rows]
+    recent = []
+    seen = set()
+    for title, topic in rows:
+        for value in (title, topic):
+            text = str(value or "").strip()
+            if text and text not in seen:
+                recent.append(text)
+                seen.add(text)
+    return recent
 
 
 def run_researcher(
@@ -114,6 +155,7 @@ def run_researcher(
         "ranking_size": 5,
         "recent_topics": recent_topics,
         "category": category,
+        "focus_domain": story_focus_domain(run_id) if selected == "story" else None,
     }
     if category:
         safe_print(f"  · 회차 {slot} 카테고리: {category['name']}")
@@ -214,12 +256,21 @@ def _story_researcher_prompt(context: dict, grounded: bool = True) -> str:
     )
     recent = context.get("recent_topics") or []
     category = context.get("category") or {}
+    focus_domain = context.get("focus_domain") or {}
     category_block = (
         f"- 이번 회차 방향: {category.get('name')}\n"
         f"- 방향 설명: {category.get('desc')}\n"
         f"- 좋은 출발점: {category.get('examples')}"
         if category else
         "- 이번 회차 방향: 위험, 반전, 거대한 규모 중 하나가 분명한 이야기"
+    )
+    focus_block = (
+        f"- 이번 회차 하위 영역: {focus_domain.get('name')}\n"
+        f"- 하위 영역 설명: {focus_domain.get('desc')}\n"
+        f"- 권장 소재 예시: {focus_domain.get('examples')}\n"
+        "- 이 영역 밖의 소재는 선택하지 않는다."
+        if focus_domain else
+        "- 이번 회차 하위 영역: 상위 방향 안에서 최근 소재와 가장 다른 영역"
     )
     return f"""당신은 '이상한 지구기록' 채널의 한국어 Shorts 리서처다. 검증 가능한 자연·과학·숨겨진 장소·역사 미스터리만 조사한다.
 
@@ -230,9 +281,11 @@ def _story_researcher_prompt(context: dict, grounded: bool = True) -> str:
 - Pexels/Pixabay 무료 스톡에서 실제 대상과 주변 환경을 여러 장면으로 찾을 수 있어야 한다.
 - 무료 영상 확보성은 필수 조건이지만 재미와 반전보다 먼저 소재를 결정하지 않는다.
 - 최근 사용 소재와 중복하지 않는다: {recent if recent else '없음'}
+- 제목 표현이 달라도 최근 소재와 핵심 대상·사건·관측값이 같으면 중복으로 탈락시킨다.
 
 [이번 회차]
 {category_block}
+{focus_block}
 
 [재미 점수 — 후보마다 각 0~5점, 총 30점]
 1. 첫 3초 호기심: 설명을 듣기 전에도 결말이 궁금한가?

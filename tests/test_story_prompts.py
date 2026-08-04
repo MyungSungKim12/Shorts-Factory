@@ -1,6 +1,7 @@
 """스토리 리서치·대본 프롬프트와 작가 라우팅 테스트."""
 import json
 import asyncio
+import sqlite3
 from datetime import datetime
 
 from app.agents import orchestrator, researcher, writer
@@ -58,6 +59,50 @@ def test_research_prompt_requires_sources_and_visual_plan():
     assert "science_mystery" in prompt
     assert "hidden_world" in prompt
     assert "history_mystery" in prompt
+
+
+def test_recent_topics_include_both_uploaded_title_and_original_topic(tmp_path):
+    db = sqlite3.connect(tmp_path / "videos.sqlite")
+    db.execute(
+        "CREATE TABLE videos (video_id TEXT, date TEXT, title TEXT, topic TEXT, status TEXT)"
+    )
+    db.execute(
+        "INSERT INTO videos VALUES (?, ?, ?, ?, ?)",
+        (
+            "video-1",
+            datetime.now().strftime("%Y%m%d") + "-1",
+            "빛 없는 심해의 비밀",
+            "빛도 산소도 없는 심해 4,000m 생명체의 비밀",
+            "uploaded",
+        ),
+    )
+    db.commit()
+    db.close()
+
+    recent = researcher._load_recent_topics(tmp_path)
+
+    assert recent == [
+        "빛 없는 심해의 비밀",
+        "빛도 산소도 없는 심해 4,000m 생명체의 비밀",
+    ]
+
+
+def test_research_prompt_requires_selected_domain_and_semantic_deduplication():
+    prompt = researcher._story_researcher_prompt(
+        {
+            "recent_topics": ["기존 우주 신호 소재"],
+            "focus_domain": {
+                "name": "대기·기상",
+                "desc": "극한 기상과 설명하기 어려운 대기 관측",
+                "examples": "상층 번개, 원통 구름",
+            },
+        },
+        grounded=True,
+    )
+
+    assert "대기·기상" in prompt
+    assert "상층 번개" in prompt
+    assert "핵심 대상·사건·관측값" in prompt
 
 
 def test_writer_prompt_contains_retention_beats():
