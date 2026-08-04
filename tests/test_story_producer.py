@@ -678,7 +678,7 @@ def test_story_timing_places_spoken_title_before_body_and_cta():
     }
 
 
-def test_story_audio_uses_fixed_1_2_speed_without_slowdown():
+def test_story_audio_uses_gentle_slowdown_only_when_needed_to_reach_60_seconds():
     tempo = story_producer.story_tempo_adjustment(
         intro_audio_duration=3.0,
         body_audio_duration=45.0,
@@ -687,26 +687,23 @@ def test_story_audio_uses_fixed_1_2_speed_without_slowdown():
         padding=0.15,
     )
 
-    assert tempo == 1.2
+    assert tempo == pytest.approx(51.0 / 58.8)
 
 
-def test_audio_at_or_above_minimum_still_uses_fixed_speed():
-    assert story_producer.story_tempo_adjustment(4.0, 53.0, 4.0, 7) == 1.2
+def test_audio_at_or_above_60_seconds_keeps_original_speed():
+    assert story_producer.story_tempo_adjustment(4.0, 53.0, 4.0, 7) == 1.0
 
 
-def test_audio_slightly_over_90_seconds_still_uses_fixed_speed(monkeypatch):
+def test_long_audio_is_not_accelerated(monkeypatch):
     monkeypatch.setenv("MAX_VIDEO_SEC", "90")
 
     tempo = story_producer.story_tempo_adjustment(4.0, 84.0, 3.0, 7)
 
-    assert tempo == 1.2
+    assert tempo == 1.0
 
 
-def test_audio_still_over_90_seconds_at_1_2_speed_is_rejected(monkeypatch):
-    monkeypatch.setenv("MAX_VIDEO_SEC", "90")
-
-    with pytest.raises(RuntimeError, match="1.2"):
-        story_producer.story_tempo_adjustment(4.0, 103.0, 3.0, 7)
+def test_very_short_audio_uses_bounded_slowdown_without_rejecting_the_video():
+    assert story_producer.story_tempo_adjustment(2.0, 25.0, 2.0, 7) == 0.8
 
 
 def test_retime_audio_uses_atempo_and_replaces_source(tmp_path, monkeypatch):

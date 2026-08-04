@@ -321,24 +321,19 @@ def story_tempo_adjustment(
     cta_audio_duration: float,
     scene_count: int,
     padding: float = 0.15,
-    fixed_tempo: float = 1.20,
+    minimum_tempo: float = 0.80,
 ) -> float:
-    """Use the established 1.2x pace and reject audio that still exceeds the ceiling."""
+    """Keep the original narration pace, with only bounded slowdown near 60 seconds."""
     audio_duration = (
         float(intro_audio_duration)
         + float(body_audio_duration)
         + float(cta_audio_duration)
     )
     padding_duration = float(padding) * (int(scene_count) + 1)
-    tempo = float(fixed_tempo)
-    adjusted_duration = audio_duration / tempo + padding_duration
-    maximum_duration = float(shorts_max_duration())
-    if adjusted_duration > maximum_duration:
-        raise RuntimeError(
-            f"음성 {tempo:.1f}배 적용 후 최종 길이 {adjusted_duration:.1f}초로 "
-            f"{maximum_duration:.0f}초 초과"
-        )
-    return tempo
+    if audio_duration + padding_duration >= 60.0:
+        return 1.0
+    required_tempo = audio_duration / (60.0 - padding_duration)
+    return max(float(minimum_tempo), required_tempo)
 
 
 def _retime_audio(source: Path, tempo: float, ffmpeg_path: str) -> None:
@@ -1239,9 +1234,9 @@ async def run_story_producer(
             cta_audio_duration,
             len(scene_durations),
         )
-        if audio_tempo != 1.0:
+        if audio_tempo < 1.0:
             safe_print(
-                f"  → 기존 영상 기준 피치 유지 속도 적용: {audio_tempo:.3f}배"
+                f"  → 기존 운영 방식의 피치 유지 미세 감속 적용: {audio_tempo:.3f}배"
             )
             _retime_audio(intro_narration, audio_tempo, ffmpeg_path)
             for scene_number, narration in narration_files.items():
