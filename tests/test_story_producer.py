@@ -756,6 +756,56 @@ def test_normalize_narration_targets_consistent_shortform_loudness(
     assert source.read_bytes() == b"normalized"
 
 
+def test_repeated_narration_duration_is_rejected_but_normal_duration_is_allowed():
+    text = "남극 얼음 아래 숨겨진 고대 바다의 지배자들"
+
+    assert story_producer._narration_duration_is_plausible(text, 4.8)
+    assert not story_producer._narration_duration_is_plausible(text, 7.6)
+
+
+def test_prepare_narration_falls_back_when_generated_audio_is_implausibly_long(
+    tmp_path, monkeypatch
+):
+    raw = tmp_path / "narration.mp3"
+    output = tmp_path / "narration.wav"
+    providers = []
+    durations = iter([7.6, 4.8])
+
+    def fake_synthesize(text, path, provider=None, ssml=None):
+        providers.append(provider)
+        path.write_bytes(b"audio")
+        return type(
+            "Result",
+            (),
+            {
+                "path": path,
+                "provider": provider or "gemini_tts",
+                "voice": "Kore",
+                "speaking_rate": 1.0,
+            },
+        )()
+
+    monkeypatch.setattr(story_producer, "synthesize", fake_synthesize)
+    monkeypatch.setattr(
+        story_producer,
+        "_trim_narration",
+        lambda source, target, ffmpeg: target.write_bytes(source.read_bytes()),
+    )
+    monkeypatch.setattr(story_producer, "_normalize_narration", lambda *args: None)
+    monkeypatch.setattr(story_producer, "_duration", lambda *args: next(durations))
+
+    result, duration = story_producer._prepare_narration(
+        "남극 얼음 아래 숨겨진 고대 바다의 지배자들",
+        raw,
+        output,
+        "ffmpeg",
+    )
+
+    assert providers == [None, "google"]
+    assert result.provider == "google"
+    assert duration == 4.8
+
+
 def test_story_timing_allows_natural_audio_over_target_under_short_limit():
     timing = story_producer.build_story_timing(4.0, 68.0, 4.0)
     assert timing["total_duration"] == 76.15

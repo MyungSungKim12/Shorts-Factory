@@ -396,6 +396,36 @@ def _normalize_narration(source: Path, ffmpeg_path: str) -> None:
         output.unlink(missing_ok=True)
 
 
+def _narration_duration_is_plausible(text: str, duration: float) -> bool:
+    """Reject likely Gemini repetitions before they can distort scene/subtitle timing."""
+    spoken_units = len(re.sub(r"[\s.,!?;:'\"…·()\[\]{}]", "", str(text)))
+    maximum = max(2.5, spoken_units * 0.25 + 1.0)
+    return 0 < float(duration) <= maximum
+
+
+def _prepare_narration(
+    text: str,
+    raw_output: Path,
+    wav_output: Path,
+    ffmpeg_path: str,
+    *,
+    ssml: str | None = None,
+):
+    """Create one exact narration; use deterministic Cloud TTS if Gemini repeats."""
+    for provider in (None, "google"):
+        result = synthesize(text, raw_output, provider=provider, ssml=ssml)
+        _trim_narration(raw_output, wav_output, ffmpeg_path)
+        _normalize_narration(wav_output, ffmpeg_path)
+        duration = _duration(wav_output, ffmpeg_path)
+        if _narration_duration_is_plausible(text, duration):
+            return result, duration
+        safe_print(
+            f"  ⚠️ 반복 발화 의심 음성 폐기: {duration:.2f}초, "
+            f"{result.provider} → Cloud TTS 재생성"
+        )
+    raise RuntimeError("반복 발화로 의심되는 비정상 길이의 음성이 재생성 후에도 남았습니다")
+
+
 def _scene_duration(
     planned_duration: float,
     audio_duration: float,
@@ -1159,27 +1189,29 @@ async def run_story_producer(
         intro_raw = tmp_path / "narration-intro-raw.mp3"
         intro_narration = tmp_path / "narration-intro.wav"
         intro_tts_text = _tts_text(spoken_intro)
-        intro_result = synthesize(
+        intro_result, intro_audio_duration = _prepare_narration(
             intro_tts_text,
             intro_raw,
+            intro_narration,
+            ffmpeg_path,
             ssml=_intro_pause_ssml(intro_tts_text),
         )
-        _trim_narration(intro_raw, intro_narration, ffmpeg_path)
-        _normalize_narration(intro_narration, ffmpeg_path)
         tts_results.append(intro_result)
-        intro_audio_duration = _duration(intro_narration, ffmpeg_path)
 
         safe_print("  → 설정된 여성 스토리 나레이션 생성 중...")
         for scene in script.get("scenes", []):
             narration_raw = tmp_path / f"narration-{scene['n']:02d}-raw.mp3"
             narration = tmp_path / f"narration-{scene['n']:02d}.wav"
-            result = synthesize(_tts_text(scene["narration"]), narration_raw)
-            _trim_narration(narration_raw, narration, ffmpeg_path)
-            _normalize_narration(narration, ffmpeg_path)
+            narration_text = _tts_text(scene["narration"])
+            result, audio_duration = _prepare_narration(
+                narration_text,
+                narration_raw,
+                narration,
+                ffmpeg_path,
+            )
             tts_results.append(result)
             scene_tts_results[scene["n"]] = result
             narration_files[scene["n"]] = narration
-            audio_duration = _duration(narration, ffmpeg_path)
             audio_durations[scene["n"]] = audio_duration
             scene_durations[scene["n"]] = _scene_duration(
                 float(scene["duration_sec"]), audio_duration
@@ -1193,11 +1225,13 @@ async def run_story_producer(
         if cta_plan["append"]:
             cta_raw = tmp_path / "narration-cta-raw.mp3"
             cta_narration = tmp_path / "narration-cta.wav"
-            cta_result = synthesize(_tts_text(cta_text), cta_raw)
-            _trim_narration(cta_raw, cta_narration, ffmpeg_path)
-            _normalize_narration(cta_narration, ffmpeg_path)
+            cta_result, cta_audio_duration = _prepare_narration(
+                _tts_text(cta_text),
+                cta_raw,
+                cta_narration,
+                ffmpeg_path,
+            )
             tts_results.append(cta_result)
-            cta_audio_duration = _duration(cta_narration, ffmpeg_path)
 
         audio_tempo = story_tempo_adjustment(
             intro_audio_duration,

@@ -26,7 +26,7 @@ def test_google_provider_uses_configured_defaults(tmp_path, monkeypatch):
     assert result.path.read_bytes() == b"mp3"
     assert seen == {
         "text": "안녕하세요.",
-        "voice": "ko-KR-Chirp3-HD-Leda",
+        "voice": "ko-KR-Chirp3-HD-Kore",
         "rate": 1.0,
         "pitch": 0.0,
     }

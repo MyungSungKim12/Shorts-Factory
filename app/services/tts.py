@@ -113,7 +113,7 @@ def synthesize(
     if selected not in {"auto", "google", "gtts"}:
         raise ValueError(f"지원하지 않는 TTS_PROVIDER: {selected}")
 
-    voice = os.getenv("TTS_VOICE", "ko-KR-Chirp3-HD-Leda")
+    voice = os.getenv("TTS_VOICE", "ko-KR-Chirp3-HD-Kore")
     rate = float(os.getenv("TTS_SPEAKING_RATE", "1.0"))
     pitch = float(os.getenv("TTS_PITCH", "0.0"))
     output_path = Path(output_path)
@@ -123,12 +123,16 @@ def synthesize(
         Path(os.getenv("DATA_DIR", "./data"))
     ):
         model = os.getenv("GEMINI_TTS_MODEL", "gemini-2.5-flash-tts").strip()
-        gemini_voice = os.getenv("GEMINI_TTS_VOICE", "Leda").strip()
+        gemini_voice = os.getenv("GEMINI_TTS_VOICE", "Kore").strip()
         style = os.getenv(
             "GEMINI_TTS_STYLE_PROMPT",
-            "젊고 자연스러운 한국인 여성 미스터리 다큐멘터리 진행자처럼 말한다. "
-            "기존 숏츠와 같은 보통 대화 속도를 유지하고 문장 경계에서만 짧게 쉬며, "
-            "과장된 광고 말투나 기계적인 억양은 사용하지 않는다.",
+            "차분하고 신뢰감 있는 성인 한국인 여성 뉴스 아나운서처럼 말한다. "
+            "미스터리 다큐멘터리에 맞는 단정한 발음과 보통 대화 속도를 유지하고, "
+            "문장 경계에서만 짧게 쉬며 과장된 광고 말투는 사용하지 않는다.",
+        )
+        style = (
+            f"{style.rstrip()} 입력된 텍스트만 정확히 한 번만 읽는다. "
+            "단어와 문장을 반복하거나 설명, 감탄사, 도입 및 마무리 문구를 추가하지 않는다."
         )
         reservation = reserve_cost(
             Path(os.getenv("DATA_DIR", "./data")),
