@@ -28,9 +28,9 @@
 | 회차 | 시간(KST) | 카테고리 |
 |------|-----------|----------|
 | 1 | 11:00 | 과학의 경계/미해결 관측 |
-| 4 | 14:00 | 숨겨진 세계/금지된 구조 |
-| 2 | 17:00 | 과학의 경계/미해결 관측 |
-| 3 | 21:00 | 숨겨진 세계/금지된 구조 |
+| 2 | 14:00 | 숨겨진 세계/금지된 구조 |
+| 3 | 17:00 | 과학의 경계/미해결 관측 |
+| 4 | 21:00 | 숨겨진 세계/금지된 구조 |
 
 - 기술적 상한은 하루 6회 (YouTube API 쿼터 10,000 ÷ 업로드당 1,600).
 - 운영 cron은 하루 4회이며 코드의 기술적 상한은 하루 6회다.
@@ -279,12 +279,12 @@ ssh -i "D:\ms\ssh-key-2026-07-10.key" ubuntu@168.107.15.146 "df -h / | tail -1; 
 30 6 * * * cd /home/ubuntu/shorts-factory-be && venv/bin/python -u scripts/warm_verified_cache.py >> data/cron.log 2>&1
 0 9 * * * cd /home/ubuntu/shorts-factory-be && venv/bin/python -u scripts/prepare_next_slot.py --slot 1 >> data/cron.log 2>&1
 0 11 * * * cd /home/ubuntu/shorts-factory-be && venv/bin/python -u scripts/run_scheduled.py 1 >> data/cron.log 2>&1
-0 12 * * * cd /home/ubuntu/shorts-factory-be && venv/bin/python -u scripts/prepare_next_slot.py --slot 4 >> data/cron.log 2>&1
-0 14 * * * cd /home/ubuntu/shorts-factory-be && venv/bin/python -u scripts/run_scheduled.py 4 >> data/cron.log 2>&1
-0 15 * * * cd /home/ubuntu/shorts-factory-be && venv/bin/python -u scripts/prepare_next_slot.py --slot 2 >> data/cron.log 2>&1
-0 17 * * * cd /home/ubuntu/shorts-factory-be && venv/bin/python -u scripts/run_scheduled.py 2 >> data/cron.log 2>&1
-0 19 * * * cd /home/ubuntu/shorts-factory-be && venv/bin/python -u scripts/prepare_next_slot.py --slot 3 >> data/cron.log 2>&1
-0 21 * * * cd /home/ubuntu/shorts-factory-be && venv/bin/python -u scripts/run_scheduled.py 3 >> data/cron.log 2>&1
+0 12 * * * cd /home/ubuntu/shorts-factory-be && venv/bin/python -u scripts/prepare_next_slot.py --slot 2 >> data/cron.log 2>&1
+0 14 * * * cd /home/ubuntu/shorts-factory-be && venv/bin/python -u scripts/run_scheduled.py 2 >> data/cron.log 2>&1
+0 15 * * * cd /home/ubuntu/shorts-factory-be && venv/bin/python -u scripts/prepare_next_slot.py --slot 3 >> data/cron.log 2>&1
+0 17 * * * cd /home/ubuntu/shorts-factory-be && venv/bin/python -u scripts/run_scheduled.py 3 >> data/cron.log 2>&1
+0 19 * * * cd /home/ubuntu/shorts-factory-be && venv/bin/python -u scripts/prepare_next_slot.py --slot 4 >> data/cron.log 2>&1
+0 21 * * * cd /home/ubuntu/shorts-factory-be && venv/bin/python -u scripts/run_scheduled.py 4 >> data/cron.log 2>&1
 ```
 
 - 06:30 워머는 슬롯별 활성 검증 캐시를 기본 10건까지 채운다. 30일이 지난 항목은 전체 기록에는 남아도 활성 개수에는 포함하지 않는다.

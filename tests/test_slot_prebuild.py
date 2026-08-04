@@ -23,9 +23,9 @@ def _token():
     ("hour", "expected_run_id", "expected_hour"),
     [
         (10, "20260721-1", 11),
-        (12, "20260721-4", 14),
-        (13, "20260721-4", 14),
-        (18, "20260721-3", 21),
+        (12, "20260721-2", 14),
+        (13, "20260721-2", 14),
+        (18, "20260721-4", 21),
         (22, "20260722-1", 11),
     ],
 )
@@ -46,7 +46,7 @@ def test_exact_slot_time_skips_the_running_slot() -> None:
         datetime(2026, 7, 21, 11, 0, tzinfo=KST)
     )
 
-    assert run_id == "20260721-4"
+    assert run_id == "20260721-2"
     assert scheduled_at.hour == 14
 
 
@@ -54,9 +54,9 @@ def test_exact_slot_time_skips_the_running_slot() -> None:
     ("hour", "slot", "run_id"),
     [
         (9, 1, "20260721-1"),
-        (12, 4, "20260721-4"),
-        (15, 2, "20260721-2"),
-        (19, 3, "20260721-3"),
+        (12, 2, "20260721-2"),
+        (15, 3, "20260721-3"),
+        (19, 4, "20260721-4"),
     ],
 )
 def test_prebuild_targets_explicit_same_day_slot(
@@ -186,9 +186,9 @@ def test_prepare_command_builds_in_staging_and_never_uploads(
         ("writer", "staging"),
         ("producer", "staging"),
     ]
-    assert result["run_id"] == "20260721-4"
+    assert result["run_id"] == "20260721-2"
     assert result["scheduled_at"].hour == 14
-    assert result["destination"] == tmp_path / "work" / "20260721-4"
+    assert result["destination"] == tmp_path / "work" / "20260721-2"
 
 
 def test_prepare_command_tags_the_failed_pipeline_stage(tmp_path: Path, monkeypatch) -> None:

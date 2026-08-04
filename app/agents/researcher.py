@@ -40,9 +40,9 @@ _HIDDEN_WORLD = {
 }
 SLOT_CATEGORIES = {
     1: dict(_SCIENCE_MYSTERY),
+    2: dict(_HIDDEN_WORLD),
+    3: dict(_SCIENCE_MYSTERY),
     4: dict(_HIDDEN_WORLD),
-    2: dict(_SCIENCE_MYSTERY),
-    3: dict(_HIDDEN_WORLD),
 }
 
 

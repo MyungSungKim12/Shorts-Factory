@@ -44,7 +44,7 @@ def test_캐시_회차_분리():
 def test_회차_카테고리_매핑():
     assert [
         SLOT_CATEGORIES[slot]["category"]
-        for slot in (1, 4, 2, 3)
+        for slot in (1, 2, 3, 4)
     ] == [
         "science_mystery",
         "hidden_world",
