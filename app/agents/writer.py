@@ -125,7 +125,9 @@ def build_verified_story_script(topic: dict) -> dict:
         suffix = suffixes[index % len(suffixes)]
         raw = " ".join(str(source_units[index % len(source_units)]).split())
         raw = re.sub(r"[.!?]+$", "", raw).strip()
-        available = max(8, 77 - len(prefix) - len(suffix))
+        # Separators add exactly five characters: `, ` + `. ` + `.`.
+        # Keep every fallback scene at 75 chars so nine scenes cannot exceed 675.
+        available = max(1, 75 - len(prefix) - len(suffix) - 5)
         excerpt = raw[:available].rstrip(" ,.;:!?")
         if len(raw) > available and " " in excerpt:
             excerpt = excerpt.rsplit(" ", 1)[0].rstrip(" ,.;:!?")

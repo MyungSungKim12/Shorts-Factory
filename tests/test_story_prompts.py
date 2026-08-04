@@ -218,6 +218,31 @@ def test_writer_uses_verified_template_after_two_invalid_responses(tmp_path, mon
     } <= allowed_visuals
 
 
+def test_verified_template_stays_in_contract_with_long_verified_facts():
+    topic = _topic()
+    topic.update({
+        "topic": "핀란드 지하 500미터, 십만 년 후까지 안전해야 할 인류의 마지막 유산",
+        "hook_angle": "지금 만든 경고가 십만 년 뒤 사람에게도 같은 뜻으로 전달될 수 있을까요",
+        "core_question": "인류는 어떻게 핵폐기물을 십만 년 동안 지하에서 안전하게 격리할 수 있을까요",
+    })
+    topic["facts"] = [
+        {
+            "claim": f"검증된 장기 보관 시설의 {index}번째 안전 설계 기록은 여러 방벽을 함께 사용한다고 설명한다",
+            "value": "공개 자료에는 금속 용기와 점토층과 안정적인 암반이 서로 다른 단계에서 물질의 이동을 막는다고 기록되어 있다",
+            "source": "공공 안전기관",
+            "source_url": f"https://example.com/safety/{index}",
+        }
+        for index in range(1, 7)
+    ]
+
+    script = writer.build_verified_story_script(topic)
+    lengths = [len(scene["narration"]) for scene in script["scenes"]]
+
+    assert max(lengths) <= 75
+    assert 560 <= sum(lengths) <= 680
+    assert writer.validate_script(script, "story")["format"] == "story"
+
+
 def test_ranking_writer_still_uses_existing_prompt(tmp_path, monkeypatch):
     run_id = "ranking"
     work_dir = tmp_path / "work" / run_id
