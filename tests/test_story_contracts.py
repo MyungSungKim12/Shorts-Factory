@@ -31,15 +31,18 @@ def story_topic(**overrides):
 
 
 def story_script(**overrides):
-    roles = ["hook", "context", "problem", "mechanism", "mechanism", "payoff", "payoff", "close"]
+    roles = [
+        "hook", "context", "problem", "mechanism", "mechanism",
+        "mechanism", "payoff", "payoff", "close",
+    ]
     scenes = [{
         "n": n,
         "role": roles[n - 1],
-        "narration": f"검증된 내용을 설명하는 {n}번째 문장입니다.",
+        "narration": "검증된 기록은 중요한 단서를 분명하게 보여줍니다, 이 수치가 뜻하는 범위와 아직 남은 의문을 차례대로 설명합니다.",
         "visuals": ["desert lake aerial", "desert water closeup"],
         "duration_sec": 8,
         "emphasis": ["호수"],
-    } for n in range(1, 9)]
+    } for n in range(1, 10)]
     data = {
         "format": "story",
         "title": "사막의 호수는 왜 마르지 않을까",
@@ -48,7 +51,7 @@ def story_script(**overrides):
         "hook": "비가 없는데 호수가 마르지 않습니다.",
         "scenes": scenes,
         "cta": "",
-        "total_duration_sec": 64,
+        "total_duration_sec": 72,
     }
     data.update(overrides)
     return data
@@ -70,33 +73,48 @@ def test_unknown_format_is_rejected():
 
 def test_story_contracts_accept_complete_documents():
     assert validate_topic(story_topic())["format"] == "story"
-    assert validate_script(story_script())["total_duration_sec"] == 64
+    assert validate_script(story_script())["total_duration_sec"] == 72
 
 
-def test_story_contract_rejects_scene_narration_over_55_characters():
+def test_story_contract_accepts_scene_narration_up_to_80_characters():
     data = story_script()
-    data["scenes"][0]["narration"] = "가" * 56
+    data["scenes"][0]["narration"] = "가" * 39 + "," + "나" * 39 + "."
 
-    with pytest.raises(ValueError, match="55"):
+    assert validate_script(data, "story")["scenes"][0]["narration"].endswith(".")
+
+
+def test_story_contract_rejects_scene_without_terminal_punctuation():
+    data = story_script()
+    data["scenes"][0]["narration"] = "문맥이 끝났지만 종결 부호가 없는 문장입니다"
+
+    with pytest.raises(ValueError, match="종결 문장부호"):
         validate_script(data, "story")
 
 
-def test_story_contract_rejects_total_body_narration_over_400_characters():
+def test_story_contract_rejects_long_clause_without_breathing_punctuation():
     data = story_script()
-    lengths = [50, 50, 50, 50, 50, 50, 50, 51]
-    for scene, length in zip(data["scenes"], lengths):
-        scene["narration"] = "가" * length
+    data["scenes"][0]["narration"] = "가" * 46 + "."
 
-    with pytest.raises(ValueError, match="400"):
+    with pytest.raises(ValueError, match="호흡 구간"):
         validate_script(data, "story")
 
 
-def test_story_contract_accepts_total_body_narration_at_400_characters():
+def test_story_contract_rejects_body_under_560_characters():
     data = story_script()
     for scene in data["scenes"]:
-        scene["narration"] = "가" * 50
+        scene["narration"] = "가" * 20 + "," + "나" * 20 + "."
 
-    assert validate_script(data, "story")["total_duration_sec"] == 64
+    with pytest.raises(ValueError, match="560~680"):
+        validate_script(data, "story")
+
+
+def test_story_contract_rejects_body_over_680_characters():
+    data = story_script()
+    for scene in data["scenes"]:
+        scene["narration"] = "가" * 38 + "," + "나" * 37 + "."
+
+    with pytest.raises(ValueError, match="560~680"):
+        validate_script(data, "story")
 
 
 @pytest.mark.parametrize(
@@ -134,26 +152,22 @@ def test_story_topic_derives_a_visual_identity_for_legacy_cached_documents():
 
 def test_story_contract_accepts_body_duration_reserved_for_cta():
     data = story_script()
-    durations = [8, 8, 8, 8, 8, 8, 9]
-    data["scenes"] = data["scenes"][:7]
+    durations = [8, 8, 8, 8, 8, 8, 8, 8, 8]
     for scene, duration in zip(data["scenes"], durations):
         scene["duration_sec"] = duration
-    data["scenes"][-1]["role"] = "close"
-    data["total_duration_sec"] = 57
+    data["total_duration_sec"] = 72
 
-    assert validate_script(data)["total_duration_sec"] == 57
+    assert validate_script(data)["total_duration_sec"] == 72
 
 
 def test_story_contract_accepts_shorter_body_reserved_for_spoken_intro():
     data = story_script()
-    durations = [7, 7, 7, 8, 8, 8, 8]
-    data["scenes"] = data["scenes"][:7]
+    durations = [8, 8, 8, 8, 8, 8, 8, 8, 8]
     for scene, duration in zip(data["scenes"], durations):
         scene["duration_sec"] = duration
-    data["scenes"][-1]["role"] = "close"
-    data["total_duration_sec"] = 53
+    data["total_duration_sec"] = 72
 
-    assert validate_script(data)["total_duration_sec"] == 53
+    assert validate_script(data)["total_duration_sec"] == 72
 
 
 def test_story_rejects_missing_source_url():

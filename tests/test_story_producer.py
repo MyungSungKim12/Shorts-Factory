@@ -678,32 +678,51 @@ def test_story_timing_places_spoken_title_before_body_and_cta():
     }
 
 
-def test_story_audio_uses_gentle_slowdown_only_when_needed_to_reach_60_seconds():
-    tempo = story_producer.story_tempo_adjustment(
-        intro_audio_duration=3.0,
-        body_audio_duration=45.0,
-        cta_audio_duration=3.0,
-        scene_count=7,
-        padding=0.15,
+def test_story_playback_tempo_defaults_to_1_2(monkeypatch):
+    monkeypatch.delenv("TTS_SPEED", raising=False)
+
+    assert story_producer.story_playback_tempo() == 1.2
+
+
+@pytest.mark.parametrize("value", ["invalid", "0.7", "1.6"])
+def test_story_playback_tempo_rejects_unsafe_values(monkeypatch, value):
+    monkeypatch.setenv("TTS_SPEED", value)
+
+    assert story_producer.story_playback_tempo() == 1.2
+
+
+def test_story_playback_tempo_accepts_configured_value(monkeypatch):
+    monkeypatch.setenv("TTS_SPEED", "1.25")
+
+    assert story_producer.story_playback_tempo() == 1.25
+
+
+def test_all_story_narrations_are_retimed_at_playback_speed(tmp_path, monkeypatch):
+    intro = tmp_path / "intro.wav"
+    scenes = {1: tmp_path / "scene-1.wav", 2: tmp_path / "scene-2.wav"}
+    cta = tmp_path / "cta.wav"
+    calls = []
+
+    monkeypatch.setattr(
+        story_producer,
+        "_retime_audio",
+        lambda source, tempo, ffmpeg: calls.append((source, tempo, ffmpeg)),
     )
 
-    assert tempo == pytest.approx(51.0 / 58.8)
+    story_producer._retime_story_narrations(
+        intro,
+        scenes,
+        cta,
+        1.2,
+        "ffmpeg",
+    )
 
-
-def test_audio_at_or_above_60_seconds_keeps_original_speed():
-    assert story_producer.story_tempo_adjustment(4.0, 53.0, 4.0, 7) == 1.0
-
-
-def test_long_audio_is_not_accelerated(monkeypatch):
-    monkeypatch.setenv("MAX_VIDEO_SEC", "90")
-
-    tempo = story_producer.story_tempo_adjustment(4.0, 84.0, 3.0, 7)
-
-    assert tempo == 1.0
-
-
-def test_very_short_audio_uses_bounded_slowdown_without_rejecting_the_video():
-    assert story_producer.story_tempo_adjustment(2.0, 25.0, 2.0, 7) == 0.8
+    assert calls == [
+        (intro, 1.2, "ffmpeg"),
+        (scenes[1], 1.2, "ffmpeg"),
+        (scenes[2], 1.2, "ffmpeg"),
+        (cta, 1.2, "ffmpeg"),
+    ]
 
 
 def test_retime_audio_uses_atempo_and_replaces_source(tmp_path, monkeypatch):

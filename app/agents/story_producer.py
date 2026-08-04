@@ -315,25 +315,13 @@ def build_story_timing(
     }
 
 
-def story_tempo_adjustment(
-    intro_audio_duration: float,
-    body_audio_duration: float,
-    cta_audio_duration: float,
-    scene_count: int,
-    padding: float = 0.15,
-    minimum_tempo: float = 0.80,
-) -> float:
-    """Keep the original narration pace, with only bounded slowdown near 60 seconds."""
-    audio_duration = (
-        float(intro_audio_duration)
-        + float(body_audio_duration)
-        + float(cta_audio_duration)
-    )
-    padding_duration = float(padding) * (int(scene_count) + 1)
-    if audio_duration + padding_duration >= 60.0:
-        return 1.0
-    required_tempo = audio_duration / (60.0 - padding_duration)
-    return max(float(minimum_tempo), required_tempo)
+def story_playback_tempo() -> float:
+    """Return the pitch-preserving story narration tempo from TTS_SPEED."""
+    try:
+        tempo = float(os.getenv("TTS_SPEED", "1.2"))
+    except ValueError:
+        return 1.2
+    return tempo if 0.8 <= tempo <= 1.5 else 1.2
 
 
 def _retime_audio(source: Path, tempo: float, ffmpeg_path: str) -> None:
@@ -357,6 +345,21 @@ def _retime_audio(source: Path, tempo: float, ffmpeg_path: str) -> None:
         output.replace(source)
     finally:
         output.unlink(missing_ok=True)
+
+
+def _retime_story_narrations(
+    intro: Path,
+    scenes: dict[int, Path],
+    cta: Path | None,
+    tempo: float,
+    ffmpeg_path: str,
+) -> None:
+    """Apply one playback tempo to the title, every body scene, and the CTA."""
+    _retime_audio(intro, tempo, ffmpeg_path)
+    for narration in scenes.values():
+        _retime_audio(narration, tempo, ffmpeg_path)
+    if cta is not None:
+        _retime_audio(cta, tempo, ffmpeg_path)
 
 
 def _narration_target_lufs() -> float:
@@ -1228,31 +1231,27 @@ async def run_story_producer(
             )
             tts_results.append(cta_result)
 
-        audio_tempo = story_tempo_adjustment(
-            intro_audio_duration,
-            sum(audio_durations.values()),
-            cta_audio_duration,
-            len(scene_durations),
+        audio_tempo = story_playback_tempo()
+        safe_print(f"  → 피치 유지 스토리 음성 속도 적용: {audio_tempo:.3f}배")
+        _retime_story_narrations(
+            intro_narration,
+            narration_files,
+            cta_narration,
+            audio_tempo,
+            ffmpeg_path,
         )
-        if audio_tempo < 1.0:
-            safe_print(
-                f"  → 기존 운영 방식의 피치 유지 미세 감속 적용: {audio_tempo:.3f}배"
+        intro_audio_duration = _duration(intro_narration, ffmpeg_path)
+        for scene_number, narration in narration_files.items():
+            audio_duration = _duration(narration, ffmpeg_path)
+            audio_durations[scene_number] = audio_duration
+            scene = next(
+                item for item in script["scenes"] if item["n"] == scene_number
             )
-            _retime_audio(intro_narration, audio_tempo, ffmpeg_path)
-            for scene_number, narration in narration_files.items():
-                _retime_audio(narration, audio_tempo, ffmpeg_path)
-                audio_duration = _duration(narration, ffmpeg_path)
-                audio_durations[scene_number] = audio_duration
-                scene = next(
-                    item for item in script["scenes"] if item["n"] == scene_number
-                )
-                scene_durations[scene_number] = _scene_duration(
-                    float(scene["duration_sec"]), audio_duration
-                )
-            if cta_narration is not None:
-                _retime_audio(cta_narration, audio_tempo, ffmpeg_path)
-                cta_audio_duration = _duration(cta_narration, ffmpeg_path)
-            intro_audio_duration = _duration(intro_narration, ffmpeg_path)
+            scene_durations[scene_number] = _scene_duration(
+                float(scene["duration_sec"]), audio_duration
+            )
+        if cta_narration is not None:
+            cta_audio_duration = _duration(cta_narration, ffmpeg_path)
 
         body_duration = sum(scene_durations.values())
         story_timing = build_story_timing(
