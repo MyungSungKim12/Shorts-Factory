@@ -1,7 +1,6 @@
 """대본 작가 에이전트 — script.json 생성."""
 import hashlib
 import json
-import re
 from pathlib import Path
 
 from app.content_format import get_content_format
@@ -51,8 +50,8 @@ def run_writer(
             prompt += (
                 "\n\n[RETRY_JSON_ONLY]\n"
                 "이전 응답은 JSON이 불완전하거나 스키마 검증에 실패했다. "
-                "설명과 코드펜스를 제외하고 같은 사실만 사용하되, 본문 560~680자와 "
-                "9~10개 씬 계약을 지킨 완결된 JSON 객체 하나만 출력하라."
+                "설명과 코드펜스를 제외하고 같은 사실만 사용해 더 짧고 완결된 "
+                "JSON 객체 하나만 출력하라."
             )
         script_text = call_agent(
             prompt=prompt,
@@ -98,42 +97,32 @@ def build_verified_story_script(topic: dict) -> dict:
         unique_visuals.append(unique_visuals[0])
 
     roles = [
-        "hook", "context", "problem", "mechanism", "mechanism",
-        "mechanism", "payoff", "payoff", "close",
+        "hook", "context", "problem", "mechanism",
+        "mechanism", "payoff", "close",
     ]
-    durations = [8.0] * 9
-    source_units = [
-        topic["hook_angle"],
-        topic["topic"],
-        topic["core_question"],
+    durations = [7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 8.0]
+
+    def sentence(value: str) -> str:
+        normalized = " ".join(str(value).split()).rstrip(" ,.;:!?")
+        if len(normalized) > 78:
+            shortened = normalized[:54]
+            if " " in shortened:
+                shortened = shortened.rsplit(" ", 1)[0]
+            normalized = shortened.rstrip(" ,.;:!?")
+            normalized = f"{normalized}, 관련 기록이 확인됐다"
+
+        return f"{normalized}."
+
+    narrations = [
+        sentence(topic["hook_angle"]),
+        sentence(topic["topic"]),
+        sentence(topic["core_question"]),
     ]
-    for fact in facts:
-        source_units.extend((fact["claim"], fact["value"]))
-    prefixes = (
-        "첫 기록이 던지는 단서는 이렇습니다",
-        "공개된 자료에서 먼저 확인할 내용입니다",
-        "질문의 답에 가까운 기록은 이것입니다",
-    )
-    suffixes = (
-        "추측은 빼고, 확인된 의미와 남은 의문을 분리해 보겠습니다",
-        "자료의 범위 안에서, 무엇을 알 수 있는지 차례로 보겠습니다",
-        "과장하지 않고, 기록이 말하는 범위까지만 따라가겠습니다",
-    )
-
-    def narration_for(index: int) -> str:
-        prefix = prefixes[index % len(prefixes)]
-        suffix = suffixes[index % len(suffixes)]
-        raw = " ".join(str(source_units[index % len(source_units)]).split())
-        raw = re.sub(r"[.!?]+$", "", raw).strip()
-        # Separators add exactly five characters: `, ` + `. ` + `.`.
-        # Keep every fallback scene at 75 chars so nine scenes cannot exceed 675.
-        available = max(1, 75 - len(prefix) - len(suffix) - 5)
-        excerpt = raw[:available].rstrip(" ,.;:!?")
-        if len(raw) > available and " " in excerpt:
-            excerpt = excerpt.rsplit(" ", 1)[0].rstrip(" ,.;:!?")
-        return f"{prefix}, {excerpt}. {suffix}."
-
-    narrations = [narration_for(index) for index in range(9)]
+    fact_units = [fact["claim"] for fact in facts]
+    if len(fact_units) < 4:
+        fact_units.extend(fact["value"] for fact in facts)
+    for index in range(4):
+        narrations.append(sentence(fact_units[index % len(fact_units)]))
 
     scenes = []
     for index, (role, duration, narration) in enumerate(
@@ -181,7 +170,7 @@ def _story_writer_prompt(topic: dict) -> str:
     pattern_seed = str(topic.get("topic") or topic.get("target_keyword") or "")
     pattern_hash = hashlib.sha256(pattern_seed.encode("utf-8")).hexdigest()
     narrative_pattern = narrative_patterns[int(pattern_hash[:8], 16) % len(narrative_patterns)]
-    return f"""당신은 한국어 유튜브 Shorts 스토리 작가다. 하나의 검증된 소재를 설명해 끝까지 보게 만든다. 완성 영상 목표는 65~80초이며 최종 영상은 절대 90초를 넘지 않는다.
+    return f"""당신은 한국어 유튜브 Shorts 스토리 작가다. 하나의 검증된 소재를 설명해 끝까지 보게 만든다. 완성 영상 목표는 70~80초이며 최종 영상은 절대 90초를 넘지 않는다.
 
 [소재]
 주제: {topic['topic']}
@@ -203,14 +192,13 @@ Preserve exact_queries as the hook and close subject anchor. Use safe_fallbacks 
 - 위 NARRATIVE_PATTERN의 순서를 이번 영상의 중심 구조로 사용하고, 제목과 첫 문장을 매번 같은 공식으로 반복하지 마라.
 
 [잔존 구조]
-- 9~10개 씬으로 작성하고 duration_sec 합계는 반드시 72~84초다. 제목과 CTA는 본문 밖에서 붙고, 전체 음성은 피치를 유지한 채 1.2배로 재생된다.
-- 각 narration은 공백 포함 80자 이하, 모든 씬 narration 합계는 공백 포함 560~680자다. 핵심 사실을 충분히 설명하되 같은 의미를 반복하지 않는다.
-- 분량은 검증 사실의 배경, 관측 방법, 수치의 의미, 불확실한 범위와 흔한 오해를 풀어서 채운다. 새로운 사실·수치·인과관계는 만들지 않는다.
+- 7~10개 씬으로 작성하고 duration_sec 합계는 반드시 53~58초다. 앞에 제목 음성 인트로, 뒤에 CTA가 붙으며 전체 음성은 피치를 유지한 채 1.2배로 재생된다.
+- 각 narration은 공백 포함 55자 이하, 모든 씬 narration 합계는 공백 포함 400자 이하다. 핵심 사실만 남기고 같은 의미를 반복하지 않는다.
 - 모든 narration은 마침표·물음표·느낌표 중 하나의 종결 문장부호로 끝나는 완결 문장이다.
 - 전환·대조·조건·원인과 결과의 경계에는 쉼표를 넣고, 문장부호 없이 여러 절을 이어 쓰지 않는다. 소리 내어 읽었을 때 한 호흡이 지나치게 길어지지 않게 한다.
 - 0~3초 hook: 인사, 채널명, 로고, 주제 소개 없이 결과나 모순부터 말한다.
 - 10초 안에 작은 답 하나를 주되 최종 원리는 남겨 둔다.
-- 12~15초, 25~30초, 45~50초, 60~70초 부근에 새 질문, 검증 수치, 시각 전환 중 하나를 둔다.
+- 12~15초, 25~30초, 45~50초 부근에 새 질문, 검증 수치, 시각 전환 중 하나를 둔다.
 - 흐름은 hook → context → problem → mechanism → payoff → close다.
 - 마지막 close는 첫 문장을 회수하되, close 본문에는 "구독"과 "좋아요"를 절대 넣지 마라. CTA는 별도 cta 필드에만 주제와 자연스럽게 연결된 한 문장으로 쓰고 반드시 "구독"과 "좋아요"를 모두 포함한다.
 - 검증된 사실 이외의 수치, 인과관계, 고유명사를 만들지 않는다.

@@ -40,7 +40,7 @@ def _script():
         "hook": "비가 없는데 호수가 마르지 않습니다.",
         "scenes": [{
             "n": n, "role": roles[n - 1],
-            "narration": "검증된 기록은 중요한 단서를 분명하게 보여줍니다, 이 수치가 뜻하는 범위와 아직 남은 의문을 차례대로 설명합니다.",
+            "narration": "검증된 기록이 중요한 단서를 보여줍니다.",
             "visuals": ["desert lake aerial", "desert water closeup"],
             "duration_sec": 8, "emphasis": ["호수"],
         } for n in range(1, 10)],
@@ -110,19 +110,19 @@ def test_research_prompt_requires_selected_domain_and_semantic_deduplication():
 
 def test_writer_prompt_contains_retention_beats():
     prompt = writer._story_writer_prompt(_topic())
-    assert "완성 영상 목표는 65~80초" in prompt
-    assert "560~680자" in prompt
-    assert "80자 이하" in prompt
-    assert "duration_sec 합계는 반드시 72~84초" in prompt
+    assert "완성 영상 목표는 70~80초" in prompt
+    assert "400자 이하다" in prompt
+    assert "55자 이하" in prompt
+    assert "duration_sec 합계는 반드시 53~58초" in prompt
     assert "구독" in prompt
     assert "좋아요" in prompt
-    assert "9~10개" in prompt
+    assert "7~10개" in prompt
     assert "문장부호 없이 여러 절을 이어 쓰지" in prompt
     assert "종결 문장부호" in prompt
     assert "12~15초" in prompt
     assert "25~30초" in prompt
     assert "45~50초" in prompt
-    assert "60~70초" in prompt
+    assert "60~70초" not in prompt
     assert '"visuals"' in prompt
     assert "인사" in prompt
     assert "exact:" in prompt
@@ -151,7 +151,7 @@ def test_writer_routes_story_format_and_saves_validated_json(tmp_path, monkeypat
     result = writer.run_writer(tmp_path, run_id, content_format="story")
 
     assert result["format"] == "story"
-    assert "65~80초" in captured["prompt"]
+    assert "70~80초" in captured["prompt"]
     assert json.loads((work_dir / "script.json").read_text(encoding="utf-8"))["format"] == "story"
 
 
@@ -177,8 +177,7 @@ def test_writer_regenerates_once_when_model_returns_incomplete_json(tmp_path, mo
     assert result["format"] == "story"
     assert len(prompts) == 2
     assert "RETRY_JSON_ONLY" in prompts[1]
-    assert "560~680자" in prompts[1]
-    assert "더 짧고" not in prompts[1]
+    assert "더 짧고 완결된" in prompts[1]
 
 
 def test_writer_uses_verified_template_after_two_invalid_responses(tmp_path, monkeypatch):
@@ -201,10 +200,10 @@ def test_writer_uses_verified_template_after_two_invalid_responses(tmp_path, mon
 
     assert len(calls) == 2
     assert result["writer_mode"] == "verified_template"
-    assert len(result["scenes"]) == 9
-    assert 72 <= result["total_duration_sec"] <= 84
+    assert len(result["scenes"]) == 7
+    assert 53 <= result["total_duration_sec"] <= 75
     narration = " ".join(scene["narration"] for scene in result["scenes"])
-    assert 560 <= sum(len(scene["narration"]) for scene in result["scenes"]) <= 680
+    assert sum(len(scene["narration"]) for scene in result["scenes"]) <= 400
     assert all(scene["narration"].endswith((".", "?", "!")) for scene in result["scenes"])
     assert topic["facts"][0]["claim"] in narration
     assert topic["facts"][0]["value"] in narration
@@ -238,9 +237,36 @@ def test_verified_template_stays_in_contract_with_long_verified_facts():
     script = writer.build_verified_story_script(topic)
     lengths = [len(scene["narration"]) for scene in script["scenes"]]
 
-    assert max(lengths) <= 75
-    assert 560 <= sum(lengths) <= 680
+    assert max(lengths) <= 55
+    assert sum(lengths) <= 400
     assert writer.validate_script(script, "story")["format"] == "story"
+
+
+def test_verified_template_does_not_repeat_process_boilerplate():
+    script = writer.build_verified_story_script(_topic())
+    narration = " ".join(scene["narration"] for scene in script["scenes"])
+
+    assert "확인할 내용입니다" not in narration
+    assert "차례로 보겠습니다" not in narration
+    assert "따라가겠습니다" not in narration
+    assert "의문을 분리해 보겠습니다" not in narration
+
+
+def test_verified_template_preserves_numeric_grouping_commas():
+    topic = _topic()
+    topic["facts"] = [{
+        "claim": "이 지역에는 연간 1,200mm에서 2,000mm에 달하는 비가 내린다",
+        "value": "연간 1,200mm에서 2,000mm",
+        "source": "공공 기상기관",
+        "source_url": "https://example.com/weather",
+    }]
+
+    narration = " ".join(
+        scene["narration"] for scene in writer.build_verified_story_script(topic)["scenes"]
+    )
+
+    assert "1,200mm" in narration
+    assert "2,000mm" in narration
 
 
 def test_ranking_writer_still_uses_existing_prompt(tmp_path, monkeypatch):

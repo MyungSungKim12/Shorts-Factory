@@ -214,13 +214,6 @@ class StoryScene(BaseModel):
             raise ValueError("씬 narration은 공백 포함 80자 이하여야 함")
         if not re.search(r"[.!?]$", normalized):
             raise ValueError("씬 narration은 종결 문장부호로 끝나야 함")
-        breathing_segments = [
-            segment.strip()
-            for segment in re.split(r"[,.;:!?]", normalized)
-            if segment.strip()
-        ]
-        if any(len(segment) > 45 for segment in breathing_segments):
-            raise ValueError("문장부호 사이 호흡 구간은 45자 이하여야 함")
         return normalized
 
     @field_validator("visuals")
@@ -233,15 +226,15 @@ class StoryScene(BaseModel):
 
 
 class StoryScriptContract(BaseModel):
-    """1.2배 음성에서도 정보량을 유지하는 72~84초 계획 본문 계약."""
+    """자연스럽고 간결한 53~75초 스토리 본문 계약."""
     format: Literal["story"] = "story"
     title: str = Field(min_length=5, max_length=100)
     description: str = ""
     tags: list[str] = Field(default_factory=list)
     hook: str = Field(min_length=5)
-    scenes: list[StoryScene] = Field(min_length=9, max_length=10)
+    scenes: list[StoryScene] = Field(min_length=7, max_length=10)
     cta: str = ""
-    total_duration_sec: float = Field(ge=72, le=84)
+    total_duration_sec: float = Field(ge=53, le=75)
 
     @field_validator("title", mode="before")
     @classmethod
@@ -259,13 +252,13 @@ class StoryScriptContract(BaseModel):
         if self.scenes[-1].role != "close":
             raise ValueError("마지막 씬 role은 close여야 함")
         narration_chars = sum(len(scene.narration) for scene in self.scenes)
-        if not 560 <= narration_chars <= 680:
+        if narration_chars > 400:
             raise ValueError(
-                f"본문 narration 합계 {narration_chars}자 — 560~680자 범위 벗어남"
+                f"본문 narration 합계 {narration_chars}자 — 400자 상한 초과"
             )
         total = round(sum(scene.duration_sec for scene in self.scenes), 1)
-        if not 72 <= total <= 84:
-            raise ValueError(f"씬 duration 합계 {total:.1f}초 — story 본문 목표(72~84초) 벗어남")
+        if not 53 <= total <= 75:
+            raise ValueError(f"씬 duration 합계 {total:.1f}초 — story 본문 목표(53~75초) 벗어남")
         self.total_duration_sec = total
         return self
 

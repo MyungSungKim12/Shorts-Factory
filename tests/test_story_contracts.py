@@ -38,7 +38,7 @@ def story_script(**overrides):
     scenes = [{
         "n": n,
         "role": roles[n - 1],
-        "narration": "검증된 기록은 중요한 단서를 분명하게 보여줍니다, 이 수치가 뜻하는 범위와 아직 남은 의문을 차례대로 설명합니다.",
+        "narration": "검증된 기록이 중요한 단서를 보여줍니다.",
         "visuals": ["desert lake aerial", "desert water closeup"],
         "duration_sec": 8,
         "emphasis": ["호수"],
@@ -91,29 +91,27 @@ def test_story_contract_rejects_scene_without_terminal_punctuation():
         validate_script(data, "story")
 
 
-def test_story_contract_rejects_long_clause_without_breathing_punctuation():
+def test_story_contract_accepts_one_complete_clause_within_scene_limit():
     data = story_script()
     data["scenes"][0]["narration"] = "가" * 46 + "."
 
-    with pytest.raises(ValueError, match="호흡 구간"):
-        validate_script(data, "story")
+    assert validate_script(data, "story")["scenes"][0]["narration"].endswith(".")
 
 
-def test_story_contract_rejects_body_under_560_characters():
+def test_story_contract_accepts_concise_body():
     data = story_script()
     for scene in data["scenes"]:
         scene["narration"] = "가" * 20 + "," + "나" * 20 + "."
 
-    with pytest.raises(ValueError, match="560~680"):
-        validate_script(data, "story")
+    assert validate_script(data, "story")["format"] == "story"
 
 
-def test_story_contract_rejects_body_over_680_characters():
+def test_story_contract_rejects_body_over_400_characters():
     data = story_script()
     for scene in data["scenes"]:
         scene["narration"] = "가" * 38 + "," + "나" * 37 + "."
 
-    with pytest.raises(ValueError, match="560~680"):
+    with pytest.raises(ValueError, match="400자 상한"):
         validate_script(data, "story")
 
 
