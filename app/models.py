@@ -198,6 +198,12 @@ class StoryTopicContract(BaseModel):
         return self.verification_method in UPLOADABLE_VERIFICATION
 
 
+class ManualStoryTopicContract(StoryTopicContract):
+    """수동 요청용 스토리 계약 — 실제 채널 밖 분류명을 그대로 보존한다."""
+
+    category: str = Field(min_length=2, max_length=50, pattern=r"^[a-z0-9_]+$")
+
+
 class StoryScene(BaseModel):
     n: int = Field(ge=1)
     role: Literal["hook", "context", "problem", "mechanism", "payoff", "close"]
@@ -272,6 +278,13 @@ def validate_topic(data: dict, content_format: str | None = None) -> dict:
         from app.services.visual_relevance import ensure_visual_identity
         return ensure_visual_identity(result)
     return result
+
+
+def validate_manual_story_topic(data: dict) -> dict:
+    """Validate a manual story without weakening automatic category constraints."""
+    result = ManualStoryTopicContract.model_validate(data).model_dump()
+    from app.services.visual_relevance import ensure_visual_identity
+    return ensure_visual_identity(result)
 
 
 def validate_script(data: dict, content_format: str | None = None) -> dict:

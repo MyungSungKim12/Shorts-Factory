@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 from app.agents.researcher import _load_recent_topics, requested_topic_contract_prompt
-from app.models import validate_topic
+from app.models import validate_manual_story_topic
 from app.services.ai_opening_library import AiOpeningLibrary
 from app.services.claude_client import call_agent
 from app.services.credit_guard import paid_features_enabled
@@ -123,21 +124,38 @@ def _preflight_data_dir(topic: dict) -> Path:
     return Path(value)
 
 
-def _subject_key(topic: dict) -> str:
+def _subject_keys(topic: dict) -> list[str]:
     identity = topic.get("visual_identity") or {}
+    subjects = []
+    seen = set()
     for query in identity.get("exact_queries") or []:
         subject = str(query or "").removeprefix("exact:").strip()
+        key = subject.casefold()
+        if subject and key not in seen:
+            subjects.append(subject)
+            seen.add(key)
+    if not subjects:
+        subject = str(topic.get("target_keyword") or topic.get("topic") or "").strip()
         if subject:
-            return subject
-    return str(topic.get("target_keyword") or topic.get("topic") or "").strip()
+            subjects.append(subject)
+    return subjects
 
 
 def find_reusable_ai_opening(topic: dict):
-    """Return one existing exact-subject AI asset, without generating anything."""
-    subject = _subject_key(topic)
-    if not subject:
-        return None
-    return AiOpeningLibrary(_preflight_data_dir(topic)).find_reusable_asset(subject)
+    """Return deduplicated reusable assets found across every exact subject."""
+    subjects = _subject_keys(topic)
+    if not subjects:
+        return []
+    library = AiOpeningLibrary(_preflight_data_dir(topic))
+    result = []
+    seen = set()
+    for subject in subjects:
+        asset = library.find_reusable_asset(subject)
+        asset_id = str(getattr(asset, "asset_id", "") or "")
+        if asset is not None and asset_id and asset_id not in seen:
+            result.append(asset)
+            seen.add(asset_id)
+    return result
 
 
 def new_ai_opening_permitted(topic: dict) -> bool:
@@ -161,7 +179,10 @@ def assess_visual_feasibility(topic: dict) -> dict:
     new_ai = bool(new_ai_opening_permitted(topic))
     exact_count = len(exact)
     stock_count = len(stock)
-    reusable_count = int(reusable is not None)
+    if isinstance(reusable, (list, tuple, set)):
+        reusable_count = len(reusable)
+    else:
+        reusable_count = int(reusable is not None)
     if exact_count:
         level = "high"
     elif stock_count or reusable_count or new_ai:
@@ -204,6 +225,78 @@ def _source_summary(topic: dict) -> list[dict[str, str]]:
     return result
 
 
+def _safety_result(raw: dict) -> dict | None:
+    safety = raw.get("safety")
+    if not isinstance(safety, dict) or not isinstance(safety.get("allowed"), bool):
+        return None
+    reason = " ".join(str(safety.get("reason") or "").split())[:300]
+    if not reason:
+        return None
+    return {"allowed": safety["allowed"], "reason": reason}
+
+
+def _grounding_error(topic: object) -> str | None:
+    if not isinstance(topic, dict):
+        return "topic"
+    if topic.get("verification_method") != "grounded_search":
+        return "verification_method"
+    verified_at = topic.get("verified_at")
+    if not isinstance(verified_at, str):
+        return "verified_at"
+    try:
+        timestamp = datetime.fromisoformat(verified_at.replace("Z", "+00:00"))
+    except ValueError:
+        return "verified_at"
+    if timestamp.tzinfo is None:
+        return "verified_at"
+    facts = topic.get("facts")
+    if not isinstance(facts, list) or len(facts) < 2:
+        return "distinct_sources"
+    distinct_sources = set()
+    for fact in facts:
+        if not isinstance(fact, dict):
+            return "fact_source_linkage"
+        if not all(str(fact.get(key) or "").strip() for key in ("claim", "value", "source")):
+            return "fact_source_linkage"
+        source_url = str(fact.get("source_url") or "").strip()
+        parsed = urlparse(source_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            return "fact_source_linkage"
+        distinct_sources.add(parsed.hostname.casefold().removeprefix("www."))
+    if len(distinct_sources) < 2:
+        return "distinct_sources"
+    return None
+
+
+def _failed_result(
+    data_dir: Path,
+    run_id: str,
+    reason: str,
+    *,
+    safety: dict,
+    grounding_error: str | None = None,
+) -> dict:
+    result = {
+        "status": "failed",
+        "reservable": False,
+        "reason": reason,
+        "safety": safety,
+    }
+    metadata = {"status": "failed", "reason": reason}
+    if grounding_error:
+        result["grounding_error"] = grounding_error
+        metadata["grounding_error"] = grounding_error
+    append_slot_event(
+        data_dir,
+        run_id,
+        "topic_check",
+        "warning",
+        "소재 안전성 또는 사실 검증 조건을 충족하지 못했습니다",
+        metadata,
+    )
+    return result
+
+
 def check_requested_topic(
     data_dir: Path,
     run_id: str,
@@ -235,20 +328,51 @@ def check_requested_topic(
         )
         return {"status": "needs_input", "interpretations": choices}
 
-    grounded_topic = dict(raw.get("topic") or {})
-    grounded_topic["verification_method"] = "grounded_search"
-    grounded_topic["verified_at"] = datetime.now(timezone.utc).isoformat()
-    topic = validate_topic(grounded_topic, "story")
+    safety = _safety_result(raw)
+    if safety is None:
+        return _failed_result(
+            data_dir,
+            run_id,
+            "safety_invalid",
+            safety={"allowed": False, "reason": "missing_or_invalid"},
+        )
+    if not safety["allowed"]:
+        return _failed_result(
+            data_dir, run_id, "safety_rejected", safety=safety
+        )
+
+    grounded_topic = raw.get("topic")
+    grounding_error = _grounding_error(grounded_topic)
+    if grounding_error:
+        return _failed_result(
+            data_dir,
+            run_id,
+            "grounding_invalid",
+            safety=safety,
+            grounding_error=grounding_error,
+        )
+    try:
+        topic = validate_manual_story_topic(grounded_topic)
+    except ValueError:
+        return _failed_result(
+            data_dir,
+            run_id,
+            "grounding_invalid",
+            safety=safety,
+            grounding_error="topic_contract",
+        )
     visual = assess_visual_feasibility({**topic, "_data_dir": str(data_dir)})
     channel_fit = raw.get("channel_fit") is not False
     reservable = bool(visual.get("reservable"))
     result = {
         "status": "reservable" if reservable else "needs_input",
+        "reservable": reservable,
         "normalized_topic": topic["topic"],
         "core_question": topic["core_question"],
         "channel_fit": channel_fit,
         "channel_warning": not channel_fit,
         "verification_method": topic["verification_method"],
+        "safety": safety,
         "sources": _source_summary(topic),
         "visual": visual,
         "topic_payload": topic,

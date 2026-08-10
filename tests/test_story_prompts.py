@@ -74,6 +74,10 @@ def test_requested_topic_contract_prompt_preserves_story_schema_and_grounding():
     assert '"visual_identity"' in prompt
     assert '"source_url"' in prompt
     assert '"verification_method": "grounded_search"' in prompt
+    assert '"safety"' in prompt
+    assert '"allowed"' in prompt
+    assert prompt.count('"source_url"') >= 2
+    assert "채널 밖 실제 분류명" in prompt
 
 
 def test_recent_topics_include_both_uploaded_title_and_original_topic(tmp_path):

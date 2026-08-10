@@ -31,6 +31,12 @@ def _story_topic(*, category: str = "science_mystery") -> dict:
                 "claim": "오하이오 주립대 전파망원경이 신호를 기록했다",
                 "value": "1977년 8월 15일 약 72초 동안 관측됐다",
                 "source": "Ohio State University",
+                "source_url": "https://osu.edu/wow-signal",
+            },
+            {
+                "claim": "신호는 수소선 주파수 부근에서 기록됐다",
+                "value": "천문학적 전파 관측 후보로 분석됐다",
+                "source": "SETI Institute",
                 "source_url": "https://www.seti.org/wow-signal",
             }
         ],
@@ -45,6 +51,8 @@ def _story_topic(*, category: str = "science_mystery") -> dict:
             "safe_fallbacks": ["radio telescope night", "radio signal chart"],
             "required_exact": True,
         },
+        "verification_method": "grounded_search",
+        "verified_at": "2026-08-10T01:23:45+00:00",
     }
 
 
@@ -116,6 +124,7 @@ def test_off_channel_topic_is_reservable_with_warning_when_other_checks_pass(
     response = {
         "needs_clarification": False,
         "channel_fit": False,
+        "safety": {"allowed": True, "reason": "일반 역사·기술 설명"},
         "topic": _story_topic(category="history_mystery"),
     }
     monkeypatch.setattr(
@@ -142,6 +151,7 @@ def test_visual_insufficiency_prevents_reservation(tmp_path, monkeypatch):
     response = {
         "needs_clarification": False,
         "channel_fit": True,
+        "safety": {"allowed": True, "reason": "일반 과학 설명"},
         "topic": _story_topic(),
     }
     monkeypatch.setattr(
@@ -191,6 +201,160 @@ def test_requested_topic_prompt_includes_constraints_references_and_recent_topic
     assert "최소 2개의 서로 다른" in prompt
     assert "grounded_search" in prompt
     assert "verification_method" in prompt
+    assert '"safety"' in prompt
+    assert '"allowed"' in prompt
+
+
+def test_true_economy_topic_keeps_its_category_and_is_reservable_with_warning(
+    tmp_path, monkeypatch
+):
+    topic = _story_topic(category="economy")
+    response = {
+        "needs_clarification": False,
+        "channel_fit": False,
+        "safety": {"allowed": True, "reason": "합법적인 경제사 설명"},
+        "topic": topic,
+    }
+    monkeypatch.setattr(
+        manual_topic, "assess_visual_feasibility", lambda _: _reservable_visual()
+    )
+
+    result = check_requested_topic(
+        tmp_path,
+        "20260810-2",
+        ManualTopicInput(topic_input="단종된 게임기의 중고 가격 경제"),
+        call_agent_fn=_agent_returning(response),
+    )
+
+    assert result["status"] == "reservable"
+    assert result["channel_warning"] is True
+    assert result["topic_payload"]["category"] == "economy"
+
+
+@pytest.mark.parametrize(
+    ("safety", "reason"),
+    [
+        ({"allowed": False, "reason": "불법 행위를 구체적으로 조장함"}, "safety_rejected"),
+        (None, "safety_invalid"),
+    ],
+)
+def test_unsafe_or_missing_safety_is_non_reservable_before_visual_search(
+    tmp_path, monkeypatch, safety, reason
+):
+    response = {
+        "needs_clarification": False,
+        "channel_fit": True,
+        "topic": _story_topic(),
+    }
+    if safety is not None:
+        response["safety"] = safety
+    monkeypatch.setattr(
+        manual_topic,
+        "assess_visual_feasibility",
+        lambda _: pytest.fail("unsafe topic reached visual preflight"),
+    )
+
+    result = check_requested_topic(
+        tmp_path,
+        "20260810-3",
+        ManualTopicInput(topic_input="위험한 요청"),
+        call_agent_fn=_agent_returning(response),
+    )
+
+    assert result["status"] == "failed"
+    assert result["reservable"] is False
+    assert result["reason"] == reason
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected_reason"),
+    [
+        (lambda topic: topic.pop("verification_method"), "verification_method"),
+        (lambda topic: topic.update(verification_method="model_memory"), "verification_method"),
+        (lambda topic: topic.update(verified_at="검색 완료 시각"), "verified_at"),
+        (lambda topic: topic.update(facts=topic["facts"][:1]), "distinct_sources"),
+    ],
+)
+def test_invalid_grounding_evidence_is_failed_not_fabricated(
+    tmp_path, monkeypatch, mutate, expected_reason
+):
+    topic = _story_topic()
+    mutate(topic)
+    response = {
+        "needs_clarification": False,
+        "channel_fit": True,
+        "safety": {"allowed": True, "reason": "일반 과학 설명"},
+        "topic": topic,
+    }
+    monkeypatch.setattr(
+        manual_topic,
+        "assess_visual_feasibility",
+        lambda _: pytest.fail("invalid grounding reached visual preflight"),
+    )
+
+    result = check_requested_topic(
+        tmp_path,
+        "20260810-4",
+        ManualTopicInput(topic_input="와우 신호"),
+        call_agent_fn=_agent_returning(response),
+    )
+
+    assert result["status"] == "failed"
+    assert result["reservable"] is False
+    assert result["reason"] == "grounding_invalid"
+    assert result["grounding_error"] == expected_reason
+
+
+def test_grounded_timestamp_is_preserved_instead_of_replaced(tmp_path, monkeypatch):
+    response = {
+        "needs_clarification": False,
+        "channel_fit": True,
+        "safety": {"allowed": True, "reason": "일반 과학 설명"},
+        "topic": _story_topic(),
+    }
+    monkeypatch.setattr(
+        manual_topic, "assess_visual_feasibility", lambda _: _reservable_visual()
+    )
+
+    result = check_requested_topic(
+        tmp_path,
+        "20260810-1",
+        ManualTopicInput(topic_input="와우 신호"),
+        call_agent_fn=_agent_returning(response),
+    )
+
+    assert result["topic_payload"]["verified_at"] == "2026-08-10T01:23:45+00:00"
+
+
+def test_reusable_ai_search_checks_all_exact_subjects_and_deduplicates(
+    tmp_path, monkeypatch
+):
+    first = type("Asset", (), {"asset_id": "asset-first"})()
+    later = type("Asset", (), {"asset_id": "asset-later"})()
+
+    class FakeLibrary:
+        def __init__(self, data_dir):
+            assert data_dir == tmp_path
+
+        def find_reusable_asset(self, subject):
+            return {
+                "Wow signal": None,
+                "Big Ear radio telescope": later,
+                "Ohio radio observatory": later,
+            }.get(subject, first)
+
+    topic = _story_topic()
+    topic["visual_identity"]["exact_queries"] = [
+        "exact:Wow signal",
+        "exact:Big Ear radio telescope",
+        "exact:Ohio radio observatory",
+    ]
+    topic["_data_dir"] = str(tmp_path)
+    monkeypatch.setattr(manual_topic, "AiOpeningLibrary", FakeLibrary)
+
+    assets = manual_topic.find_reusable_ai_opening(topic)
+
+    assert [asset.asset_id for asset in assets] == ["asset-later"]
 
 
 def _candidate(provider: str, media_id: str, keyword: str) -> MediaCandidate:

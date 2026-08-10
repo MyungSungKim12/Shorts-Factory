@@ -2,7 +2,7 @@
 import pytest
 
 from app.content_format import get_content_format
-from app.models import validate_script, validate_topic
+from app.models import validate_manual_story_topic, validate_script, validate_topic
 
 
 def story_topic(**overrides):
@@ -139,6 +139,15 @@ def test_story_contract_accepts_mystery_channel_categories(category):
 def test_story_contract_rejects_removed_animal_category():
     with pytest.raises(ValueError):
         validate_topic(story_topic(category="animal_survival"))
+
+
+def test_automatic_story_contract_still_rejects_off_channel_economy_category():
+    with pytest.raises(ValueError):
+        validate_topic(story_topic(category="economy"), "story")
+
+
+def test_manual_story_contract_preserves_off_channel_economy_category():
+    assert validate_manual_story_topic(story_topic(category="economy"))["category"] == "economy"
 
 
 def test_story_topic_derives_a_visual_identity_for_legacy_cached_documents():
