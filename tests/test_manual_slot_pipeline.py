@@ -27,6 +27,14 @@ KST = ZoneInfo("Asia/Seoul")
 RUN_ID = "20260810-1"
 
 
+def _save_current_check(data_dir, run_id, result, now):
+    with sqlite3.connect(Path(data_dir) / "videos.sqlite") as db:
+        revision = db.execute(
+            "SELECT check_revision FROM slot_reservations WHERE run_id = ?", (run_id,)
+        ).fetchone()[0]
+    return save_check_result(data_dir, run_id, result, now, revision=revision)
+
+
 def kst(hour: int, minute: int = 0) -> datetime:
     return datetime(2026, 8, 10, hour, minute, tzinfo=KST)
 
@@ -49,7 +57,7 @@ def reserve_manual_slot(data_dir: Path, run_id: str = RUN_ID) -> None:
         "visual": {"level": "high", "reservable": True},
     }
     create_check(data_dir, run_id, {"topic_input": "검증된 수동 소재"}, kst(8, 40))
-    save_check_result(data_dir, run_id, result, kst(8, 41))
+    _save_current_check(data_dir, run_id, result, kst(8, 41))
     reserve_checked_topic(data_dir, run_id, kst(8, 42))
 
 
@@ -457,7 +465,7 @@ def test_archive_failure_reports_paths_and_next_target_check_reconciles(
     create_check(
         tmp_path, RUN_ID, {"topic_input": "검증된 수동 소재"}, kst(8, 50)
     )
-    save_check_result(
+    _save_current_check(
         tmp_path,
         RUN_ID,
         {

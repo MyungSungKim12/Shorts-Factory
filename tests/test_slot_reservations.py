@@ -3,6 +3,7 @@ import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 from pathlib import Path
+from threading import Event
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -27,6 +28,14 @@ from app.services import slot_reservations
 KST = ZoneInfo("Asia/Seoul")
 
 
+def _save_current_check(data_dir, run_id, result, now):
+    with sqlite3.connect(Path(data_dir) / "videos.sqlite") as db:
+        revision = db.execute(
+            "SELECT check_revision FROM slot_reservations WHERE run_id = ?", (run_id,)
+        ).fetchone()[0]
+    return save_check_result(data_dir, run_id, result, now, revision=revision)
+
+
 def kst(hour: int, minute: int = 0) -> datetime:
     return datetime(2026, 8, 10, hour, minute, tzinfo=KST)
 
@@ -42,7 +51,7 @@ def checked_result() -> dict:
 
 def seed_reserved(data_dir: Path, run_id: str = "20260810-1") -> None:
     create_check(data_dir, run_id, {"topic_input": "검증된 수동 소재"}, kst(8, 40))
-    save_check_result(data_dir, run_id, checked_result(), kst(8, 41))
+    _save_current_check(data_dir, run_id, checked_result(), kst(8, 41))
     reserve_checked_topic(data_dir, run_id, kst(8, 42))
 
 
@@ -55,7 +64,7 @@ def test_slot_one_window_uses_kst_cutoff_and_upload_time() -> None:
 
 def test_reservation_is_rejected_at_production_cutoff(tmp_path: Path) -> None:
     create_check(tmp_path, "20260810-1", {"topic_input": "세종"}, kst(8, 50))
-    save_check_result(tmp_path, "20260810-1", checked_result(), kst(8, 51))
+    _save_current_check(tmp_path, "20260810-1", checked_result(), kst(8, 51))
 
     with pytest.raises(SlotConflict, match="입력 시간이 종료되었습니다"):
         reserve_checked_topic(tmp_path, "20260810-1", kst(9, 0))
@@ -83,7 +92,7 @@ def test_check_result_persists_manual_request_and_normalized_topic(tmp_path: Pat
         },
         kst(10),
     )
-    saved = save_check_result(tmp_path, "20260810-2", checked_result(), kst(10, 1))
+    saved = _save_current_check(tmp_path, "20260810-2", checked_result(), kst(10, 1))
 
     assert created["mode"] == "manual"
     assert created["state"] == "checking"
@@ -95,7 +104,7 @@ def test_check_result_persists_manual_request_and_normalized_topic(tmp_path: Pat
 
 def test_needs_input_can_start_a_clarified_check(tmp_path: Path) -> None:
     create_check(tmp_path, "20260810-2", {"topic_input": "세종"}, kst(10))
-    save_check_result(
+    _save_current_check(
         tmp_path,
         "20260810-2",
         {"status": "needs_input", "normalized_topic": "세종대왕 또는 세종시"},
@@ -116,7 +125,7 @@ def test_needs_input_can_start_a_clarified_check(tmp_path: Path) -> None:
 
 def test_needs_input_is_rechecked_only_by_the_dedicated_operation(tmp_path: Path) -> None:
     create_check(tmp_path, "20260810-2", {"topic_input": "세종"}, kst(10))
-    save_check_result(tmp_path, "20260810-2", {"status": "needs_input"}, kst(10, 1))
+    _save_current_check(tmp_path, "20260810-2", {"status": "needs_input"}, kst(10, 1))
 
     assert "needs_input" not in ALLOWED_TRANSITIONS
     with pytest.raises(SlotConflict, match="not allowed"):
@@ -378,3 +387,49 @@ def test_init_slot_tables_is_idempotent(tmp_path: Path) -> None:
             )
         }
     assert {"slot_reservations", "slot_events"} <= names
+
+
+def test_stale_check_result_cannot_overwrite_cancelled_and_recreated_check(
+    tmp_path: Path,
+) -> None:
+    first = create_check(
+        tmp_path, "20260810-2", {"topic_input": "first topic"}, kst(10)
+    )
+    release_old_worker = Event()
+    with ThreadPoolExecutor(max_workers=1) as workers:
+        old_save = workers.submit(
+            lambda: (
+                release_old_worker.wait(),
+                save_check_result(
+                    tmp_path,
+                    "20260810-2",
+                    {"status": "reservable", "normalized_topic": "stale"},
+                    kst(10, 3),
+                    revision=first["check_revision"],
+                ),
+            )[-1]
+        )
+        slot_reservations.cancel_manual_reservation(
+            tmp_path, "20260810-2", kst(10, 1)
+        )
+        second = create_check(
+            tmp_path,
+            "20260810-2",
+            {"topic_input": "replacement topic"},
+            kst(10, 2),
+        )
+        release_old_worker.set()
+
+        assert first["check_revision"] != second["check_revision"]
+        with pytest.raises(SlotConflict, match="revision"):
+            old_save.result()
+
+    saved = save_check_result(
+        tmp_path,
+        "20260810-2",
+        {"status": "needs_input", "interpretations": ["new"]},
+        kst(10, 4),
+        revision=second["check_revision"],
+    )
+    assert saved["state"] == "needs_input"
+    assert saved["check_result"]["interpretations"] == ["new"]

@@ -457,3 +457,29 @@ def test_visual_preflight_is_insufficient_only_when_every_relevant_path_is_unava
         "reusable_ai_available": False,
         "new_ai_allowed": False,
     }
+
+
+@pytest.mark.parametrize("channel_fit", [None, "true", "false", 1, 0])
+def test_channel_fit_warns_unless_provider_returns_literal_true(
+    tmp_path, monkeypatch, channel_fit
+):
+    response = {
+        "needs_clarification": False,
+        "safety": {"allowed": True, "reason": "general science"},
+        "topic": _story_topic(),
+    }
+    if channel_fit is not None:
+        response["channel_fit"] = channel_fit
+    monkeypatch.setattr(
+        manual_topic, "assess_visual_feasibility", lambda _: _reservable_visual()
+    )
+
+    result = check_requested_topic(
+        tmp_path,
+        "20260810-1",
+        ManualTopicInput(topic_input="literal boolean only"),
+        call_agent_fn=_agent_returning(response),
+    )
+
+    assert result["channel_fit"] is False
+    assert result["channel_warning"] is True

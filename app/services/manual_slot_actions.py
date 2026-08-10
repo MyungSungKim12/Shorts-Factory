@@ -103,11 +103,143 @@ def _safe_append_event(*args, **kwargs) -> None:
             pass
 
 
+def _reject_marker_path(data_dir: Path, run_id: str) -> Path:
+    return Path(data_dir) / "recovery" / "manual-reject" / f"{run_id}.json"
+
+
+def _write_reject_marker(path: Path, payload: dict) -> None:
+    """Durably publish intent before moving the only review artifact."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    with temporary.open("wb") as stream:
+        stream.write(encoded)
+        stream.flush()
+        os.fsync(stream.fileno())
+    temporary.replace(path)
+
+
+def _clear_reject_marker(path: Path) -> None:
+    path.unlink(missing_ok=True)
+
+
+def _move_reject_artifact(source: Path, archive: Path) -> None:
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    source.replace(archive)
+
+
+def _commit_rejected_state(
+    db: sqlite3.Connection,
+    run_id: str,
+    attempt: int,
+    timestamp: str,
+    reason: str,
+) -> None:
+    changed = db.execute(
+        """
+        UPDATE slot_reservations
+        SET state = 'rejected', stage = 'rejected', worker_id = NULL,
+            rejected_at = ?, rejection_reason = ?, artifact_path = NULL,
+            replacement_allowed = 0, updated_at = ?
+        WHERE run_id = ? AND mode = 'manual' AND attempt = ?
+          AND state IN ('review_ready', 'held') AND worker_id IS NULL
+        """,
+        (timestamp, reason, timestamp, run_id, attempt),
+    ).rowcount
+    if changed != 1:
+        raise SlotConflict("review state changed while rejection was committed")
+
+
+def _reconcile_reject_marker(data_dir: Path, marker: Path) -> bool:
+    """Complete an interrupted reject without discarding either artifact copy."""
+    try:
+        payload = json.loads(marker.read_text(encoding="utf-8"))
+        run_id = payload["run_id"]
+        attempt = payload["attempt"]
+        reason = payload["reason"]
+        timestamp = payload["requested_at"]
+        had_artifact = payload["had_artifact"]
+        if (
+            not isinstance(run_id, str)
+            or marker != _reject_marker_path(data_dir, run_id)
+            or not isinstance(attempt, int)
+            or attempt < 1
+            or not isinstance(reason, str)
+            or not reason
+            or not isinstance(timestamp, str)
+            or not isinstance(had_artifact, bool)
+        ):
+            return False
+        slot_window(run_id)
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return False
+
+    source = Path(data_dir) / "work" / run_id
+    archive = Path(data_dir) / "rejected" / f"{run_id}-attempt-{attempt}"
+    if source.is_symlink() or archive.is_symlink():
+        return False
+
+    db = _begin(data_dir)
+    try:
+        row = _fetch(db, run_id)
+        if row is None or int(row["attempt"]) != attempt:
+            db.rollback()
+            return False
+        source_exists = source.is_dir()
+        archive_exists = archive.is_dir()
+        if source_exists and archive_exists:
+            db.rollback()
+            return False
+        if had_artifact and not source_exists and not archive_exists:
+            db.rollback()
+            return False
+        if row["state"] in {"review_ready", "held"}:
+            if source_exists:
+                archive.parent.mkdir(parents=True, exist_ok=True)
+                source.replace(archive)
+            _commit_rejected_state(db, run_id, attempt, timestamp, reason)
+        elif row["state"] == "rejected":
+            if source_exists:
+                archive.parent.mkdir(parents=True, exist_ok=True)
+                source.replace(archive)
+        else:
+            db.rollback()
+            return False
+        db.commit()
+    except Exception:
+        db.rollback()
+        return False
+    finally:
+        db.close()
+    try:
+        _clear_reject_marker(marker)
+    except OSError:
+        return False
+    return True
+
+
+def reconcile_pending_reject(data_dir: Path, run_id: str | None = None) -> dict:
+    """Reconcile durable reject markers on the next API/action boundary."""
+    root = Path(data_dir) / "recovery" / "manual-reject"
+    if run_id is not None:
+        paths = [_reject_marker_path(Path(data_dir), run_id)]
+    else:
+        paths = sorted(root.glob("*.json")) if root.is_dir() else []
+    paths = [path for path in paths if path.is_file() and not path.is_symlink()]
+    complete = all(_reconcile_reject_marker(Path(data_dir), path) for path in paths)
+    return {"had_markers": bool(paths), "complete": complete}
+
+
 def upload_decision(
     data_dir: Path, run_id: str, now: datetime
 ) -> UploadDecision:
     """Claim one approved manual upload or hold every other manual state."""
     data_dir = Path(data_dir)
+    reconciliation = reconcile_pending_reject(data_dir, run_id)
+    if not reconciliation["complete"]:
+        return "hold"
     database = data_dir / "videos.sqlite"
     if not database.exists():
         return "automatic"
@@ -165,6 +297,8 @@ def upload_decision(
 
 def approve_slot(data_dir: Path, run_id: str, now: datetime) -> dict:
     """Approve a completed artifact and tell the API whether to upload now."""
+    if not reconcile_pending_reject(Path(data_dir), run_id)["complete"]:
+        raise SlotConflict("pending reject recovery is incomplete")
     db = _begin(data_dir)
     try:
         row = _fetch(db, run_id)
@@ -204,10 +338,13 @@ def reject_slot(
     if not isinstance(reason, str) or not reason.strip():
         raise ValueError("반려 사유가 필요합니다")
     data_dir = Path(data_dir)
+    if not reconcile_pending_reject(data_dir, run_id)["complete"]:
+        raise SlotConflict("pending reject recovery is incomplete")
     _assert_no_live_global_lock(data_dir)
     db = _begin(data_dir)
     source: Path | None = None
     archive: Path | None = None
+    marker: Path | None = None
     moved = False
     try:
         row = _fetch(db, run_id)
@@ -218,39 +355,50 @@ def reject_slot(
             raise SlotConflict("검수 대기 또는 보류 상태에서만 반려할 수 있습니다")
 
         source = data_dir / "work" / run_id
+        if source.is_symlink():
+            raise SlotConflict("review artifact cannot be a symbolic link")
         artifact_value = row["artifact_path"]
         if artifact_value is not None and Path(artifact_value).resolve() != source.resolve():
             raise SlotConflict("활성 산출물 경로가 회차 작업 경로와 다릅니다")
-        if source.exists():
-            archive = data_dir / "rejected" / f"{run_id}-attempt-{int(row['attempt'])}"
-            if archive.exists():
-                raise SlotConflict("같은 시도의 반려 산출물이 이미 보관되어 있습니다")
-            archive.parent.mkdir(parents=True, exist_ok=True)
-            source.replace(archive)
+        attempt = int(row["attempt"])
+        archive = data_dir / "rejected" / f"{run_id}-attempt-{attempt}"
+        had_artifact = source.exists()
+        if artifact_value is not None and not had_artifact:
+            raise SlotConflict("review artifact is missing before rejection")
+        if had_artifact and archive.exists():
+            raise SlotConflict("rejected artifact for this attempt already exists")
+        marker = _reject_marker_path(data_dir, run_id)
+        _write_reject_marker(
+            marker,
+            {
+                "run_id": run_id,
+                "attempt": attempt,
+                "reason": reason.strip(),
+                "requested_at": _timestamp(now),
+                "had_artifact": had_artifact,
+            },
+        )
+        if had_artifact:
+            _move_reject_artifact(source, archive)
             moved = True
             rejected_timestamp = _as_kst(now).timestamp()
             os.utime(archive, (rejected_timestamp, rejected_timestamp))
 
         timestamp = _timestamp(now)
-        db.execute(
-            """
-            UPDATE slot_reservations
-            SET state = 'rejected', stage = 'rejected', worker_id = NULL,
-                rejected_at = ?, rejection_reason = ?, artifact_path = NULL,
-                updated_at = ?
-            WHERE run_id = ?
-            """,
-            (timestamp, reason.strip(), timestamp, run_id),
-        )
+        _commit_rejected_state(db, run_id, attempt, timestamp, reason.strip())
         result = _row_dict(_fetch(db, run_id))
         db.commit()
     except Exception:
         db.rollback()
         if moved and source is not None and archive is not None and archive.exists():
             archive.replace(source)
+        if marker is not None:
+            _clear_reject_marker(marker)
         raise
     finally:
         db.close()
+    if marker is not None:
+        _clear_reject_marker(marker)
     _safe_append_event(
         data_dir,
         run_id,
@@ -268,6 +416,8 @@ def retry_slot(
     """Start exactly one new attempt with the same checked topic or a new check."""
     if mode not in {"same_topic", "new_topic"}:
         raise ValueError("retry mode must be same_topic or new_topic")
+    if not reconcile_pending_reject(Path(data_dir), run_id)["complete"]:
+        raise SlotConflict("pending reject recovery is incomplete")
     _assert_no_live_global_lock(Path(data_dir))
     db = _begin(data_dir)
     try:
@@ -278,7 +428,7 @@ def retry_slot(
         if row["state"] not in {"failed", "rejected"}:
             raise SlotConflict("실패 또는 반려 상태에서만 재시도할 수 있습니다")
 
-        target = "checking"
+        target = "draft"
         check_result = None
         normalized_topic = None
         if mode == "same_topic":
@@ -300,6 +450,13 @@ def retry_slot(
             SET state = ?, stage = ?, attempt = attempt + 1, worker_id = NULL,
                 normalized_topic = ?, check_result = ?, approved_at = NULL,
                 rejected_at = NULL, rejection_reason = NULL, artifact_path = NULL,
+                original_input = CASE WHEN ? = 'draft' THEN NULL ELSE original_input END,
+                include_constraints = CASE WHEN ? = 'draft' THEN NULL ELSE include_constraints END,
+                exclude_constraints = CASE WHEN ? = 'draft' THEN NULL ELSE exclude_constraints END,
+                reference_links = CASE WHEN ? = 'draft' THEN NULL ELSE reference_links END,
+                request_json = CASE WHEN ? = 'draft' THEN '{}' ELSE request_json END,
+                check_revision = NULL,
+                replacement_allowed = CASE WHEN ? = 'draft' THEN 1 ELSE 0 END,
                 updated_at = ?
             WHERE run_id = ?
             """,
@@ -310,6 +467,12 @@ def retry_slot(
                 json.dumps(check_result, ensure_ascii=False, separators=(",", ":"))
                 if check_result is not None
                 else None,
+                target,
+                target,
+                target,
+                target,
+                target,
+                target,
                 timestamp,
                 run_id,
             ),
@@ -334,6 +497,8 @@ def retry_slot(
 
 def skip_slot(data_dir: Path, run_id: str, now: datetime) -> dict:
     """Finish a failed or rejected manual slot without uploading it."""
+    if not reconcile_pending_reject(Path(data_dir), run_id)["complete"]:
+        raise SlotConflict("pending reject recovery is incomplete")
     _assert_no_live_global_lock(Path(data_dir))
     db = _begin(data_dir)
     try:
@@ -424,6 +589,7 @@ __all__ = [
     "approve_slot",
     "cleanup_rejected_artifacts",
     "reject_slot",
+    "reconcile_pending_reject",
     "retry_slot",
     "skip_slot",
     "upload_decision",

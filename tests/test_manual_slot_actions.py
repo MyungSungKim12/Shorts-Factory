@@ -34,6 +34,14 @@ KST = ZoneInfo("Asia/Seoul")
 RUN_ID = "20260810-1"
 
 
+def _save_current_check(data_dir, run_id, result, now):
+    with sqlite3.connect(Path(data_dir) / "videos.sqlite") as db:
+        revision = db.execute(
+            "SELECT check_revision FROM slot_reservations WHERE run_id = ?", (run_id,)
+        ).fetchone()[0]
+    return save_check_result(data_dir, run_id, result, now, revision=revision)
+
+
 def kst(hour: int, minute: int = 0) -> datetime:
     return datetime(2026, 8, 10, hour, minute, tzinfo=KST)
 
@@ -127,7 +135,7 @@ def seed_review_ready_slot(
     with_artifact: bool = False,
 ) -> None:
     create_check(data_dir, run_id, {"topic_input": "검증된 수동 소재"}, kst(8, 40))
-    save_check_result(data_dir, run_id, checked_result(), kst(8, 41))
+    _save_current_check(data_dir, run_id, checked_result(), kst(8, 41))
     reserve_checked_topic(data_dir, run_id, kst(8, 42))
     transition_slot(
         data_dir, run_id, {"reserved"}, "locked", kst(9), worker_id="worker"
@@ -216,7 +224,7 @@ def test_upload_decision_atomically_claims_approved_slot_once(tmp_path):
 
 def test_cancelled_preproduction_slot_returns_upload_decision_to_automatic(tmp_path):
     create_check(tmp_path, RUN_ID, {"topic_input": "검증된 수동 소재"}, kst(8, 40))
-    save_check_result(tmp_path, RUN_ID, checked_result(), kst(8, 41))
+    _save_current_check(tmp_path, RUN_ID, checked_result(), kst(8, 41))
     reserve_checked_topic(tmp_path, RUN_ID, kst(8, 42))
 
     slot_reservations.cancel_manual_reservation(tmp_path, RUN_ID, kst(8, 50))
@@ -375,10 +383,11 @@ def test_new_topic_retry_clears_previous_check_fields(tmp_path):
 
     retried = retry_slot(tmp_path, RUN_ID, "new_topic", kst(10, 21))
 
-    assert retried["state"] == "checking"
+    assert retried["state"] == "draft"
     assert retried["attempt"] == 2
     assert retried["normalized_topic"] is None
     assert retried["check_result"] is None
+    assert retried["replacement_allowed"] == 1
 
 
 def test_same_topic_retry_requires_a_valid_last_check(tmp_path):
@@ -482,3 +491,157 @@ def test_committed_action_succeeds_when_audit_event_write_fails(
 
     assert result["state"] == expected
     assert read_slot(tmp_path)["state"] == expected
+
+
+def test_overdue_exact_run_override_never_claims_todays_same_slot(
+    tmp_path, monkeypatch
+):
+    yesterday = RUN_ID
+    today = "20260811-1"
+    seed_review_ready_slot(tmp_path, yesterday, with_artifact=True)
+    seed_review_ready_slot(tmp_path, today, with_artifact=True)
+    work = tmp_path / "work" / yesterday
+    (work / "topic.json").write_text(
+        json.dumps(manual_topic_payload(), ensure_ascii=False), encoding="utf-8"
+    )
+    (work / "script.json").write_text(
+        json.dumps(story_script(), ensure_ascii=False), encoding="utf-8"
+    )
+    (work / "produce_log.json").write_text(
+        json.dumps(
+            {
+                "script_sha256": hashlib.sha256(
+                    (work / "script.json").read_bytes()
+                ).hexdigest()
+            }
+        ),
+        encoding="utf-8",
+    )
+    (work / "prepared.json").write_text(
+        json.dumps({"run_id": yesterday, "quality_gate": {"passed": True}}),
+        encoding="utf-8",
+    )
+    approved_today = datetime(2026, 8, 11, 0, 5, tzinfo=KST)
+    approve_slot(tmp_path, yesterday, approved_today)
+
+    class NextDayDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            current = datetime(2026, 8, 11, 0, 5, tzinfo=KST)
+            return current if tz is not None else current.replace(tzinfo=None)
+
+    monkeypatch.setattr(orchestrator, "datetime", NextDayDatetime)
+    monkeypatch.setattr(
+        orchestrator,
+        "run_uploader",
+        lambda data_dir, run_id: {"status": "uploaded", "video_id": run_id},
+    )
+    monkeypatch.setattr(
+        "app.agents.analyst.run_analyst", lambda *args, **kwargs: {"insight": "ok"}
+    )
+
+    result = asyncio.run(
+        orchestrator.run_pipeline(
+            tmp_path, "ffmpeg", slot=1, run_id_override=yesterday
+        )
+    )
+
+    assert result["date"] == yesterday
+    assert read_slot(tmp_path, yesterday)["state"] == "uploaded"
+    assert read_slot(tmp_path, today)["state"] == "review_ready"
+
+
+def test_exact_run_override_rejects_slot_mismatch(tmp_path):
+    with pytest.raises(ValueError, match="slot"):
+        asyncio.run(
+            orchestrator.run_pipeline(
+                tmp_path, "ffmpeg", slot=2, run_id_override=RUN_ID
+            )
+        )
+
+
+def test_reject_reconciles_interruption_after_artifact_move(
+    tmp_path, monkeypatch
+):
+    from app.services import manual_slot_actions
+
+    seed_review_ready_slot(tmp_path, with_artifact=True)
+    original = manual_slot_actions._commit_rejected_state
+
+    def terminate_after_move(*args, **kwargs):
+        raise SystemExit("simulated termination")
+
+    monkeypatch.setattr(
+        manual_slot_actions, "_commit_rejected_state", terminate_after_move
+    )
+    with pytest.raises(SystemExit, match="simulated termination"):
+        reject_slot(tmp_path, RUN_ID, "replace it", kst(10, 20))
+
+    assert not (tmp_path / "work" / RUN_ID).exists()
+    assert read_slot(tmp_path)["state"] == "review_ready"
+
+    monkeypatch.setattr(manual_slot_actions, "_commit_rejected_state", original)
+    reconciled = manual_slot_actions.reconcile_pending_reject(tmp_path, RUN_ID)
+
+    assert reconciled["complete"] is True
+    assert read_slot(tmp_path)["state"] == "rejected"
+    archive = tmp_path / "rejected" / f"{RUN_ID}-attempt-1"
+    assert (archive / "output.mp4").read_bytes() == b"review-video"
+
+
+def test_reject_reconciles_interruption_after_marker_before_move(
+    tmp_path, monkeypatch
+):
+    from app.services import manual_slot_actions
+
+    seed_review_ready_slot(tmp_path, with_artifact=True)
+    original = manual_slot_actions._move_reject_artifact
+
+    def terminate_before_move(*args, **kwargs):
+        raise SystemExit("simulated termination")
+
+    monkeypatch.setattr(
+        manual_slot_actions, "_move_reject_artifact", terminate_before_move
+    )
+    with pytest.raises(SystemExit, match="simulated termination"):
+        reject_slot(tmp_path, RUN_ID, "replace it", kst(10, 20))
+
+    assert (tmp_path / "work" / RUN_ID / "output.mp4").read_bytes() == b"review-video"
+    assert read_slot(tmp_path)["state"] == "review_ready"
+
+    monkeypatch.setattr(manual_slot_actions, "_move_reject_artifact", original)
+    reconciled = manual_slot_actions.reconcile_pending_reject(tmp_path, RUN_ID)
+
+    assert reconciled["complete"] is True
+    assert read_slot(tmp_path)["state"] == "rejected"
+    assert (
+        tmp_path / "rejected" / f"{RUN_ID}-attempt-1" / "output.mp4"
+    ).read_bytes() == b"review-video"
+
+
+def test_reject_reconciles_interruption_after_database_commit(
+    tmp_path, monkeypatch
+):
+    from app.services import manual_slot_actions
+
+    seed_review_ready_slot(tmp_path, with_artifact=True)
+    original = manual_slot_actions._clear_reject_marker
+
+    def terminate_before_marker_cleanup(*args, **kwargs):
+        raise SystemExit("simulated termination")
+
+    monkeypatch.setattr(
+        manual_slot_actions, "_clear_reject_marker", terminate_before_marker_cleanup
+    )
+    with pytest.raises(SystemExit, match="simulated termination"):
+        reject_slot(tmp_path, RUN_ID, "replace it", kst(10, 20))
+
+    assert read_slot(tmp_path)["state"] == "rejected"
+    monkeypatch.setattr(manual_slot_actions, "_clear_reject_marker", original)
+
+    reconciled = manual_slot_actions.reconcile_pending_reject(tmp_path, RUN_ID)
+    assert reconciled["complete"] is True
+    assert not (tmp_path / "recovery" / "manual-reject" / f"{RUN_ID}.json").exists()
+    assert (
+        tmp_path / "rejected" / f"{RUN_ID}-attempt-1" / "output.mp4"
+    ).read_bytes() == b"review-video"

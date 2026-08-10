@@ -389,7 +389,9 @@ def check_requested_topic(
             grounding_error="topic_contract",
         )
     visual = assess_visual_feasibility({**topic, "_data_dir": str(data_dir)})
-    channel_fit = raw.get("channel_fit") is not False
+    # Provider output is untrusted JSON.  Only the literal JSON boolean true
+    # can suppress the warning; missing, numeric, and string lookalikes fail closed.
+    channel_fit = raw.get("channel_fit") is True
     reservable = bool(visual.get("reservable"))
     result = {
         "status": "reservable" if reservable else "needs_input",

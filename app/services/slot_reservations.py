@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+from uuid import uuid4
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from pathlib import Path
@@ -127,6 +128,7 @@ def init_slot_tables(data_dir: Path) -> None:
                 reference_links TEXT,
                 request_json TEXT NOT NULL,
                 check_result TEXT,
+                check_revision TEXT,
                 state TEXT NOT NULL,
                 stage TEXT,
                 attempt INTEGER NOT NULL DEFAULT 0,
@@ -141,7 +143,8 @@ def init_slot_tables(data_dir: Path) -> None:
                 artifact_path TEXT,
                 video_id TEXT,
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                replacement_allowed INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS slot_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -156,6 +159,16 @@ def init_slot_tables(data_dir: Path) -> None:
                 ON slot_events (run_id, id);
             """
         )
+        columns = {
+            row[1] for row in db.execute("PRAGMA table_info(slot_reservations)")
+        }
+        if "check_revision" not in columns:
+            db.execute("ALTER TABLE slot_reservations ADD COLUMN check_revision TEXT")
+        if "replacement_allowed" not in columns:
+            db.execute(
+                "ALTER TABLE slot_reservations "
+                "ADD COLUMN replacement_allowed INTEGER NOT NULL DEFAULT 0"
+            )
         db.commit()
     finally:
         db.close()
@@ -236,18 +249,27 @@ def create_check(data_dir: Path, run_id: str, request: dict, now: datetime) -> d
     window = slot_window(run_id)
     original_input, include, exclude, reference_links = _request_values(request)
     timestamp = _as_kst(now).isoformat()
+    revision = uuid4().hex
     db = _begin_immediate(data_dir)
     try:
-        _ensure_input_open(run_id, now)
         row = _fetch_reservation(db, run_id)
+        replacement = bool(
+            row is not None
+            and row["state"] == "draft"
+            and row["worker_id"] is None
+            and row["replacement_allowed"] == 1
+        )
+        if not replacement:
+            _ensure_input_open(run_id, now)
         if row is None:
             db.execute(
                 """
                 INSERT INTO slot_reservations (
                     run_id, mode, original_input, include_constraints,
-                    exclude_constraints, reference_links, request_json, state, stage,
+                    exclude_constraints, reference_links, request_json, check_revision,
+                    state, stage,
                     attempt, production_at, upload_at, created_at, updated_at
-                ) VALUES (?, 'manual', ?, ?, ?, ?, ?, 'checking', 'checking', 1, ?, ?, ?, ?)
+                ) VALUES (?, 'manual', ?, ?, ?, ?, ?, ?, 'checking', 'checking', 1, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -256,6 +278,7 @@ def create_check(data_dir: Path, run_id: str, request: dict, now: datetime) -> d
                     _json(exclude),
                     _json(reference_links),
                     _json(request),
+                    revision,
                     window.production_at.isoformat(),
                     window.upload_at.isoformat(),
                     timestamp,
@@ -263,16 +286,22 @@ def create_check(data_dir: Path, run_id: str, request: dict, now: datetime) -> d
                 ),
             )
         else:
-            if row["state"] not in {"draft", "reservable", "needs_input", "failed", "rejected"}:
+            if row["state"] not in {
+                "draft", "reservable", "needs_input", "failed", "rejected"
+            }:
                 raise SlotConflict("slot cannot be checked from its current state")
             db.execute(
                 """
                 UPDATE slot_reservations
                 SET original_input = ?, normalized_topic = NULL,
                     include_constraints = ?, exclude_constraints = ?, reference_links = ?,
-                    request_json = ?, check_result = NULL, state = 'checking',
+                    request_json = ?, check_result = NULL, check_revision = ?,
+                    state = 'checking',
                     stage = 'checking', worker_id = NULL, updated_at = ?,
-                    attempt = attempt + 1
+                    attempt = attempt + CASE
+                        WHEN state = 'draft' AND replacement_allowed = 1 THEN 0
+                        ELSE 1
+                    END
                 WHERE run_id = ?
                 """,
                 (
@@ -281,6 +310,7 @@ def create_check(data_dir: Path, run_id: str, request: dict, now: datetime) -> d
                     _json(exclude),
                     _json(reference_links),
                     _json(request),
+                    revision,
                     timestamp,
                     run_id,
                 ),
@@ -295,25 +325,38 @@ def create_check(data_dir: Path, run_id: str, request: dict, now: datetime) -> d
         db.close()
 
 
-def save_check_result(data_dir: Path, run_id: str, result: dict, now: datetime) -> dict:
+def save_check_result(
+    data_dir: Path,
+    run_id: str,
+    result: dict,
+    now: datetime,
+    *,
+    revision: str,
+) -> dict:
     """Persist a completed topic check and expose its next valid state."""
     if not isinstance(result, dict):
         raise ValueError("result must be an object")
+    if not isinstance(revision, str) or not revision:
+        raise ValueError("check revision is required")
     status = result.get("status")
     target = status if status in {"reservable", "needs_input", "failed"} else "failed"
     timestamp = _as_kst(now).isoformat()
     db = _begin_immediate(data_dir)
     try:
         row = _fetch_reservation(db, run_id)
-        if row is None or row["state"] != "checking":
-            raise SlotConflict("check result requires checking state")
+        if (
+            row is None
+            or row["state"] != "checking"
+            or row["check_revision"] != revision
+        ):
+            raise SlotConflict("check result requires matching active revision")
         normalized_topic = result.get("normalized_topic")
-        db.execute(
+        changed = db.execute(
             """
             UPDATE slot_reservations
             SET normalized_topic = ?, check_result = ?, state = ?, stage = 'checked',
                 updated_at = ?
-            WHERE run_id = ?
+            WHERE run_id = ? AND state = 'checking' AND check_revision = ?
             """,
             (
                 normalized_topic if isinstance(normalized_topic, str) else None,
@@ -321,8 +364,11 @@ def save_check_result(data_dir: Path, run_id: str, result: dict, now: datetime) 
                 target,
                 timestamp,
                 run_id,
+                revision,
             ),
-        )
+        ).rowcount
+        if changed != 1:
+            raise SlotConflict("check result revision changed before save")
         saved = _row_to_dict(_fetch_reservation(db, run_id))
         db.commit()
         return saved
@@ -339,14 +385,16 @@ def reserve_checked_topic(data_dir: Path, run_id: str, now: datetime) -> dict:
     timestamp = _as_kst(now).isoformat()
     db = _begin_immediate(data_dir)
     try:
-        _ensure_input_open(run_id, now)
         row = _fetch_reservation(db, run_id)
         if row is None or row["state"] != "reservable":
             raise SlotConflict("reservation requires reservable state")
+        if row["replacement_allowed"] != 1:
+            _ensure_input_open(run_id, now)
         db.execute(
             """
             UPDATE slot_reservations
-            SET state = 'reserved', stage = 'reserved', reserved_at = ?, updated_at = ?
+            SET state = 'reserved', stage = 'reserved', reserved_at = ?,
+                replacement_allowed = 0, updated_at = ?
             WHERE run_id = ?
             """,
             (timestamp, timestamp, run_id),

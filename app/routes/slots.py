@@ -4,12 +4,13 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 import sqlite3
 import stat
 from datetime import date, datetime
 from pathlib import Path as FilePath
 from typing import Annotated, Literal
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit, urlunsplit
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Path, Query
 from fastapi.responses import FileResponse
@@ -22,7 +23,14 @@ from pydantic import (
 )
 
 from app.agents.orchestrator import run_pipeline
-from app.services.manual_slot_actions import approve_slot, reject_slot, retry_slot, skip_slot
+from app.services.manual_slot_actions import (
+    approve_slot,
+    reconcile_pending_reject,
+    reject_slot,
+    retry_slot,
+    skip_slot,
+)
+from app.services.manual_slot_pipeline import run_manual_prebuild
 from app.services.manual_topic import ManualTopicInput, check_requested_topic
 from app.services.slot_reservations import (
     KST,
@@ -59,12 +67,14 @@ _JSON_COLUMNS = {
     "request_json", "check_result",
 }
 _PUBLIC_SLOT_FIELDS = {
-    "run_id", "slot", "mode", "original_input", "normalized_topic",
-    "include_constraints", "exclude_constraints", "reference_links",
+    "run_id", "slot", "mode", "normalized_topic",
     "check_result", "state", "stage", "attempt", "worker_id",
     "production_at", "upload_at", "reserved_at", "locked_at", "approved_at",
     "rejected_at", "rejection_reason", "video_id", "created_at", "updated_at",
-    "input_open", "upload_action",
+    "input_open", "upload_action", "replacement_allowed",
+}
+_PRIVATE_SLOT_FIELDS = {
+    "original_input", "include_constraints", "exclude_constraints", "reference_links",
 }
 _CHECK_RESULT_FIELDS = {
     "status", "reservable", "reason", "interpretations", "normalized_topic",
@@ -110,6 +120,13 @@ _AUTHORIZATION_VALUE = re.compile(
     r"(?i)\bauthorization\s*:\s*(?:basic|bearer)\s+[^\s,;}\]]+"
 )
 _BOT_TOKEN = re.compile(r"(?<!\d)\d{5,15}:[A-Za-z0-9_-]{20,}")
+_SENSITIVE_KEY = re.compile(
+    r"(?:api.?key|access.?token|refresh.?token|authorization|cookie|credential|"
+    r"password|provider.?(?:payload|response)|raw.?(?:body|headers|payload|request|response)|"
+    r"secret|session|signature|token)",
+    re.IGNORECASE,
+)
+_URL_IN_TEXT = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 
 
 class TopicCheckRequest(BaseModel):
@@ -169,6 +186,11 @@ def require_dashboard_token(x_token: str = Header(default="")) -> None:
         raise HTTPException(status_code=401, detail="관리자 토큰이 필요합니다")
 
 
+def _has_dashboard_token(x_token: str) -> bool:
+    configured = os.getenv("DASHBOARD_TOKEN", "")
+    return bool(configured and x_token) and secrets.compare_digest(configured, x_token)
+
+
 def _data_dir() -> FilePath:
     # Lazy import avoids a router/main import cycle and keeps main.DATA_DIR as
     # the single runtime/test configuration point.
@@ -196,6 +218,9 @@ def _decode_row(row: sqlite3.Row) -> dict:
 
 
 def _manual_slot(data_dir: FilePath, run_id: str) -> dict | None:
+    reconciliation = reconcile_pending_reject(data_dir, run_id)
+    if not reconciliation["complete"]:
+        raise HTTPException(status_code=409, detail="pending reject recovery is incomplete")
     init_slot_tables(data_dir)
     with sqlite3.connect(data_dir / "videos.sqlite") as db:
         db.row_factory = sqlite3.Row
@@ -213,15 +238,49 @@ def _manual_slot_or_404(data_dir: FilePath, run_id: str) -> dict:
     return slot
 
 
+def _strip_url_query(value: str) -> str | None:
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return None
+    if (
+        parsed.scheme.casefold() not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        return None
+    return urlunsplit((parsed.scheme.casefold(), parsed.netloc, parsed.path, "", ""))
+
+
+def _redact_public_text(value: str) -> str:
+    text = _AUTHORIZATION_VALUE.sub("Authorization: [redacted]", value)
+    text = _EVENT_SECRET_VALUE.sub(r"\g<label>[redacted]", text)
+    text = _BOT_TOKEN.sub("[redacted]", text)
+
+    def clean_url(match: re.Match) -> str:
+        raw = match.group(0)
+        trailing = ""
+        while raw and raw[-1] in ".,;!)]}":
+            trailing = raw[-1] + trailing
+            raw = raw[:-1]
+        return (_strip_url_query(raw) or "[redacted-url]") + trailing
+
+    return _URL_IN_TEXT.sub(clean_url, text)
+
+
 def _sanitize(value):
     if isinstance(value, dict):
         return {
             str(key): _sanitize(item)
             for key, item in value.items()
             if str(key).casefold() not in _SENSITIVE_KEYS
+            and _SENSITIVE_KEY.search(str(key)) is None
         }
     if isinstance(value, list):
         return [_sanitize(item) for item in value]
+    if isinstance(value, str):
+        return _redact_public_text(value)
     return value
 
 
@@ -285,12 +344,15 @@ def _public_event(value: object, run_id: str) -> dict | None:
     }
 
 
-def _public_slot(slot: dict) -> dict:
+def _public_slot(slot: dict, *, include_private: bool = False) -> dict:
+    allowed = _PUBLIC_SLOT_FIELDS | (_PRIVATE_SLOT_FIELDS if include_private else set())
     result = {
         key: _sanitize(value)
         for key, value in slot.items()
-        if key in _PUBLIC_SLOT_FIELDS
+        if key in allowed
     }
+    if "replacement_allowed" in result:
+        result["replacement_allowed"] = result["replacement_allowed"] == 1
     check_result = result.get("check_result")
     if isinstance(check_result, dict):
         result["check_result"] = {
@@ -323,7 +385,12 @@ def _call_service(function, *args, **kwargs):
         raise _service_error(exc) from exc
 
 
-def _run_topic_check_job(data_dir: FilePath, run_id: str, request: ManualTopicInput) -> None:
+def _run_topic_check_job(
+    data_dir: FilePath,
+    run_id: str,
+    request: ManualTopicInput,
+    revision: str,
+) -> None:
     try:
         result = check_requested_topic(data_dir, run_id, request)
     except Exception:
@@ -339,7 +406,7 @@ def _run_topic_check_job(data_dir: FilePath, run_id: str, request: ManualTopicIn
         except Exception:
             pass
     try:
-        save_check_result(data_dir, run_id, result, _now())
+        save_check_result(data_dir, run_id, result, _now(), revision=revision)
     except SlotConflict:
         # A state action that won the race owns the persisted state.
         return
@@ -392,6 +459,48 @@ def _read_review_json(artifact_dir: FilePath, filename: str) -> dict | None:
     return value if isinstance(value, dict) else None
 
 
+def _actual_source_summary(produce_log: dict) -> dict | None:
+    sources = produce_log.get("sources")
+    if not isinstance(sources, list):
+        return None
+    types: dict[str, int] = {}
+    public_urls: list[str] = []
+    seen_urls: set[str] = set()
+    unique_sources: set[tuple[str, str]] = set()
+    item_count = 0
+    for item in sources:
+        if not isinstance(item, dict):
+            continue
+        item_count += 1
+        provider = item.get("provider")
+        if not isinstance(provider, str) or not _SAFE_CODE.fullmatch(provider):
+            provider = "other"
+        types[provider] = types.get(provider, 0) + 1
+        public_url = None
+        for key in ("source_url", "url", "original_url"):
+            candidate = item.get(key)
+            if isinstance(candidate, str):
+                public_url = _strip_url_query(candidate)
+                if public_url is not None:
+                    break
+        if public_url is not None and public_url not in seen_urls:
+            public_urls.append(public_url)
+            seen_urls.add(public_url)
+        media_id = item.get("media_id")
+        identity = public_url or (
+            str(media_id)[:128]
+            if isinstance(media_id, (str, int)) and not isinstance(media_id, bool)
+            else provider
+        )
+        unique_sources.add((provider, identity))
+    return {
+        "item_count": item_count,
+        "unique_source_count": len(unique_sources),
+        "types": {key: types[key] for key in sorted(types)},
+        "public_urls": public_urls,
+    }
+
+
 def _review_metadata(data_dir: FilePath, run_id: str, slot: dict) -> dict | None:
     if slot.get("state") not in {"review_ready", "approved", "held"}:
         return None
@@ -418,13 +527,27 @@ def _review_metadata(data_dir: FilePath, run_id: str, slot: dict) -> dict | None
         review[key] = _sanitize(
             {name: item for name, item in value.items() if name in allowed}
         )
+    produce_log = _read_review_json(actual, "produce_log.json")
+    if produce_log is not None:
+        actual_sources = _actual_source_summary(produce_log)
+        if actual_sources is not None:
+            review["actual_sources"] = _sanitize(actual_sources)
     return review or None
 
 
 @router.get("")
-def slots(day: date = Query(alias="date")):
+def slots(day: date = Query(alias="date"), x_token: str = Header(default="")):
+    reconciliation = reconcile_pending_reject(_data_dir())
+    if not reconciliation["complete"]:
+        raise HTTPException(status_code=409, detail="pending reject recovery is incomplete")
     cards = list_slot_cards(_data_dir(), day, _now())
-    return {"date": day.isoformat(), "slots": [_public_slot(card) for card in cards]}
+    authenticated = _has_dashboard_token(x_token)
+    return {
+        "date": day.isoformat(),
+        "slots": [
+            _public_slot(card, include_private=authenticated) for card in cards
+        ],
+    }
 
 
 @router.post(
@@ -433,16 +556,29 @@ def slots(day: date = Query(alias="date")):
 )
 def check_topic(run_id: RunId, body: TopicCheckRequest, tasks: BackgroundTasks):
     data_dir = _data_dir()
-    _call_service(create_check, data_dir, run_id, body.model_dump(), _now())
-    tasks.add_task(_run_topic_check_job, data_dir, run_id, body.to_domain())
-    return {"accepted": True, "run_id": run_id, "state": "checking"}
+    created = _call_service(create_check, data_dir, run_id, body.model_dump(), _now())
+    revision = created["check_revision"]
+    tasks.add_task(
+        _run_topic_check_job, data_dir, run_id, body.to_domain(), revision
+    )
+    return {
+        "accepted": True,
+        "run_id": run_id,
+        "state": "checking",
+        "attempt": created["attempt"],
+        "revision": revision,
+    }
 
 
 @router.put("/{run_id}/reservation", dependencies=[Depends(require_dashboard_token)])
-def reserve(run_id: RunId, body: ReservationRequest):
+def reserve(run_id: RunId, body: ReservationRequest, tasks: BackgroundTasks):
     data_dir = _data_dir()
     _manual_slot_or_404(data_dir, run_id)
-    return _public_slot(_call_service(reserve_checked_topic, data_dir, run_id, _now()))
+    now = _now()
+    result = _call_service(reserve_checked_topic, data_dir, run_id, now)
+    if now >= datetime.fromisoformat(result["production_at"]):
+        tasks.add_task(run_manual_prebuild, data_dir, _ffmpeg_path(), run_id)
+    return _public_slot(result, include_private=True)
 
 
 @router.delete("/{run_id}/reservation", dependencies=[Depends(require_dashboard_token)])
@@ -453,10 +589,10 @@ def cancel_reservation(run_id: RunId):
 
 
 @router.get("/{run_id}")
-def slot_detail(run_id: RunId):
+def slot_detail(run_id: RunId, x_token: str = Header(default="")):
     data_dir = _data_dir()
     stored = _manual_slot_or_404(data_dir, run_id)
-    result = _public_slot(stored)
+    result = _public_slot(stored, include_private=_has_dashboard_token(x_token))
     result["input_open"] = _now() < datetime.fromisoformat(stored["production_at"])
     review = _review_metadata(data_dir, run_id, stored)
     if review is not None:
@@ -471,7 +607,8 @@ def slot_events(
     limit: int = Query(default=100, ge=0, le=100),
 ):
     data_dir = _data_dir()
-    _manual_slot_or_404(data_dir, run_id)
+    if _manual_slot(data_dir, run_id) is None:
+        return {"run_id": run_id, "events": []}
     events = (
         public
         for event in events_after(data_dir, run_id, after_id, limit)
@@ -515,7 +652,13 @@ def approve(run_id: RunId, tasks: BackgroundTasks):
     _manual_slot_or_404(data_dir, run_id)
     result = _call_service(approve_slot, data_dir, run_id, _now())
     if result["upload_action"] == "immediate":
-        tasks.add_task(run_pipeline, data_dir, _ffmpeg_path(), slot=int(run_id[-1]))
+        tasks.add_task(
+            run_pipeline,
+            data_dir,
+            _ffmpeg_path(),
+            slot=int(run_id[-1]),
+            run_id_override=run_id,
+        )
     return _public_slot(result)
 
 
@@ -529,20 +672,11 @@ def reject(run_id: RunId, body: RejectRequest):
 @router.post("/{run_id}/retry", dependencies=[Depends(require_dashboard_token)])
 def retry(run_id: RunId, body: RetryRequest, tasks: BackgroundTasks):
     data_dir = _data_dir()
-    previous = _manual_slot_or_404(data_dir, run_id)
-    request = None
-    if body.mode == "new_topic":
-        request_json = previous.get("request_json")
-        if not isinstance(request_json, dict):
-            raise HTTPException(status_code=422, detail="재검사할 소재 입력이 없습니다")
-        try:
-            request = TopicCheckRequest.model_validate(request_json)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail="재검사할 소재 입력이 올바르지 않습니다") from exc
+    _manual_slot_or_404(data_dir, run_id)
     result = _call_service(retry_slot, data_dir, run_id, body.mode, _now())
-    if request is not None:
-        tasks.add_task(_run_topic_check_job, data_dir, run_id, request.to_domain())
-    return _public_slot(result)
+    if body.mode == "same_topic":
+        tasks.add_task(run_manual_prebuild, data_dir, _ffmpeg_path(), run_id)
+    return _public_slot(result, include_private=True)
 
 
 @router.post("/{run_id}/skip", dependencies=[Depends(require_dashboard_token)])

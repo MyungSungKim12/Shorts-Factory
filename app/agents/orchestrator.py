@@ -15,6 +15,7 @@ from app.services.manual_slot_actions import (
     record_upload_result,
     upload_decision,
 )
+from app.services.slot_reservations import slot_window
 
 
 def _output_matches_script(work_dir: Path) -> bool:
@@ -75,7 +76,13 @@ def _load_prepared_marker(work_dir: Path, run_id: str) -> dict | None:
     return value
 
 
-async def run_pipeline(data_dir: Path, ffmpeg_path: str, slot: int = None) -> dict:
+async def run_pipeline(
+    data_dir: Path,
+    ffmpeg_path: str,
+    slot: int = None,
+    *,
+    run_id_override: str | None = None,
+) -> dict:
     """
     전체 파이프라인 실행: 리서처 → 작가 → 프로듀서 → 업로더
 
@@ -89,10 +96,18 @@ async def run_pipeline(data_dir: Path, ffmpeg_path: str, slot: int = None) -> di
     """
     content_format = get_content_format()
     now = datetime.now().astimezone()
-    date_str = now.strftime("%Y%m%d")
-    if slot is None:
-        slot = _next_slot(data_dir, date_str)
-    run_id = f"{date_str}-{slot}"
+    if run_id_override is not None:
+        window = slot_window(run_id_override)
+        override_slot = int(window.run_id.rsplit("-", 1)[1])
+        if slot is not None and slot != override_slot:
+            raise ValueError("run_id override slot does not match slot")
+        slot = override_slot
+        run_id = window.run_id
+    else:
+        date_str = now.strftime("%Y%m%d")
+        if slot is None:
+            slot = _next_slot(data_dir, date_str)
+        run_id = f"{date_str}-{slot}"
 
     decision = upload_decision(data_dir, run_id, now)
     if decision == "hold":
