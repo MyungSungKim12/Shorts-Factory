@@ -233,3 +233,104 @@ D:\ms\shorts-factory-be\venv\Scripts\python.exe -m pytest -q
 - 일반 failed 전이 오류 테스트는 ownership fallback으로 상태와 worker가 정리된 뒤에만 global lock이 해제됨을 확인한다.
 - 이벤트 저장 오류 테스트는 원래 render 예외를 유지하고 DB 상태 cleanup이 먼저 완료되며 provider 비밀 문자열이 note에 포함되지 않음을 확인한다.
 - 파일시스템 자체가 archive 이동을 거부하거나 SQLite 정상 전이와 ownership fallback이 모두 실패한 경우에는 global lock을 의도적으로 유지한다. 호출 프로세스 종료 후 기존 stale-lock 회수 경로가 잠금을 정리할 수 있으며, cleanup report가 운영자 복구 단서를 남긴다.
+
+---
+
+## 게이트 리뷰 수정 라운드 2
+
+### 기준과 열린 문제 확인
+
+- 수정 기준 커밋: `405fc61 수정: 수동 사전제작 실패 복구 강화`
+- 라운드 1의 조건부 global-lock 해제와 cleanup report 생성 조건을 다시 검토했다.
+- archive 이동 실패 뒤 DB failed 전이가 성공하면 cleanup report가 생성되지 않았고, DB 정상 전이와 ownership fallback이 모두 실패하면 현재 프로세스가 살아 있는 동안 global lock이 유지되어 다른 회차까지 막는 상태를 확인했다.
+
+### 수정 내용
+
+#### 항상 기록되는 안전한 reconciliation report
+
+- post-promotion archive 실패 또는 DB worker cleanup 실패 중 하나라도 발생하면 `data/recovery/manual-cleanup/<run_id>-<attempt>.json`을 기록한다.
+- report는 다음 bounded 필드만 가진다.
+  - `run_id`, `attempt`, `failed_stage`, `worker_id`, `status=cleanup_required`
+  - archive 실패 시 `current_artifact_path`, `intended_recovery_path`
+- archive/DB/provider 예외 원문과 raw payload는 report에 포함하지 않는다.
+- report 쓰기 자체가 실패하면 원래 pipeline 예외를 유지하고 비밀 없는 `수동 제작 정리 보고서 기록에 실패했습니다` note를 별도로 추가한다.
+
+#### 다음 실행의 bounded reconciliation
+
+- 새 `app/services/manual_slot_recovery.py`가 해당 run ID의 cleanup report만 제한적으로 읽는다.
+- report의 현재 artifact 경로는 정확히 `data/work/<run_id>`여야 하고, intended 경로는 `data/recovery/manual-artifacts/` 내부여야 한다. 경계 밖 경로는 이동하지 않는다.
+- transient archive 실패가 해소되면 다음 `ensure_target_available()` 또는 `manual_reservation_for_prebuild()` 호출이 완성본을 intended recovery 경로로 원자 이동한다.
+- worker ID는 `manual-prebuild:<run_id>:<attempt>:` 소유 형식을 검증하고, Task 1의 `fail_owned_slot()`이 실제 DB worker 소유권을 다시 확인한 뒤에만 failed 상태와 worker 해제를 적용한다.
+- DB가 이미 failed/worker-null이면 reconciliation은 idempotent하게 archive 경로만 `artifact_path`에 반영한다.
+- artifact와 DB 정리가 모두 확인된 뒤에만 cleanup report를 제거한다. 일부 경계가 아직 실패하면 report를 보존하고 해당 manual/target 작업을 진행시키지 않는다.
+- 수동 예약 resolver는 non-reserved manual 상태도 반환하므로 reconciliation 직후 failed 수동 회차가 자동 researcher 경로로 조용히 대체되지 않는다.
+
+#### global lock 범위 수정
+
+- worker가 소유한 global lock은 성공, 일반 실패, archive 실패, DB cleanup 전체 실패, cleanup report 쓰기 실패를 포함한 모든 `finally` 경로에서 항상 `release_owned_lock()`으로 해제한다.
+- DB가 잠시 실패해 해당 수동 회차 worker가 남더라도 cleanup report가 다음 수동 조회에서 ownership cleanup을 재시도한다.
+- 다른 세 회차는 한 수동 회차의 DB 복구 대기 때문에 global pipeline deadlock에 빠지지 않는다.
+
+### 수정 라운드 2 TDD 증거
+
+#### RED — archive report/reconciliation 및 lock deadlock
+
+명령:
+
+```powershell
+D:\ms\shorts-factory-be\venv\Scripts\python.exe -m pytest -q tests/test_manual_slot_pipeline.py
+```
+
+수정 전 결과: `3 failed, 8 passed in 1.21s`.
+
+- archive 이동 실패 시 global lock이 남아 실패
+- 정상 failed 전이와 ownership fallback이 모두 실패할 때 global lock이 남아 실패
+- cleanup report 쓰기 실패에서도 global lock이 남아 실패
+
+각 테스트는 lock assertion 이후에 report 필드, next-run reconciliation, worker 정리와 원래 예외 보존까지 검증하도록 작성했다.
+
+#### GREEN — 수동 worker와 실제 retry
+
+같은 명령 결과: `11 passed in 0.99s`.
+
+- 첫 archive 이동을 강제로 실패시켜 현재/의도 경로가 기록된 safe report와 `work/<run_id>` 보존을 확인했다.
+- 다음 `ensure_target_available()` 호출에서 artifact 이동, DB `artifact_path` 수정, report 제거를 확인했다.
+- 같은 회차를 attempt 2로 다시 예약해 실제 worker가 `review_ready`와 새 `work/<run_id>`를 만드는 것까지 확인했다.
+- DB cleanup 전체 실패 시 global lock 해제와 worker 포함 cleanup report를 확인하고, 다음 resolver 호출에서 failed/worker-null reconciliation을 확인했다.
+- report 쓰기 실패의 원문 비밀이 exception note에 노출되지 않고 원래 render 예외가 유지됨을 확인했다.
+
+#### GREEN — 관련 집중 회귀
+
+명령:
+
+```powershell
+D:\ms\shorts-factory-be\venv\Scripts\python.exe -m pytest -q tests/test_manual_slot_pipeline.py tests/test_slot_prebuild.py tests/test_slot_reservations.py tests/test_recovery.py tests/test_quality_gate.py tests/test_story_prompts.py
+```
+
+결과: `104 passed in 2.50s`.
+
+추가 검사:
+
+```powershell
+D:\ms\shorts-factory-be\venv\Scripts\python.exe -m compileall -q app tests\test_manual_slot_pipeline.py
+git diff --check
+```
+
+결과: compileall 성공, diff 오류 없음(CRLF 변환 안내만 존재).
+
+#### 전체 백엔드
+
+명령:
+
+```powershell
+D:\ms\shorts-factory-be\venv\Scripts\python.exe -m pytest -q
+```
+
+결과: `369 passed in 4.26s`.
+
+### 수정 라운드 2 셀프 리뷰와 우려
+
+- 자동 경로는 cleanup report가 없는 모든 기존 회차에서 동일하며 자동 호출 순서·결과 형식을 수정하지 않았다.
+- report가 손상되거나 경로/worker 검증에 실패하면 이를 소비·삭제하지 않고 manual 작업을 중단한다. useful artifact를 삭제하거나 경계 밖으로 이동하지 않는다.
+- archive source와 intended destination이 동시에 존재하는 충돌은 어느 쪽도 덮어쓰지 않고 report를 보존한다.
+- cleanup report 쓰기마저 실패하면 다음 실행이 자동으로 DB ownership을 복구할 단서가 없을 수 있다. 이 경우에도 원래 예외에 안전한 note가 남고 global lock은 해제되어 다른 회차가 계속 실행된다.

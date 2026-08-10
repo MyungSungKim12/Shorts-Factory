@@ -73,22 +73,38 @@ def _safe_note(exc: Exception, message: str) -> None:
 
 
 def _archive_promoted_artifact(
-    data_dir: Path, destination: Path, staging_id: str
+    data_dir: Path,
+    destination: Path,
+    staging_id: str,
+    intended: Path | None = None,
 ) -> Path:
     archive_root = data_dir / "recovery" / "manual-artifacts"
     archive_root.mkdir(parents=True, exist_ok=True)
+    archive = intended or _intended_archive_path(data_dir, staging_id)
+    destination.replace(archive)
+    return archive
+
+
+def _intended_archive_path(data_dir: Path, staging_id: str) -> Path:
+    archive_root = data_dir / "recovery" / "manual-artifacts"
     stem = f"{staging_id}-failed-{_now():%Y%m%d-%H%M%S}-{os.getpid()}"
     archive = archive_root / stem
     suffix = 1
     while archive.exists():
         archive = archive_root / f"{stem}-{suffix}"
         suffix += 1
-    destination.replace(archive)
     return archive
 
 
 def _write_cleanup_report(
-    data_dir: Path, run_id: str, attempt: int, stage: str
+    data_dir: Path,
+    run_id: str,
+    attempt: int,
+    failed_stage: str,
+    worker_id: str,
+    *,
+    current_artifact_path: Path | None = None,
+    intended_recovery_path: Path | None = None,
 ) -> None:
     report = data_dir / "recovery" / "manual-cleanup" / f"{run_id}-{attempt}.json"
     report.parent.mkdir(parents=True, exist_ok=True)
@@ -97,8 +113,19 @@ def _write_cleanup_report(
         {
             "run_id": run_id,
             "attempt": attempt,
-            "stage": stage,
+            "failed_stage": failed_stage,
+            "worker_id": worker_id,
             "status": "cleanup_required",
+            "current_artifact_path": (
+                str(current_artifact_path)
+                if current_artifact_path is not None
+                else None
+            ),
+            "intended_recovery_path": (
+                str(intended_recovery_path)
+                if intended_recovery_path is not None
+                else None
+            ),
         },
     )
 
@@ -147,10 +174,6 @@ def _persist_failure(
             persisted = True
         except Exception:
             _safe_note(original, "수동 제작 실패 상태 정리에 실패했습니다")
-            try:
-                _write_cleanup_report(data_dir, run_id, attempt, failed_stage)
-            except Exception:
-                _safe_note(original, "수동 제작 정리 보고서 기록에 실패했습니다")
     if persisted:
         try:
             append_slot_event(
@@ -179,6 +202,8 @@ def run_manual_prebuild(
     reservation = manual_reservation_for_prebuild(data_dir, run_id)
     if reservation is None:
         raise RuntimeError("사전 제작할 수동 예약이 없습니다")
+    if reservation["state"] != "reserved":
+        raise RuntimeError(f"수동 예약이 제작 대기 상태가 아닙니다: {reservation['state']}")
     attempt = int(reservation["attempt"])
     worker_id = f"manual-prebuild:{run_id}:{attempt}:{os.getpid()}"
     staging_id = f"manual-prebuild-{run_id}-{attempt}"
@@ -189,8 +214,6 @@ def run_manual_prebuild(
         raise RuntimeError("수동 사전 제작 전역 파이프라인 잠금 획득 실패")
 
     current_state: str | None = None
-    slot_cleanup_complete = True
-    artifact_recovery_complete = True
     promoted_destination: Path | None = None
     boundary = "lock"
     previous_pipeline_run_id = os.environ.get("PIPELINE_RUN_ID")
@@ -200,7 +223,6 @@ def run_manual_prebuild(
         if locked is None:
             raise RuntimeError("수동 예약을 제작 작업자가 잠그지 못했습니다")
         current_state = "locked"
-        slot_cleanup_complete = False
         topic = _checked_topic(locked)
         selected = topic.get("format")
         if not isinstance(selected, str) or not selected:
@@ -327,7 +349,6 @@ def run_manual_prebuild(
             artifact_path=str(destination),
         )
         current_state = "review_ready"
-        slot_cleanup_complete = True
         append_slot_event(
             data_dir,
             run_id,
@@ -349,10 +370,16 @@ def run_manual_prebuild(
         if current_state in ACTIVE_STATES:
             failed_stage = current_state
             archived_artifact = None
+            intended_artifact = None
+            artifact_recovery_complete = True
             if promoted_destination is not None and promoted_destination.exists():
+                intended_artifact = _intended_archive_path(data_dir, staging_id)
                 try:
                     archived_artifact = _archive_promoted_artifact(
-                        data_dir, promoted_destination, staging_id
+                        data_dir,
+                        promoted_destination,
+                        staging_id,
+                        intended_artifact,
                     )
                 except Exception:
                     artifact_recovery_complete = False
@@ -366,11 +393,31 @@ def run_manual_prebuild(
                 exc,
                 artifact_path=archived_artifact,
             )
+            if not slot_cleanup_complete or not artifact_recovery_complete:
+                try:
+                    _write_cleanup_report(
+                        data_dir,
+                        run_id,
+                        attempt,
+                        failed_stage,
+                        worker_id,
+                        current_artifact_path=(
+                            promoted_destination
+                            if not artifact_recovery_complete
+                            else None
+                        ),
+                        intended_recovery_path=(
+                            intended_artifact
+                            if not artifact_recovery_complete
+                            else None
+                        ),
+                    )
+                except Exception:
+                    _safe_note(exc, "수동 제작 정리 보고서 기록에 실패했습니다")
         raise
     finally:
         if previous_pipeline_run_id is None:
             os.environ.pop("PIPELINE_RUN_ID", None)
         else:
             os.environ["PIPELINE_RUN_ID"] = previous_pipeline_run_id
-        if slot_cleanup_complete and artifact_recovery_complete:
-            release_owned_lock(lock_path, worker_id, os.getpid())
+        release_owned_lock(lock_path, worker_id, os.getpid())

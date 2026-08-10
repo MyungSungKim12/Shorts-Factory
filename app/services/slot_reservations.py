@@ -461,6 +461,16 @@ def fail_owned_slot(
         if row is None:
             raise SlotConflict("reservation does not exist")
         if row["state"] == "failed" and row["worker_id"] is None:
+            if artifact_path is not None:
+                db.execute(
+                    """
+                    UPDATE slot_reservations
+                    SET artifact_path = ?, updated_at = ?
+                    WHERE run_id = ? AND state = 'failed' AND worker_id IS NULL
+                    """,
+                    (artifact_path, timestamp, run_id),
+                )
+                row = _fetch_reservation(db, run_id)
             result = _row_to_dict(row)
             db.commit()
             return result

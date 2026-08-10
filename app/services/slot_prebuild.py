@@ -10,6 +10,8 @@ from datetime import datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from app.services.manual_slot_recovery import reconcile_manual_cleanup
+
 
 KST = ZoneInfo("Asia/Seoul")
 SCHEDULE = (
@@ -24,6 +26,9 @@ REQUIRED_FILES = ("topic.json", "script.json", "produce_log.json", "output.mp4")
 def manual_reservation_for_prebuild(data_dir: Path, run_id: str) -> dict | None:
     """Return the checked payload for a reserved manual slot, if one exists."""
     data_dir = Path(data_dir)
+    reconciliation = reconcile_manual_cleanup(data_dir, run_id)
+    if not reconciliation["complete"]:
+        raise RuntimeError("수동 예약 복구 정리가 완료되지 않았습니다")
     database = data_dir / "videos.sqlite"
     if not database.exists():
         return None
@@ -40,7 +45,7 @@ def manual_reservation_for_prebuild(data_dir: Path, run_id: str) -> dict | None:
                 """
                 SELECT run_id, state, attempt, check_result, production_at, upload_at
                 FROM slot_reservations
-                WHERE run_id = ? AND mode = 'manual' AND state = 'reserved'
+                WHERE run_id = ? AND mode = 'manual'
                 """,
                 (run_id,),
             ).fetchone()
@@ -48,6 +53,14 @@ def manual_reservation_for_prebuild(data_dir: Path, run_id: str) -> dict | None:
         raise RuntimeError(f"수동 예약 조회 실패: {exc}") from exc
     if row is None:
         return None
+    if row["state"] != "reserved":
+        return {
+            "run_id": row["run_id"],
+            "state": row["state"],
+            "attempt": row["attempt"],
+            "production_at": row["production_at"],
+            "upload_at": row["upload_at"],
+        }
     try:
         checked = json.loads(row["check_result"])
         topic_payload = checked["topic_payload"]
@@ -117,6 +130,9 @@ def _already_uploaded(data_dir: Path, run_id: str) -> bool:
 def ensure_target_available(data_dir: Path, run_id: str) -> None:
     """기존 예약 패키지나 업로드 이력이 있는 회차를 덮어쓰지 않는다."""
     data_dir = Path(data_dir)
+    reconciliation = reconcile_manual_cleanup(data_dir, run_id)
+    if not reconciliation["complete"]:
+        raise RuntimeError("수동 예약 복구 정리가 완료되지 않았습니다")
     if _already_uploaded(data_dir, run_id):
         raise RuntimeError(f"이미 업로드된 회차입니다: {run_id}")
     if (data_dir / "work" / run_id).exists():
