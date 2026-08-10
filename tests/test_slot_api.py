@@ -1,4 +1,5 @@
 import json
+import os
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -346,3 +347,131 @@ def test_detail_exposes_bounded_review_metadata_without_internal_paths(configure
     assert "artifact_path" not in response.text
     assert "private-stage" not in response.text
     assert "hidden" not in response.text
+
+
+def test_symlinked_work_root_outside_data_dir_is_never_trusted(
+    configured_api, tmp_path_factory
+):
+    run_id = _run_id()
+    outside = tmp_path_factory.mktemp("outside-work")
+    external_artifact = outside / run_id
+    external_artifact.mkdir()
+    (external_artifact / "output.mp4").write_bytes(b"outside-video")
+    (external_artifact / "script.json").write_text(
+        json.dumps({"title": "outside-secret-title"}), encoding="utf-8"
+    )
+    os.symlink(outside, configured_api / "work", target_is_directory=True)
+    _seed_manual(
+        configured_api,
+        run_id,
+        "review_ready",
+        artifact=configured_api / "work" / run_id,
+    )
+
+    detail = client.get(f"/api/slots/{run_id}")
+    video = client.get(f"/api/slots/{run_id}/video", headers=TOKEN)
+
+    assert detail.status_code == 200
+    assert "review" not in detail.json()
+    assert "outside-secret-title" not in detail.text
+    assert video.status_code == 404
+
+
+def test_detail_does_not_follow_symlinked_review_metadata(
+    configured_api, tmp_path_factory
+):
+    run_id = _run_id()
+    work = configured_api / "work" / run_id
+    work.mkdir(parents=True)
+    outside = tmp_path_factory.mktemp("outside-metadata")
+    external_script = outside / "script.json"
+    external_script.write_text(
+        json.dumps({"title": "outside-secret-title"}), encoding="utf-8"
+    )
+    os.symlink(external_script, work / "script.json")
+    (work / "prepared.json").write_text(
+        json.dumps({"run_id": run_id, "quality_gate": {"passed": True}}),
+        encoding="utf-8",
+    )
+    _seed_manual(configured_api, run_id, "review_ready", artifact=work)
+
+    response = client.get(f"/api/slots/{run_id}")
+
+    assert response.status_code == 200
+    assert "script" not in response.json()["review"]
+    assert "outside-secret-title" not in response.text
+
+
+def test_events_use_explicit_schema_and_defensive_secret_redaction(
+    configured_api, monkeypatch
+):
+    from app.routes import slots
+
+    run_id = _run_id()
+    _seed_manual(configured_api, run_id, "reservable")
+    monkeypatch.setattr(
+        slots,
+        "events_after",
+        lambda *args, **kwargs: [
+            {
+                "id": 9,
+                "run_id": run_id,
+                "stage": "topic_check",
+                "level": "info",
+                "message": (
+                    "access_token=message-secret Authorization: Bearer bearer-secret "
+                    "raw_payload=provider-secret " + "x" * 600
+                ),
+                "metadata": {
+                    "attempt": 2,
+                    "status": "reservable",
+                    "access_token": "metadata-secret",
+                    "raw_payload": {"body": "provider-secret"},
+                    "surprise": "not-public",
+                },
+                "created_at": "2026-08-10T10:00:00+09:00",
+                "provider_response": {"secret": "raw"},
+            }
+        ],
+    )
+
+    response = client.get(f"/api/slots/{run_id}/events")
+
+    assert response.status_code == 200
+    event = response.json()["events"][0]
+    assert set(event) == {
+        "id", "run_id", "stage", "level", "message", "metadata", "created_at"
+    }
+    assert event["metadata"] == {"attempt": 2, "status": "reservable"}
+    assert len(event["message"]) <= 500
+    assert "[redacted]]" not in event["message"]
+    for secret in (
+        "message-secret", "bearer-secret", "provider-secret",
+        "metadata-secret", "not-public",
+    ):
+        assert secret not in response.text
+
+
+def test_detail_omits_non_allowlisted_grounding_error(configured_api):
+    run_id = _run_id()
+    _seed_manual(configured_api, run_id, "failed")
+    with sqlite3.connect(configured_api / "videos.sqlite") as db:
+        db.execute(
+            "UPDATE slot_reservations SET check_result = ? WHERE run_id = ?",
+            (
+                json.dumps(
+                    {
+                        "status": "failed",
+                        "reason": "grounding_invalid",
+                        "grounding_error": "provider access_token=grounding-secret",
+                    }
+                ),
+                run_id,
+            ),
+        )
+
+    response = client.get(f"/api/slots/{run_id}")
+
+    assert response.status_code == 200
+    assert "grounding_error" not in response.json()["check_result"]
+    assert "grounding-secret" not in response.text

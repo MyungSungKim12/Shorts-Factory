@@ -39,3 +39,28 @@
 - 즉시 승인만 정확히 한 개의 `run_pipeline(..., slot=N)` 백그라운드 작업을 추가하며, 사전 승인은 cron을 기다린다.
 - 새 소재 재시도는 저장된 요청을 먼저 검증한 뒤 상태를 바꾸고 검사 작업을 하나만 추가한다.
 - 현재 확인된 미해결 결함은 없다.
+
+## Gate review fix round 1
+
+### RED
+
+- `DATA_DIR/work`가 외부 디렉터리 심볼릭 링크일 때 상세 메타데이터와 MP4가 노출됨을 재현했다.
+- 정상 artifact 디렉터리 안의 `script.json`이 외부 파일 링크일 때 공개 상세 API가 파일을 읽는 문제를 재현했다.
+- 이벤트 조회가 임의 키, `access_token`, raw payload 및 메시지의 자격 증명 값을 그대로 반환하는 문제를 재현했다.
+- `grounding_error`에 저장된 임의 제공자 오류 문자열이 상세 응답에 노출되는 문제를 재현했다.
+- RED 명령: `D:\ms\shorts-factory-be\venv\Scripts\python.exe -m pytest -q tests/test_slot_api.py -k "symlinked_work_root or symlinked_review_metadata or explicit_schema or non_allowlisted_grounding_error"`
+- RED 결과: `4 failed, 22 deselected`.
+
+### GREEN
+
+- 해석된 `DATA_DIR` 내부의 비링크 `work/<run_id>`만 artifact 루트로 인정하고 detail/video가 같은 검증 함수를 사용하도록 했다.
+- 리뷰 JSON과 MP4는 검증된 artifact 디렉터리의 직접 자식인 비링크 정규 파일만 읽는다.
+- 이벤트 응답을 7개 고정 필드로 직렬화하고, 메시지를 500자로 제한·재마스킹하며 메타데이터 키/타입/길이를 허용 목록으로 제한했다.
+- `grounding_error`는 `verification_method`, `verified_at`, `distinct_sources`, `fact_source_linkage`, `topic_contract` 코드만 공개한다.
+- 집중 명령 결과: `37 passed in 0.91s`.
+- 전체 명령 결과: `420 passed in 6.97s`.
+- 보조 확인: `compileall`과 `git diff --check` 통과.
+
+### 우려 사항
+
+- 현재 확인된 미해결 결함은 없다.

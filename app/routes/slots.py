@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
+import stat
 from datetime import date, datetime
 from pathlib import Path as FilePath
 from typing import Annotated, Literal
@@ -69,11 +71,45 @@ _CHECK_RESULT_FIELDS = {
     "core_question", "channel_fit", "channel_warning", "verification_method",
     "safety", "sources", "visual", "topic_payload", "grounding_error",
 }
+_PUBLIC_GROUNDING_ERRORS = {
+    "verification_method",
+    "verified_at",
+    "distinct_sources",
+    "fact_source_linkage",
+    "topic_contract",
+}
 _SENSITIVE_KEYS = {
     "api_key", "authorization", "cookie", "credential", "credentials",
     "password", "provider_payload", "provider_response", "raw_payload",
     "raw_response", "secret", "session", "token",
 }
+_EVENT_LEVELS = {"debug", "info", "warning", "error"}
+_EVENT_METADATA_CODES = {
+    "status", "failed_stage", "reason", "grounding_error", "visual_level",
+    "verification_method", "mode",
+}
+_EVENT_METADATA_COUNTS = {
+    "attempt": 1_000,
+    "interpretation_count": 5,
+    "visual_candidate_count": 1_000_000,
+}
+_EVENT_METADATA_FLAGS = {"channel_warning", "truncated"}
+_SAFE_CODE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_EVENT_SECRET_VALUE = re.compile(
+    r'''(?ix)
+    (?P<label>
+        (?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|credential|
+        secret|password|cookie|session|raw[_-]?(?:response|
+        payload|body|headers|request)|provider[_-]?(?:response|payload|body|headers))
+        \s*[:=]\s*
+    )
+    (?P<value>"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s,;}\]]+)
+    ''',
+)
+_AUTHORIZATION_VALUE = re.compile(
+    r"(?i)\bauthorization\s*:\s*(?:basic|bearer)\s+[^\s,;}\]]+"
+)
+_BOT_TOKEN = re.compile(r"(?<!\d)\d{5,15}:[A-Za-z0-9_-]{20,}")
 
 
 class TopicCheckRequest(BaseModel):
@@ -189,6 +225,66 @@ def _sanitize(value):
     return value
 
 
+def _redact_event_message(value: object) -> str:
+    text = str(value) if isinstance(value, str) else ""
+    text = _AUTHORIZATION_VALUE.sub("Authorization: [redacted]", text)
+    text = _EVENT_SECRET_VALUE.sub(r"\g<label>[redacted]", text)
+    return _BOT_TOKEN.sub("[redacted]", text)[:500]
+
+
+def _public_event_metadata(value: object) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    result = {}
+    for key in _EVENT_METADATA_CODES:
+        item = value.get(key)
+        if isinstance(item, str) and _SAFE_CODE.fullmatch(item):
+            result[key] = item
+    for key, maximum in _EVENT_METADATA_COUNTS.items():
+        item = value.get(key)
+        if isinstance(item, int) and not isinstance(item, bool) and 0 <= item <= maximum:
+            result[key] = item
+    for key in _EVENT_METADATA_FLAGS:
+        item = value.get(key)
+        if isinstance(item, bool):
+            result[key] = item
+    return result
+
+
+def _public_event(value: object, run_id: str) -> dict | None:
+    if not isinstance(value, dict):
+        return None
+    event_id = value.get("id")
+    if not isinstance(event_id, int) or isinstance(event_id, bool) or event_id < 1:
+        return None
+    stage = value.get("stage")
+    if not isinstance(stage, str) or not _SAFE_CODE.fullmatch(stage):
+        stage = "unknown"
+    level = value.get("level")
+    if level not in _EVENT_LEVELS:
+        level = "info"
+    created_at = value.get("created_at")
+    if isinstance(created_at, str) and len(created_at) <= 64:
+        try:
+            parsed = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        except ValueError:
+            created_at = None
+        else:
+            if parsed.tzinfo is None:
+                created_at = None
+    else:
+        created_at = None
+    return {
+        "id": event_id,
+        "run_id": run_id,
+        "stage": stage,
+        "level": level,
+        "message": _redact_event_message(value.get("message")),
+        "metadata": _public_event_metadata(value.get("metadata")),
+        "created_at": created_at,
+    }
+
+
 def _public_slot(slot: dict) -> dict:
     result = {
         key: _sanitize(value)
@@ -202,6 +298,8 @@ def _public_slot(slot: dict) -> dict:
             for key, value in check_result.items()
             if key in _CHECK_RESULT_FIELDS
         }
+        if result["check_result"].get("grounding_error") not in _PUBLIC_GROUNDING_ERRORS:
+            result["check_result"].pop("grounding_error", None)
     run_id = result.get("run_id")
     if "slot" not in result and isinstance(run_id, str):
         result["slot"] = int(run_id[-1])
@@ -243,28 +341,68 @@ def _run_topic_check_job(data_dir: FilePath, run_id: str, request: ManualTopicIn
         return
 
 
+def _validated_artifact_dir(
+    data_dir: FilePath, run_id: str, artifact: object
+) -> tuple[FilePath, FilePath] | None:
+    if not isinstance(artifact, str) or not artifact:
+        return None
+    try:
+        data_root = data_dir.resolve(strict=True)
+        work_path = data_root / "work"
+        if work_path.is_symlink():
+            return None
+        work_root = work_path.resolve(strict=True)
+        if work_root == data_root or not work_root.is_relative_to(data_root):
+            return None
+        expected_path = work_path / run_id
+        if expected_path.is_symlink():
+            return None
+        expected_dir = expected_path.resolve(strict=True)
+        artifact_dir = FilePath(artifact).resolve(strict=True)
+    except OSError:
+        return None
+    if (
+        artifact_dir != expected_dir
+        or not artifact_dir.is_relative_to(work_root)
+        or not artifact_dir.is_dir()
+    ):
+        return None
+    return work_root, artifact_dir
+
+
+def _read_review_json(artifact_dir: FilePath, filename: str) -> dict | None:
+    candidate = artifact_dir / filename
+    try:
+        if candidate.is_symlink():
+            return None
+        resolved = candidate.resolve(strict=True)
+        if (
+            resolved.parent != artifact_dir
+            or not resolved.is_relative_to(artifact_dir)
+            or not stat.S_ISREG(resolved.stat().st_mode)
+        ):
+            return None
+        value = json.loads(resolved.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
 def _review_metadata(data_dir: FilePath, run_id: str, slot: dict) -> dict | None:
     if slot.get("state") not in {"review_ready", "approved", "held"}:
         return None
     artifact = slot.get("artifact_path")
     if not artifact:
         return None
-    expected = (data_dir / "work" / run_id).resolve()
-    try:
-        actual = FilePath(artifact).resolve(strict=True)
-        work_root = (data_dir / "work").resolve(strict=True)
-    except OSError:
+    validated = _validated_artifact_dir(data_dir, run_id, artifact)
+    if validated is None:
         return None
-    if actual != expected or not actual.is_relative_to(work_root):
-        return None
+    _, actual = validated
 
     review = {}
     for key, filename in (("script", "script.json"), ("package", "prepared.json")):
-        try:
-            value = json.loads((actual / filename).read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if not isinstance(value, dict):
+        value = _read_review_json(actual, filename)
+        if value is None:
             continue
         if key == "script":
             allowed = {
@@ -336,7 +474,12 @@ def slot_events(
 ):
     data_dir = _data_dir()
     _manual_slot_or_404(data_dir, run_id)
-    return {"run_id": run_id, "events": _sanitize(events_after(data_dir, run_id, after_id, limit))}
+    events = (
+        public
+        for event in events_after(data_dir, run_id, after_id, limit)
+        if (public := _public_event(event, run_id)) is not None
+    )
+    return {"run_id": run_id, "events": list(events)}
 
 
 @router.get("/{run_id}/video", dependencies=[Depends(require_dashboard_token)])
@@ -348,17 +491,19 @@ def slot_video(run_id: RunId):
     artifact = slot.get("artifact_path")
     if not artifact:
         raise HTTPException(status_code=404, detail="영상 산출물이 없습니다")
+    validated = _validated_artifact_dir(data_dir, run_id, artifact)
+    if validated is None:
+        raise HTTPException(status_code=404, detail="영상 산출물이 없습니다")
+    work_root, artifact_dir = validated
     try:
-        work_root = (data_dir / "work").resolve(strict=True)
-        expected_dir = (data_dir / "work" / run_id).resolve(strict=True)
-        artifact_dir = FilePath(artifact).resolve(strict=True)
-        video = (artifact_dir / "output.mp4").resolve(strict=True)
+        video_path = artifact_dir / "output.mp4"
+        if video_path.is_symlink():
+            raise OSError("symlinked video")
+        video = video_path.resolve(strict=True)
     except OSError as exc:
         raise HTTPException(status_code=404, detail="영상 산출물이 없습니다") from exc
     if (
-        artifact_dir != expected_dir
-        or not artifact_dir.is_relative_to(work_root)
-        or not video.is_relative_to(work_root)
+        not video.is_relative_to(work_root)
         or video.parent != artifact_dir
         or not video.is_file()
     ):
