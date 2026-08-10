@@ -268,6 +268,33 @@ def _grounding_error(topic: object) -> str | None:
     return None
 
 
+def validate_reservable_check_result(result: object) -> dict:
+    """Revalidate a persisted topic-check result before reusing its topic."""
+    if not isinstance(result, dict):
+        raise ValueError("saved check result must be an object")
+    if result.get("status") != "reservable" or result.get("reservable") is not True:
+        raise ValueError("saved check result is not reservable")
+    visual = result.get("visual")
+    if not isinstance(visual, dict) or visual.get("reservable") is not True:
+        raise ValueError("saved visual check is not reservable")
+    safety = result.get("safety")
+    if not isinstance(safety, dict) or safety.get("allowed") is not True:
+        raise ValueError("saved safety check is not allowed")
+
+    topic = validate_manual_story_topic(result.get("topic_payload"))
+    grounding_error = _grounding_error(topic)
+    if grounding_error is not None:
+        raise ValueError(f"saved grounding is invalid: {grounding_error}")
+    if result.get("verification_method") != topic["verification_method"]:
+        raise ValueError("saved verification metadata does not match the topic")
+    normalized = result.get("normalized_topic")
+    if not isinstance(normalized, str) or normalized.strip() != topic["topic"]:
+        raise ValueError("saved normalized topic does not match the topic")
+    if result.get("sources") != _source_summary(topic):
+        raise ValueError("saved source summary does not match the topic facts")
+    return {**result, "normalized_topic": normalized.strip(), "topic_payload": topic}
+
+
 def _failed_result(
     data_dir: Path,
     run_id: str,

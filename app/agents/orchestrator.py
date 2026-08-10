@@ -137,6 +137,7 @@ async def run_pipeline(data_dir: Path, ffmpeg_path: str, slot: int = None) -> di
 
         topic_file = work_dir / "topic.json"
         topic = None
+        package_format = content_format
         if topic_file.exists():
             try:
                 saved_topic = json.loads(topic_file.read_text(encoding="utf-8"))
@@ -144,6 +145,7 @@ async def run_pipeline(data_dir: Path, ffmpeg_path: str, slot: int = None) -> di
                     from app.models import validate_manual_story_topic
 
                     topic = validate_manual_story_topic(saved_topic)
+                    package_format = topic["format"]
                 else:
                     topic = validate_topic(saved_topic, content_format)
                 run_log["stages"]["researcher"] = {"status": "skipped", "topic": topic.get("topic", "")}
@@ -171,7 +173,7 @@ async def run_pipeline(data_dir: Path, ffmpeg_path: str, slot: int = None) -> di
             try:
                 saved_script = json.loads(script_file.read_text(encoding="utf-8"))
                 script = validate_script(
-                    saved_script, content_format
+                    saved_script, package_format
                 )
                 if saved_script.get("writer_mode") in {"llm", "llm_retry", "verified_template"}:
                     script["writer_mode"] = saved_script["writer_mode"]

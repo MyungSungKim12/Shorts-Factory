@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +16,7 @@ from app.services.slot_reservations import (
     init_slot_tables,
     slot_window,
 )
+from app.services.manual_topic import validate_reservable_check_result
 from app.services.temp_cleanup import (
     _process_alive,
     cleanup_rejected_artifacts,
@@ -29,6 +32,7 @@ _JSON_COLUMNS = {
     "request_json",
     "check_result",
 }
+logger = logging.getLogger(__name__)
 
 
 def _as_kst(value: datetime) -> datetime:
@@ -86,6 +90,17 @@ def _assert_no_live_global_lock(data_dir: Path) -> None:
 def _assert_idle(row: sqlite3.Row) -> None:
     if row["worker_id"] is not None:
         raise SlotConflict("수동 회차 작업자가 아직 종료되지 않았습니다")
+
+
+def _safe_append_event(*args, **kwargs) -> None:
+    """Keep an already committed action successful if its audit sink is down."""
+    try:
+        append_slot_event(*args, **kwargs)
+    except Exception:
+        try:
+            logger.warning("수동 회차 감사 이벤트 기록 실패")
+        except Exception:
+            pass
 
 
 def upload_decision(
@@ -176,7 +191,9 @@ def approve_slot(data_dir: Path, run_id: str, now: datetime) -> dict:
         raise
     finally:
         db.close()
-    append_slot_event(data_dir, run_id, "approved", "info", "수동 영상을 승인했습니다")
+    _safe_append_event(
+        data_dir, run_id, "approved", "info", "수동 영상을 승인했습니다"
+    )
     return {**result, "upload_action": action}
 
 
@@ -211,6 +228,8 @@ def reject_slot(
             archive.parent.mkdir(parents=True, exist_ok=True)
             source.replace(archive)
             moved = True
+            rejected_timestamp = _as_kst(now).timestamp()
+            os.utime(archive, (rejected_timestamp, rejected_timestamp))
 
         timestamp = _timestamp(now)
         db.execute(
@@ -232,7 +251,7 @@ def reject_slot(
         raise
     finally:
         db.close()
-    append_slot_event(
+    _safe_append_event(
         data_dir,
         run_id,
         "rejected",
@@ -264,18 +283,15 @@ def retry_slot(
         normalized_topic = None
         if mode == "same_topic":
             try:
-                check_result = json.loads(row["check_result"])
-                valid = (
-                    isinstance(check_result, dict)
-                    and check_result.get("status") == "reservable"
-                    and isinstance(check_result.get("topic_payload"), dict)
+                check_result = validate_reservable_check_result(
+                    json.loads(row["check_result"])
                 )
-            except (TypeError, json.JSONDecodeError):
-                valid = False
-            if not valid:
-                raise SlotConflict("같은 소재로 재시도할 유효한 검증 결과가 없습니다")
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                raise SlotConflict(
+                    "같은 소재로 재시도할 유효한 검증 결과가 없습니다"
+                ) from exc
             target = "reserved"
-            normalized_topic = row["normalized_topic"]
+            normalized_topic = check_result["normalized_topic"]
 
         timestamp = _timestamp(now)
         db.execute(
@@ -305,7 +321,7 @@ def retry_slot(
         raise
     finally:
         db.close()
-    append_slot_event(
+    _safe_append_event(
         data_dir,
         run_id,
         target,
@@ -343,7 +359,9 @@ def skip_slot(data_dir: Path, run_id: str, now: datetime) -> dict:
         raise
     finally:
         db.close()
-    append_slot_event(data_dir, run_id, "skipped", "info", "수동 회차를 건너뛰었습니다")
+    _safe_append_event(
+        data_dir, run_id, "skipped", "info", "수동 회차를 건너뛰었습니다"
+    )
     return result
 
 

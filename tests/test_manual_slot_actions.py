@@ -14,6 +14,7 @@ import pytest
 from app.agents import orchestrator
 from app.services.manual_slot_actions import (
     approve_slot,
+    cleanup_rejected_artifacts,
     reject_slot,
     retry_slot,
     skip_slot,
@@ -37,11 +38,83 @@ def kst(hour: int, minute: int = 0) -> datetime:
 
 
 def checked_result() -> dict:
+    topic = manual_topic_payload()
     return {
         "status": "reservable",
-        "normalized_topic": "검증된 수동 소재",
-        "topic_payload": {"format": "story", "topic": "검증된 수동 소재"},
-        "visual": {"level": "high", "reservable": True},
+        "reservable": True,
+        "normalized_topic": topic["topic"],
+        "verification_method": "grounded_search",
+        "safety": {"allowed": True, "reason": "일반 과학 설명"},
+        "sources": [
+            {"source": fact["source"], "source_url": fact["source_url"]}
+            for fact in topic["facts"]
+        ],
+        "topic_payload": topic,
+        "visual": {"level": "high", "reservable": True, "candidate_count": 1},
+    }
+
+
+def manual_topic_payload() -> dict:
+    return {
+        "format": "story",
+        "topic": "1977년 단 한 번 관측된 와우 신호의 정체",
+        "category": "science_mystery",
+        "hook_angle": "72초 동안 포착된 강한 신호는 다시 나타나지 않았다",
+        "target_keyword": "Wow signal",
+        "core_question": "와우 신호는 어디에서 왔는가",
+        "interest_score": 27,
+        "selection_reason": "한 번뿐인 우주 관측 기록이다",
+        "facts": [
+            {
+                "claim": "오하이오 주립대 전파망원경이 신호를 기록했다",
+                "value": "1977년 8월 15일 약 72초 동안 관측됐다",
+                "source": "Ohio State University",
+                "source_url": "https://osu.edu/wow-signal",
+            },
+            {
+                "claim": "신호는 수소선 주파수 부근에서 기록됐다",
+                "value": "천문학적 전파 관측 후보로 분석됐다",
+                "source": "SETI Institute",
+                "source_url": "https://www.seti.org/wow-signal",
+            },
+        ],
+        "visual_plan": [
+            {
+                "beat": "hook",
+                "keywords": ["Wow signal printout", "Big Ear radio telescope"],
+            }
+        ],
+        "visual_identity": {
+            "exact_queries": ["exact:Wow signal"],
+            "safe_fallbacks": ["radio telescope night"],
+            "required_exact": True,
+        },
+        "verification_method": "grounded_search",
+        "verified_at": "2026-08-10T01:23:45+00:00",
+    }
+
+
+def story_script() -> dict:
+    roles = ["hook", "context", "problem", "mechanism", "mechanism", "payoff", "close"]
+    return {
+        "format": "story",
+        "title": "단 한 번 포착된 와우 신호",
+        "description": "1977년 관측 기록을 살펴봅니다.",
+        "tags": ["와우신호"],
+        "hook": "72초 동안 나타난 신호는 무엇이었을까요",
+        "scenes": [
+            {
+                "n": index,
+                "role": role,
+                "narration": f"와우 신호 관측 기록의 {index}번째 단서를 확인합니다.",
+                "visuals": ["Wow signal printout", "radio telescope night"],
+                "duration_sec": 8,
+                "emphasis": [],
+            }
+            for index, role in enumerate(roles, start=1)
+        ],
+        "cta": "구독과 좋아요 부탁드립니다.",
+        "total_duration_sec": 56,
     }
 
 
@@ -145,10 +218,14 @@ def test_approved_manual_package_reuses_artifacts_and_records_uploaded_state(
 ):
     seed_review_ready_slot(tmp_path, with_artifact=True)
     work = tmp_path / "work" / RUN_ID
-    topic = {"format": "story", "topic": "검증된 수동 소재"}
-    script = {"format": "story", "title": "검증된 수동 영상"}
-    (work / "topic.json").write_text(json.dumps(topic), encoding="utf-8")
-    (work / "script.json").write_text(json.dumps(script), encoding="utf-8")
+    topic = manual_topic_payload()
+    script = story_script()
+    (work / "topic.json").write_text(
+        json.dumps(topic, ensure_ascii=False), encoding="utf-8"
+    )
+    (work / "script.json").write_text(
+        json.dumps(script, ensure_ascii=False), encoding="utf-8"
+    )
     (work / "produce_log.json").write_text(
         json.dumps(
             {
@@ -172,10 +249,7 @@ def test_approved_manual_package_reuses_artifacts_and_records_uploaded_state(
             return kst(11, 5) if tz is not None else kst(11, 5).replace(tzinfo=None)
 
     monkeypatch.setattr(orchestrator, "datetime", FixedDatetime)
-    monkeypatch.setattr(
-        "app.models.validate_manual_story_topic", lambda payload: payload
-    )
-    monkeypatch.setattr("app.models.validate_script", lambda payload, *_: payload)
+    monkeypatch.setenv("CONTENT_FORMAT", "ranking")
     for name in ("run_researcher", "run_writer", "run_producer"):
         monkeypatch.setattr(
             orchestrator,
@@ -202,6 +276,52 @@ def test_approved_manual_package_reuses_artifacts_and_records_uploaded_state(
     assert read_slot(tmp_path)["video_id"] == "manual-video"
 
 
+def test_approved_manual_script_uses_saved_story_format_when_global_is_ranking(
+    tmp_path, monkeypatch
+):
+    seed_review_ready_slot(tmp_path, with_artifact=True)
+    work = tmp_path / "work" / RUN_ID
+    invalid_story = story_script()
+    invalid_story["scenes"][0]["role"] = "context"
+    (work / "topic.json").write_text(
+        json.dumps(manual_topic_payload(), ensure_ascii=False), encoding="utf-8"
+    )
+    (work / "script.json").write_text(
+        json.dumps(invalid_story, ensure_ascii=False), encoding="utf-8"
+    )
+    (work / "produce_log.json").write_text(
+        json.dumps(
+            {
+                "script_sha256": hashlib.sha256(
+                    (work / "script.json").read_bytes()
+                ).hexdigest()
+            }
+        ),
+        encoding="utf-8",
+    )
+    (work / "prepared.json").write_text(
+        json.dumps({"run_id": RUN_ID, "quality_gate": {"passed": True}}),
+        encoding="utf-8",
+    )
+    approve_slot(tmp_path, RUN_ID, kst(11, 5))
+
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return kst(11, 5) if tz is not None else kst(11, 5).replace(tzinfo=None)
+
+    monkeypatch.setattr(orchestrator, "datetime", FixedDatetime)
+    monkeypatch.setenv("CONTENT_FORMAT", "ranking")
+    monkeypatch.setattr(
+        orchestrator,
+        "run_uploader",
+        lambda *args, **kwargs: pytest.fail("유효하지 않은 story 대본이 업로더에 도달함"),
+    )
+
+    with pytest.raises(RuntimeError, match="수동 대본 파일이 유효하지 않습니다"):
+        asyncio.run(orchestrator.run_pipeline(tmp_path, "ffmpeg", slot=1))
+
+
 def test_reject_archives_artifact_and_allows_same_topic_retry(tmp_path):
     seed_review_ready_slot(tmp_path, with_artifact=True)
 
@@ -219,6 +339,23 @@ def test_reject_archives_artifact_and_allows_same_topic_retry(tmp_path):
     assert retried["state"] == "reserved"
     assert retried["attempt"] == 2
     assert json.loads(read_slot(tmp_path)["check_result"])["status"] == "reservable"
+
+
+def test_reject_resets_old_artifact_mtime_to_rejection_time(tmp_path):
+    seed_review_ready_slot(tmp_path, with_artifact=True)
+    source = tmp_path / "work" / RUN_ID
+    old_timestamp = kst(0).timestamp() - 30 * 86400
+    os.utime(source, (old_timestamp, old_timestamp))
+
+    result = reject_slot(tmp_path, RUN_ID, "새로 반려", kst(10, 20))
+
+    archived = Path(result["archived_path"])
+    assert archived.stat().st_mtime == pytest.approx(kst(10, 20).timestamp(), abs=2)
+    assert cleanup_rejected_artifacts(tmp_path, 7, kst(10, 20)) == {
+        "removed_dirs": 0,
+        "removed_bytes": 0,
+    }
+    assert archived.exists()
 
 
 def test_new_topic_retry_clears_previous_check_fields(tmp_path):
@@ -240,6 +377,40 @@ def test_same_topic_retry_requires_a_valid_last_check(tmp_path):
         db.execute(
             "UPDATE slot_reservations SET check_result = ? WHERE run_id = ?",
             (json.dumps({"status": "failed"}), RUN_ID),
+        )
+
+    with pytest.raises(SlotConflict, match="검증"):
+        retry_slot(tmp_path, RUN_ID, "same_topic", kst(10, 21))
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda result: result.update(normalized_topic=""),
+        lambda result: result["visual"].update(reservable=False),
+        lambda result: result["topic_payload"].update(
+            verification_method="model_memory"
+        ),
+        lambda result: result["topic_payload"].update(
+            facts=result["topic_payload"]["facts"][:1]
+        ),
+        lambda result: result["topic_payload"].update(category="INVALID CATEGORY"),
+    ],
+)
+def test_same_topic_retry_revalidates_complete_saved_check(tmp_path, mutate):
+    seed_review_ready_slot(tmp_path, with_artifact=True)
+    reject_slot(tmp_path, RUN_ID, "재검증 필요", kst(10, 20))
+    malformed = checked_result()
+    mutate(malformed)
+    with sqlite3.connect(tmp_path / "videos.sqlite") as db:
+        db.execute(
+            "UPDATE slot_reservations SET normalized_topic = ?, check_result = ? "
+            "WHERE run_id = ?",
+            (
+                malformed.get("normalized_topic"),
+                json.dumps(malformed, ensure_ascii=False),
+                RUN_ID,
+            ),
         )
 
     with pytest.raises(SlotConflict, match="검증"):
@@ -268,3 +439,35 @@ def test_skip_finishes_rejected_slot_without_upload(tmp_path):
     result = skip_slot(tmp_path, RUN_ID, kst(10, 21))
 
     assert result["state"] == "skipped"
+
+
+@pytest.mark.parametrize("action", ["approve", "reject", "retry", "skip"])
+def test_committed_action_succeeds_when_audit_event_write_fails(
+    tmp_path, monkeypatch, action
+):
+    from app.services import manual_slot_actions
+
+    seed_review_ready_slot(tmp_path, with_artifact=action == "reject")
+    if action in {"retry", "skip"}:
+        reject_slot(tmp_path, RUN_ID, "준비", kst(10, 20))
+    monkeypatch.setattr(
+        manual_slot_actions,
+        "append_slot_event",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("event unavailable")),
+    )
+
+    if action == "approve":
+        result = approve_slot(tmp_path, RUN_ID, kst(10, 20))
+        expected = "approved"
+    elif action == "reject":
+        result = reject_slot(tmp_path, RUN_ID, "반려", kst(10, 20))
+        expected = "rejected"
+    elif action == "retry":
+        result = retry_slot(tmp_path, RUN_ID, "same_topic", kst(10, 21))
+        expected = "reserved"
+    else:
+        result = skip_slot(tmp_path, RUN_ID, kst(10, 21))
+        expected = "skipped"
+
+    assert result["state"] == expected
+    assert read_slot(tmp_path)["state"] == expected

@@ -55,3 +55,34 @@
 ## 남은 연계 사항
 
 - 업로드 시각 이후 승인 응답의 `upload_action=immediate`를 실제 단일 백그라운드 `run_pipeline` 호출로 연결하는 API 작업은 계획대로 Task 5 범위다.
+
+## 게이트 리뷰 수정 1차
+
+### 수정 내용
+
+- 오래된 work 디렉터리를 오늘 반려해도 즉시 정리되지 않도록, 이동 직후 반려 요청 시각으로 보관 디렉터리 mtime을 갱신했다.
+- `same_topic` 재시도는 Task 2의 수동 topic 계약과 그라운딩 검사로 저장 결과 전체를 다시 검증한다. 정규화 소재, 안전성, 시각자료 예약 가능 여부, 검증 메타데이터, 서로 다른 사실 출처, 출처 요약을 모두 확인한다.
+- 승인 패키지 대본은 전역 `CONTENT_FORMAT`이 아니라 검증된 저장 topic의 `format`으로 검사한다.
+- 승인·반려·재시도·건너뛰기 상태 커밋 이후 감사 이벤트 기록 실패는 정적·제한된 경고로 격리해 성공 응답을 보존한다.
+
+### RED
+
+- `tests/test_manual_slot_actions.py`: 10 failed, 10 passed. 오래된 mtime 유지 1건, 불완전 검증 결과 허용 5건, 커밋 후 이벤트 오류 전파 4건을 재현했다.
+- `-k saved_story_format`: 1 failed. 전역 ranking 설정에서 story 첫 장면 역할이 잘못된 대본이 업로더까지 도달했다.
+
+### GREEN 및 검증
+
+- 집중 테스트: 73 passed (`test_manual_slot_actions`, `test_manual_topic`, `test_uploader`, `test_recovery`, `test_temp_cleanup`).
+- 전체 백엔드: 393 passed.
+- `python -m compileall -q app scripts`, `git diff --check` 통과.
+
+### 추가 변경 파일
+
+- `app/services/manual_topic.py`
+- `app/services/manual_slot_actions.py`
+- `app/agents/orchestrator.py`
+- `tests/test_manual_slot_actions.py`
+
+### 우려사항
+
+- 없음. Task 5 즉시 업로드 백그라운드 연결 범위는 기존 연계 사항과 동일하다.
