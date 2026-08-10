@@ -23,7 +23,6 @@ ACTIVE_STATES = {
 ALLOWED_TRANSITIONS = {
     "draft": {"checking", "cancelled"},
     "checking": {"reservable", "needs_input", "failed"},
-    "needs_input": {"checking", "cancelled"},
     "reservable": {"reserved", "checking", "cancelled"},
     "reserved": {"locked", "checking", "cancelled"},
     "locked": {"researching", "failed"},
@@ -40,15 +39,27 @@ ALLOWED_TRANSITIONS = {
 }
 
 _RUN_ID = re.compile(r"^(\d{8})-([1-4])$")
-_SECRET_KEY = re.compile(
-    r"(?:token|key|credential|secret|password|authorization)", re.IGNORECASE
+_SENSITIVE_METADATA_KEY = re.compile(
+    r"(?:token|key|credential|secret|password|authorization|cookie|session)",
+    re.IGNORECASE,
+)
+_RAW_PROVIDER_PAYLOAD_KEY = re.compile(
+    r"(?:raw|response|payload|body|headers|request)", re.IGNORECASE
 )
 _SECRET_VALUE = re.compile(
-    r"(?i)\b(?:api[_-]?key|access[_-]?token|token|credential|secret|password)\s*[:=]\s*[^\s,;]+"
+    r'''(?ix)
+    (?P<label>
+        ["']?(?:api[_-]?key|access[_-]?token|token|credential|secret|password|
+        authorization|cookie|session)["']?\s*[:=]\s*
+    )
+    (?P<value>
+        "(?:\\.|[^"])*" | '(?:\\.|[^'])*' | [^\s,;}\]]+
+    )
+    '''
 )
 _BOT_TOKEN = re.compile(r"(?<!\d)\d{5,15}:[A-Za-z0-9_-]{20,}")
-_BEARER_TOKEN = re.compile(
-    r"(?i)\b(?:authorization\s*:\s*)?bearer\s+[A-Za-z0-9._~+/-]+"
+_AUTHORIZATION_VALUE = re.compile(
+    r"(?i)\bauthorization\s*:\s*(?:basic|bearer)\s+[^\s,;}\]]+"
 )
 _EVENT_LEVELS = {"debug", "info", "warning", "error"}
 _JSON_COLUMNS = {
@@ -409,6 +420,8 @@ def transition_slot(
             raise SlotConflict("reservation is not in an expected state")
         if target not in ALLOWED_TRANSITIONS.get(current, set()):
             raise SlotConflict(f"transition from {current} to {target} is not allowed")
+        if target in {"checking", "cancelled"}:
+            _ensure_input_open(run_id, now)
         assignments = ["state = ?", "updated_at = ?"]
         values: list[object] = [target, timestamp]
         for name, value in fields.items():
@@ -430,15 +443,18 @@ def transition_slot(
 
 
 def _redact_text(value: str) -> str:
-    return _BOT_TOKEN.sub(
-        "[redacted]", _BEARER_TOKEN.sub("[redacted]", _SECRET_VALUE.sub("[redacted]", value))
-    )
+    redacted = _AUTHORIZATION_VALUE.sub("Authorization: [redacted]", value)
+    redacted = _SECRET_VALUE.sub(r"\g<label>[redacted]", redacted)
+    return _BOT_TOKEN.sub("[redacted]", redacted)
 
 
 def _sanitize_metadata(value: object) -> object:
     if isinstance(value, dict):
         return {
-            str(key): "[redacted]" if _SECRET_KEY.search(str(key)) else _sanitize_metadata(item)
+            str(key): "[redacted]"
+            if _SENSITIVE_METADATA_KEY.search(str(key))
+            or _RAW_PROVIDER_PAYLOAD_KEY.search(str(key))
+            else _sanitize_metadata(item)
             for key, item in value.items()
         }
     if isinstance(value, list):
@@ -497,6 +513,8 @@ def events_after(
         raise ValueError("after_id must be a non-negative integer")
     if not isinstance(limit, int):
         raise ValueError("limit must be an integer")
+    if limit == 0:
+        return []
     init_slot_tables(data_dir)
     db = _connect(data_dir)
     try:

@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -7,6 +8,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from app.services.slot_reservations import (
+    ALLOWED_TRANSITIONS,
     SlotConflict,
     append_slot_event,
     create_check,
@@ -111,6 +113,17 @@ def test_needs_input_can_start_a_clarified_check(tmp_path: Path) -> None:
     assert restarted["attempt"] == 2
 
 
+def test_needs_input_is_rechecked_only_by_the_dedicated_operation(tmp_path: Path) -> None:
+    create_check(tmp_path, "20260810-2", {"topic_input": "세종"}, kst(10))
+    save_check_result(tmp_path, "20260810-2", {"status": "needs_input"}, kst(10, 1))
+
+    assert "needs_input" not in ALLOWED_TRANSITIONS
+    with pytest.raises(SlotConflict, match="not allowed"):
+        transition_slot(
+            tmp_path, "20260810-2", {"needs_input"}, "checking", kst(10, 2)
+        )
+
+
 def test_active_check_cannot_be_replaced_without_its_result(tmp_path: Path) -> None:
     create_check(tmp_path, "20260810-2", {"topic_input": "첫 소재"}, kst(10))
 
@@ -151,6 +164,36 @@ def test_transition_requires_expected_state_and_allowed_edge(tmp_path: Path) -> 
     assert transitioned["state"] == "locked"
     assert transitioned["stage"] == "research"
     assert transitioned["worker_id"] == "worker-a"
+
+
+def test_cancel_transition_is_rejected_at_production_cutoff(tmp_path: Path) -> None:
+    seed_reserved(tmp_path)
+
+    with pytest.raises(SlotConflict, match="입력 시간이 종료되었습니다"):
+        transition_slot(
+            tmp_path, "20260810-1", {"reserved"}, "cancelled", kst(9)
+        )
+
+    assert lock_reserved_slot(tmp_path, "20260810-1", "worker-a", kst(9))["state"] == "locked"
+
+
+def test_cutoff_cancel_cannot_compete_with_due_worker_lock(tmp_path: Path) -> None:
+    seed_reserved(tmp_path)
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        lock = workers.submit(lock_reserved_slot, tmp_path, "20260810-1", "worker-a", kst(9))
+        cancel = workers.submit(
+            transition_slot,
+            tmp_path,
+            "20260810-1",
+            {"reserved"},
+            "cancelled",
+            kst(9),
+        )
+
+    assert lock.result()["state"] == "locked"
+    with pytest.raises(SlotConflict):
+        cancel.result()
 
 
 def test_list_slot_cards_keeps_unreserved_slots_automatic(tmp_path: Path) -> None:
@@ -220,6 +263,43 @@ def test_events_redact_authorization_headers(tmp_path: Path) -> None:
 
     assert "private-access-token" not in event["message"]
     assert event["metadata"]["authorization"] == "[redacted]"
+
+
+def test_events_redact_quoted_json_basic_auth_and_provider_payloads(tmp_path: Path) -> None:
+    secret_values = {
+        "json-secret",
+        "basic-secret",
+        "nested-secret",
+        "provider-secret",
+        "header-secret",
+    }
+    event_id = append_slot_event(
+        tmp_path,
+        "20260810-1",
+        "checking",
+        "error",
+        'provider returned {"api_key":"json-secret"}; Authorization: Basic basic-secret',
+        {
+            "detail": '{"api_key":"nested-secret"}',
+            "provider_response": {"token": "provider-secret"},
+            "headers": {"X-Api-Key": "header-secret"},
+            "safe": "visible",
+        },
+    )
+
+    event = events_after(tmp_path, "20260810-1", event_id - 1)[0]
+    stored = json.dumps(event, ensure_ascii=False)
+
+    assert not any(secret in stored for secret in secret_values)
+    assert event["metadata"]["provider_response"] == "[redacted]"
+    assert event["metadata"]["headers"] == "[redacted]"
+    assert event["metadata"]["safe"] == "visible"
+
+
+def test_events_after_zero_limit_returns_no_rows(tmp_path: Path) -> None:
+    append_slot_event(tmp_path, "20260810-1", "checking", "info", "first")
+
+    assert events_after(tmp_path, "20260810-1", 0, limit=0) == []
 
 
 def test_event_level_is_restricted(tmp_path: Path) -> None:
