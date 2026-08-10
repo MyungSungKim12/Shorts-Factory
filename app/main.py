@@ -6,10 +6,11 @@ from datetime import date
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, BackgroundTasks, Header, HTTPException, Query
+from fastapi import FastAPI, BackgroundTasks, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.agents.orchestrator import run_pipeline
+from app.routes.slots import require_dashboard_token, router as slots_router
 
 load_dotenv()
 
@@ -24,6 +25,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(slots_router)
 
 # 백그라운드 작업 상태
 _pipeline_running = False
@@ -146,18 +149,10 @@ def latest_report():
     return {"message": "리포트 없음 — 업로드 24시간 후 분석가 에이전트가 생성"}
 
 
-@app.post("/api/pipeline/run")
-def trigger_pipeline(background_tasks: BackgroundTasks, x_token: str = Header(default="")):
+@app.post("/api/pipeline/run", dependencies=[Depends(require_dashboard_token)])
+def trigger_pipeline(background_tasks: BackgroundTasks):
     """파이프라인 수동 실행 트리거 (DASHBOARD_TOKEN 설정 시 토큰 필요)."""
     global _pipeline_running
-
-    # 공개 서버 보호 — 조회는 누구나, 실행은 토큰 소유자만 (fail-closed:
-    # 토큰 미설정 시 열리는 게 아니라 실행 자체를 차단)
-    token = os.getenv("DASHBOARD_TOKEN", "")
-    if not token:
-        raise HTTPException(status_code=503, detail="DASHBOARD_TOKEN 미설정 — 원격 실행이 차단되어 있습니다")
-    if x_token != token:
-        raise HTTPException(status_code=401, detail="관리 토큰이 필요합니다")
 
     if _pipeline_running:
         return {"accepted": False, "message": "파이프라인이 이미 실행 중입니다"}

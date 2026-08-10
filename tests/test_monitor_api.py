@@ -148,3 +148,11 @@ def test_history_merges_matching_recovery_without_changing_pagination(tmp_path, 
 )
 def test_paged_endpoints_reject_invalid_bounds(path):
     assert client.get(path).status_code == 422
+
+
+def test_pipeline_run_keeps_fail_closed_dashboard_auth(monkeypatch):
+    monkeypatch.delenv("DASHBOARD_TOKEN", raising=False)
+    assert client.post("/api/pipeline/run").status_code == 503
+
+    monkeypatch.setenv("DASHBOARD_TOKEN", "secret")
+    assert client.post("/api/pipeline/run").status_code == 401
