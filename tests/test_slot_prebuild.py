@@ -191,6 +191,49 @@ def test_prepare_command_builds_in_staging_and_never_uploads(
     assert result["destination"] == tmp_path / "work" / "20260721-2"
 
 
+def test_explicit_manual_route_runs_before_automatic_global_lock(
+    tmp_path: Path, monkeypatch
+) -> None:
+    calls = []
+    manual_result = {
+        "run_id": "20260810-1",
+        "state": "review_ready",
+        "destination": tmp_path / "work" / "20260810-1",
+    }
+    monkeypatch.setattr(
+        command,
+        "manual_reservation_for_prebuild",
+        lambda data_dir, run_id: calls.append(("lookup", run_id))
+        or {"run_id": run_id, "state": "reserved"},
+    )
+    monkeypatch.setattr(
+        command,
+        "run_manual_prebuild",
+        lambda data_dir, ffmpeg_path, run_id: calls.append(("manual", run_id))
+        or manual_result,
+    )
+    monkeypatch.setattr(
+        command,
+        "acquire_global_lock",
+        lambda *args, **kwargs: pytest.fail("automatic global lock was acquired"),
+    )
+    monkeypatch.setattr(
+        command,
+        "run_researcher",
+        lambda *args, **kwargs: pytest.fail("automatic researcher was called"),
+    )
+
+    result = command.prepare_slot(
+        tmp_path,
+        "ffmpeg",
+        1,
+        now_fn=lambda: datetime(2026, 8, 10, 8, 55, tzinfo=KST),
+    )
+
+    assert result is manual_result
+    assert calls == [("lookup", "20260810-1"), ("manual", "20260810-1")]
+
+
 def test_prepare_command_tags_the_failed_pipeline_stage(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(command, "run_researcher", lambda *args, **kwargs: None)
     monkeypatch.setattr(

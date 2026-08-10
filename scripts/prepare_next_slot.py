@@ -25,10 +25,12 @@ from app.content_format import get_content_format  # noqa: E402
 from app.services.quality_gate import validate_upload_package  # noqa: E402
 from app.services.recovery import acquire_global_lock, release_owned_lock  # noqa: E402
 from app.services.notifications import safe_error, send_alert  # noqa: E402
+from app.services.manual_slot_pipeline import run_manual_prebuild  # noqa: E402
 from app.services.slot_prebuild import (  # noqa: E402
     KST,
     ensure_target_available,
     load_valid_prepared_package,
+    manual_reservation_for_prebuild,
     next_scheduled_slot,
     promote_staging,
     scheduled_run,
@@ -162,6 +164,12 @@ def prepare_slot(
     lock_poll_seconds: int = 30,
 ) -> dict:
     """명시한 오늘의 예약 회차만 사전 제작한다."""
+    data_dir = Path(data_dir)
+    now_fn = now_fn or (lambda: datetime.now(tz=KST))
+    initial_target = _run_stage("target", lambda: scheduled_run(now_fn(), slot))
+    manual = manual_reservation_for_prebuild(data_dir, initial_target[0])
+    if manual is not None:
+        return run_manual_prebuild(data_dir, ffmpeg_path, initial_target[0])
     return _prepare(
         data_dir,
         ffmpeg_path,
@@ -170,6 +178,7 @@ def prepare_slot(
         use_lock=use_lock,
         lock_wait_seconds=lock_wait_seconds,
         lock_poll_seconds=lock_poll_seconds,
+        initial_target=initial_target,
     )
 
 
@@ -182,11 +191,14 @@ def _prepare(
     use_lock: bool = True,
     lock_wait_seconds: int = 5400,
     lock_poll_seconds: int = 30,
+    initial_target: tuple[str, datetime] | None = None,
 ) -> dict:
     """staging 제작을 수행하고 명시 회차면 처음 선택한 대상에만 승격한다."""
     data_dir = Path(data_dir)
     now_fn = now_fn or (lambda: datetime.now(tz=KST))
-    if slot is None:
+    if initial_target is not None:
+        initial_run_id, initial_scheduled_at = initial_target
+    elif slot is None:
         initial_run_id, initial_scheduled_at = _run_stage(
             "target", lambda: next_scheduled_slot(now_fn())
         )

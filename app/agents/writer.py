@@ -5,7 +5,7 @@ from pathlib import Path
 
 from app.content_format import get_content_format
 from app.console import safe_print
-from app.models import validate_script, validate_topic
+from app.models import validate_manual_story_topic, validate_script, validate_topic
 from app.services.claude_client import call_agent
 from app.services.json_extract import extract_json
 
@@ -15,6 +15,7 @@ def run_writer(
     date_str: str,
     content_format: str | None = None,
     work_root: str = "work",
+    manual_checked: bool = False,
 ) -> dict:
     """
     topic.json을 받아 script.json을 생성한다.
@@ -37,7 +38,11 @@ def run_writer(
 
     selected = get_content_format(content_format)
     if selected == "story":
-        topic = validate_topic(topic, selected)
+        topic = (
+            validate_manual_story_topic(topic)
+            if manual_checked
+            else validate_topic(topic, selected)
+        )
 
     # 작가는 Groq 우선 (검색 불필요 + JSON 생성 강점) — Gemini 호출량 절약 겸 부하 분산.
     # 전송 성공이어도 응답 JSON이 잘릴 수 있으므로 검증 실패 시 한 번만 압축 재생성한다.

@@ -419,3 +419,38 @@ def test_sample_researcher_skips_sqlite_cache(tmp_path, monkeypatch):
     assert result["verification_method"] == "grounded_search"
     assert (tmp_path / "samples" / "isolated" / "topic.json").exists()
     assert not (tmp_path / "videos.sqlite").exists()
+
+
+def test_writer_uses_manual_contract_for_prechecked_topic(tmp_path, monkeypatch):
+    staging = tmp_path / "staging" / "manual"
+    staging.mkdir(parents=True)
+    topic = {**_topic(), "category": "economy"}
+    (staging / "topic.json").write_text(
+        json.dumps(topic, ensure_ascii=False), encoding="utf-8"
+    )
+    calls = []
+    monkeypatch.setattr(
+        writer,
+        "validate_manual_story_topic",
+        lambda value: calls.append("manual") or value,
+        raising=False,
+    )
+
+    def reject_automatic_contract(*args):
+        raise AssertionError("automatic topic contract rejected manual topic")
+
+    monkeypatch.setattr(writer, "validate_topic", reject_automatic_contract)
+    monkeypatch.setattr(writer, "call_agent", lambda **kwargs: '{"title":"ok"}')
+    monkeypatch.setattr(writer, "validate_script", lambda value, selected: value)
+
+    result = writer.run_writer(
+        tmp_path,
+        "manual",
+        content_format="story",
+        work_root="staging",
+        manual_checked=True,
+    )
+
+    assert result["title"] == "ok"
+    assert calls == ["manual"]
+    assert json.loads((staging / "script.json").read_text(encoding="utf-8"))["title"] == "ok"

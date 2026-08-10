@@ -21,6 +21,50 @@ SCHEDULE = (
 REQUIRED_FILES = ("topic.json", "script.json", "produce_log.json", "output.mp4")
 
 
+def manual_reservation_for_prebuild(data_dir: Path, run_id: str) -> dict | None:
+    """Return the checked payload for a reserved manual slot, if one exists."""
+    data_dir = Path(data_dir)
+    database = data_dir / "videos.sqlite"
+    if not database.exists():
+        return None
+    try:
+        with sqlite3.connect(database) as db:
+            db.row_factory = sqlite3.Row
+            table = db.execute(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'slot_reservations'"
+            ).fetchone()
+            if table is None:
+                return None
+            row = db.execute(
+                """
+                SELECT run_id, state, attempt, check_result, production_at, upload_at
+                FROM slot_reservations
+                WHERE run_id = ? AND mode = 'manual' AND state = 'reserved'
+                """,
+                (run_id,),
+            ).fetchone()
+    except sqlite3.Error as exc:
+        raise RuntimeError(f"수동 예약 조회 실패: {exc}") from exc
+    if row is None:
+        return None
+    try:
+        checked = json.loads(row["check_result"])
+        topic_payload = checked["topic_payload"]
+        if checked.get("status") != "reservable" or not isinstance(topic_payload, dict):
+            raise ValueError("checked topic payload is invalid")
+    except (TypeError, KeyError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError("수동 예약의 검증 소재가 유효하지 않습니다") from exc
+    return {
+        "run_id": row["run_id"],
+        "state": row["state"],
+        "attempt": row["attempt"],
+        "topic_payload": topic_payload,
+        "production_at": row["production_at"],
+        "upload_at": row["upload_at"],
+    }
+
+
 def next_scheduled_slot(now: datetime | None = None) -> tuple[str, datetime]:
     """현재 시각보다 엄격히 뒤에 있는 가장 가까운 KST 예약 회차를 반환한다."""
     current = now or datetime.now(tz=KST)
