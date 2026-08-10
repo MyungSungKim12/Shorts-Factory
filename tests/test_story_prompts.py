@@ -64,6 +64,18 @@ def test_research_prompt_requires_sources_and_visual_plan():
     assert "history_mystery" in prompt
 
 
+def test_requested_topic_contract_prompt_preserves_story_schema_and_grounding():
+    prompt = researcher.requested_topic_contract_prompt()
+
+    assert '"needs_clarification"' in prompt
+    assert '"interpretations"' in prompt
+    assert '"channel_fit"' in prompt
+    assert '"topic"' in prompt
+    assert '"visual_identity"' in prompt
+    assert '"source_url"' in prompt
+    assert '"verification_method": "grounded_search"' in prompt
+
+
 def test_recent_topics_include_both_uploaded_title_and_original_topic(tmp_path):
     db = sqlite3.connect(tmp_path / "videos.sqlite")
     db.execute(

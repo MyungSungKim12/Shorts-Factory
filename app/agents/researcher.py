@@ -351,6 +351,57 @@ category는 place_nature, science_mystery, hidden_world, history_mystery 중 하
 """
 
 
+def requested_topic_contract_prompt() -> str:
+    """Return the grounded story-topic envelope used for a requested topic."""
+    return """[응답 JSON 계약]
+- 입력 뜻이 둘 이상이면 needs_clarification=true로 두고 interpretations에 서로 구별되는 한국어 해석 2~3개만 쓴다.
+- 뜻이 분명하면 needs_clarification=false로 두고 channel_fit과 topic을 쓴다.
+- channel_fit=false여도 소재를 거절하지 않는다. 채널 방향 적합성은 경고 정보일 뿐이다.
+- topic은 StoryTopicContract를 완전히 충족해야 한다. 검색으로 확인한 사실만 쓰고 출처 원문 전체를 복사하지 않는다.
+- 각 facts 항목에는 claim, value, 실제 기관명 source, 직접 확인 가능한 source_url을 쓴다.
+- visual_identity.exact_queries는 실제 대상 이름의 exact: 검색어, safe_fallbacks는 같은 대상군의 무료 스톡 검색어다.
+- 검색 그라운딩 성공 경로이므로 verification_method는 grounded_search이며 verified_at을 기록한다.
+
+모호한 경우:
+{
+  "needs_clarification": true,
+  "interpretations": ["첫 번째 구체적 해석", "두 번째 구체적 해석"]
+}
+
+명확한 경우:
+{
+  "needs_clarification": false,
+  "channel_fit": true,
+  "topic": {
+    "format": "story",
+    "topic": "검증된 소재 제목",
+    "category": "science_mystery",
+    "hook_angle": "구체적인 반전이나 의문",
+    "target_keyword": "English subject keyword",
+    "core_question": "검증할 핵심 질문",
+    "interest_score": 24,
+    "selection_reason": "선정 이유",
+    "facts": [{
+      "claim": "검증된 주장",
+      "value": "검증된 설명 또는 수치",
+      "source": "공공기관 또는 학술기관명",
+      "source_url": "https://기관의-직접-출처"
+    }],
+    "visual_plan": [{
+      "beat": "hook",
+      "keywords": ["subject establishing shot", "subject detail"]
+    }],
+    "visual_identity": {
+      "exact_queries": ["exact:verified subject"],
+      "safe_fallbacks": ["verified subject environment"],
+      "required_exact": true
+    },
+    "verification_method": "grounded_search",
+    "verified_at": "검색 완료 시각"
+  }
+}"""
+
+
 def _researcher_prompt(context: dict, grounded: bool = True) -> str:
     """리서처 프롬프트 — grounded=False면 검색 없이 확실한 불변 기록만 쓰는 보수 모드."""
     if grounded:
