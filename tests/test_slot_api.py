@@ -749,6 +749,79 @@ def test_post_production_new_topic_retry_accepts_replacement_and_prebuilds_once(
     assert client.get(f"/api/slots/{run_id}").json()["state"] == "review_ready"
 
 
+def test_post_cutoff_replacement_survives_needs_input_until_reserved(
+    configured_api, monkeypatch
+):
+    from app.routes import slots
+
+    run_id = _run_id(days=-1)
+    _seed_manual(configured_api, run_id, "rejected")
+    checked_inputs = []
+    prebuilds = []
+
+    def fake_check(data_dir, received_run_id, request):
+        checked_inputs.append(request.topic_input)
+        if len(checked_inputs) == 1:
+            return {
+                "status": "needs_input",
+                "reservable": False,
+                "interpretations": ["replacement interpretation", "other"],
+            }
+        return {
+            "status": "reservable",
+            "reservable": True,
+            "normalized_topic": "replacement interpretation",
+        }
+
+    monkeypatch.setattr(slots, "check_requested_topic", fake_check)
+
+    def fake_prebuild(data_dir, ffmpeg_path, received_run_id):
+        prebuilds.append(received_run_id)
+        with sqlite3.connect(Path(data_dir) / "videos.sqlite") as db:
+            db.execute(
+                "UPDATE slot_reservations SET state = 'review_ready', "
+                "stage = 'review_ready', worker_id = NULL WHERE run_id = ?",
+                (received_run_id,),
+            )
+        return {"state": "review_ready"}
+
+    monkeypatch.setattr(slots, "run_manual_prebuild", fake_prebuild)
+
+    retry = client.post(
+        f"/api/slots/{run_id}/retry", json={"mode": "new_topic"}, headers=TOKEN
+    )
+    assert retry.status_code == 200
+    assert retry.json()["replacement_allowed"] is True
+
+    first_check = client.post(
+        f"/api/slots/{run_id}/check-topic",
+        json={**_checked_request(), "topic_input": "ambiguous replacement"},
+        headers=TOKEN,
+    )
+    assert first_check.status_code == 202
+    needs_input = client.get(f"/api/slots/{run_id}", headers=TOKEN).json()
+    assert needs_input["state"] == "needs_input"
+    assert needs_input["replacement_allowed"] is True
+
+    clarified_check = client.post(
+        f"/api/slots/{run_id}/check-topic",
+        json={**_checked_request(), "topic_input": "replacement interpretation"},
+        headers=TOKEN,
+    )
+    assert clarified_check.status_code == 202
+    assert clarified_check.json()["revision"] != first_check.json()["revision"]
+    assert checked_inputs == ["ambiguous replacement", "replacement interpretation"]
+    assert client.get(f"/api/slots/{run_id}").json()["state"] == "reservable"
+
+    reserved = client.put(
+        f"/api/slots/{run_id}/reservation", json={"checked": True}, headers=TOKEN
+    )
+    assert reserved.status_code == 200
+    assert reserved.json()["replacement_allowed"] is False
+    assert prebuilds == [run_id]
+    assert client.get(f"/api/slots/{run_id}").json()["state"] == "review_ready"
+
+
 def test_same_topic_retry_schedules_one_immediate_prebuild_after_release(
     configured_api, monkeypatch
 ):

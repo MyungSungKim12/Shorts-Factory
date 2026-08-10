@@ -512,7 +512,8 @@ def skip_slot(data_dir: Path, run_id: str, now: datetime) -> dict:
         db.execute(
             """
             UPDATE slot_reservations
-            SET state = 'skipped', stage = 'skipped', worker_id = NULL, updated_at = ?
+            SET state = 'skipped', stage = 'skipped', worker_id = NULL,
+                replacement_allowed = 0, updated_at = ?
             WHERE run_id = ?
             """,
             (timestamp, run_id),

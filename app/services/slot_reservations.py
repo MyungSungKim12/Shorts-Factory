@@ -255,7 +255,6 @@ def create_check(data_dir: Path, run_id: str, request: dict, now: datetime) -> d
         row = _fetch_reservation(db, run_id)
         replacement = bool(
             row is not None
-            and row["state"] == "draft"
             and row["worker_id"] is None
             and row["replacement_allowed"] == 1
         )

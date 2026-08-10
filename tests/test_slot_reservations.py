@@ -123,6 +123,30 @@ def test_needs_input_can_start_a_clarified_check(tmp_path: Path) -> None:
     assert restarted["attempt"] == 2
 
 
+def test_normal_needs_input_cannot_be_rechecked_after_cutoff(tmp_path: Path) -> None:
+    created = create_check(
+        tmp_path,
+        "20260810-1",
+        {"topic_input": "ordinary ambiguous topic"},
+        kst(8, 50),
+    )
+    save_check_result(
+        tmp_path,
+        "20260810-1",
+        {"status": "needs_input", "interpretations": ["first", "second"]},
+        kst(8, 51),
+        revision=created["check_revision"],
+    )
+
+    with pytest.raises(SlotConflict):
+        create_check(
+            tmp_path,
+            "20260810-1",
+            {"topic_input": "first"},
+            kst(9),
+        )
+
+
 def test_needs_input_is_rechecked_only_by_the_dedicated_operation(tmp_path: Path) -> None:
     create_check(tmp_path, "20260810-2", {"topic_input": "세종"}, kst(10))
     _save_current_check(tmp_path, "20260810-2", {"status": "needs_input"}, kst(10, 1))

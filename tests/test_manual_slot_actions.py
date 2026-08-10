@@ -461,6 +461,30 @@ def test_skip_finishes_rejected_slot_without_upload(tmp_path):
     assert result["state"] == "skipped"
 
 
+def test_skip_clears_post_cutoff_replacement_authorization(tmp_path):
+    seed_review_ready_slot(tmp_path)
+    reject_slot(tmp_path, RUN_ID, "replacement rejected", kst(10, 20))
+    retry_slot(tmp_path, RUN_ID, "new_topic", kst(10, 21))
+    created = create_check(
+        tmp_path,
+        RUN_ID,
+        {"topic_input": "replacement that fails validation"},
+        kst(10, 22),
+    )
+    save_check_result(
+        tmp_path,
+        RUN_ID,
+        {"status": "failed", "reason": "not enough evidence"},
+        kst(10, 23),
+        revision=created["check_revision"],
+    )
+
+    result = skip_slot(tmp_path, RUN_ID, kst(10, 24))
+
+    assert result["state"] == "skipped"
+    assert result["replacement_allowed"] == 0
+
+
 @pytest.mark.parametrize("action", ["approve", "reject", "retry", "skip"])
 def test_committed_action_succeeds_when_audit_event_write_fails(
     tmp_path, monkeypatch, action
