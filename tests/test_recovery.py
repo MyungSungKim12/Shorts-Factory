@@ -357,6 +357,55 @@ def test_scheduled_runner_preserves_known_skip_reason_category(tmp_path, monkeyp
     assert alerts[0][1]["text"].endswith("reason: already_uploaded")
 
 
+def test_scheduled_runner_keeps_manual_review_hold_successful_and_cleans_rejected(
+    tmp_path, monkeypatch
+):
+    alerts = []
+    cleanup_calls = []
+
+    async def held(*args, **kwargs):
+        return {
+            "date": "20260721-1",
+            "success": True,
+            "stages": {
+                "uploader": {
+                    "status": "skipped",
+                    "reason": "manual_review_required",
+                }
+            },
+        }
+
+    monkeypatch.setattr(command, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("REJECTED_RETENTION_DAYS", "9")
+    monkeypatch.setattr(command, "load_dotenv", lambda: None)
+    monkeypatch.setattr(
+        command,
+        "cleanup_stale_temp_dirs",
+        lambda: {"removed_dirs": 0, "removed_bytes": 0},
+    )
+    monkeypatch.setattr(command, "cleanup_old_work", lambda *args: None)
+    monkeypatch.setattr(
+        command,
+        "cleanup_rejected_artifacts",
+        lambda data_dir, retention_days, now: cleanup_calls.append(
+            (data_dir, retention_days, now.tzinfo is not None)
+        )
+        or {"removed_dirs": 1, "removed_bytes": 4},
+    )
+    monkeypatch.setattr(command, "run_with_recovery", held)
+    monkeypatch.setattr(
+        command, "send_alert", lambda *args, **kwargs: alerts.append((args, kwargs))
+    )
+    monkeypatch.setattr(command.sys, "argv", ["run_scheduled.py", "1"])
+
+    command.main()
+
+    assert cleanup_calls == [(tmp_path, 9, True)]
+    assert alerts[0][1]["text"].endswith("reason: manual_review_required")
+
+
 def test_scheduled_runner_contains_non_object_recovery_state(tmp_path, monkeypatch):
     alerts = []
     recovery_dir = tmp_path / "recovery"

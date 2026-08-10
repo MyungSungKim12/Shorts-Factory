@@ -1,5 +1,6 @@
 import json
 import subprocess
+from datetime import datetime
 
 import pytest
 
@@ -307,3 +308,39 @@ def test_run_uploader_rejects_prompt_instruction_title_before_youtube_call(
 
     with pytest.raises(ValueError, match="제목 지시문"):
         uploader.run_uploader(data_dir, "20260729-2")
+
+
+def test_daily_upload_limit_cannot_be_configured_above_six(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    work_dir = data_dir / "work" / "20260810-1"
+    work_dir.mkdir(parents=True)
+    (work_dir / "output.mp4").write_bytes(b"video")
+    (work_dir / "script.json").write_text(
+        json.dumps({"title": "검증된 영상 제목", "description": "", "tags": []}),
+        encoding="utf-8",
+    )
+    today = datetime.now().strftime("%Y-%m-%d")
+    db = uploader._init_db(data_dir)
+    try:
+        db.executemany(
+            "INSERT INTO videos "
+            "(video_id, date, title, topic, status, uploaded_at) "
+            "VALUES (?, ?, '', '', 'uploaded', ?)",
+            [(f"video-{n}", f"20260809-{n}", f"{today}T09:00:00") for n in range(6)],
+        )
+        db.commit()
+    finally:
+        db.close()
+    monkeypatch.setenv("DAILY_UPLOAD_LIMIT", "99")
+    monkeypatch.setattr(
+        uploader,
+        "_get_youtube_client",
+        lambda: pytest.fail("일 6건 한도를 넘겨 YouTube API가 호출됨"),
+    )
+
+    result = uploader.run_uploader(data_dir, "20260810-1")
+
+    assert result == {
+        "status": "skipped",
+        "reason": "일 업로드 한도(6건) 도달 — 내일 재시도",
+    }

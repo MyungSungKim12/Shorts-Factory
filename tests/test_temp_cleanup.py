@@ -4,6 +4,7 @@ import time
 from datetime import datetime, timezone
 
 from app.services import temp_cleanup
+from app.services.manual_slot_actions import cleanup_rejected_artifacts
 
 
 def _age(path, seconds):
@@ -49,4 +50,27 @@ def test_mark_temp_owner_records_current_process(tmp_path):
     owner = json.loads((tmp_path / ".owner.json").read_text())
     assert owner["pid"] == os.getpid()
     assert owner["created_at"]
+
+
+def test_cleanup_rejected_artifacts_removes_only_expired_rejected_dirs(tmp_path):
+    rejected = tmp_path / "rejected"
+    expired = rejected / "20260801-1-attempt-1"
+    fresh = rejected / "20260809-1-attempt-1"
+    active = tmp_path / "work" / "20260801-1"
+    ai_library = tmp_path / "ai-library" / "asset-1"
+    for path in (expired, fresh, active, ai_library):
+        path.mkdir(parents=True)
+        (path / "artifact.bin").write_bytes(b"1234")
+    old_timestamp = datetime(2026, 8, 1, tzinfo=timezone.utc).timestamp()
+    os.utime(expired, (old_timestamp, old_timestamp))
+
+    result = cleanup_rejected_artifacts(
+        tmp_path, retention_days=7, now=datetime(2026, 8, 10, tzinfo=timezone.utc)
+    )
+
+    assert result == {"removed_dirs": 1, "removed_bytes": 4}
+    assert not expired.exists()
+    assert fresh.exists()
+    assert active.exists()
+    assert ai_library.exists()
 

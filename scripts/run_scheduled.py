@@ -18,7 +18,10 @@ load_dotenv()
 
 from app.services.recovery import run_with_recovery  # noqa: E402
 from app.services.notifications import safe_error, send_alert  # noqa: E402
-from app.services.temp_cleanup import cleanup_stale_temp_dirs  # noqa: E402
+from app.services.temp_cleanup import (  # noqa: E402
+    cleanup_rejected_artifacts,
+    cleanup_stale_temp_dirs,
+)
 from app.services.ai_storage_monitor import storage_status  # noqa: E402
 from app.services.credit_guard import consume_mode_transition, credit_status  # noqa: E402
 from scripts.run_daily import cleanup_old_work  # noqa: E402
@@ -61,6 +64,8 @@ def _recovery_details(data_dir: Path, run_id: str) -> tuple[str, str]:
 
 
 def _skip_reason_category(reason: object) -> str:
+    if reason == "manual_review_required":
+        return "manual_review_required"
     if reason == "오늘 영상 이미 업로드됨":
         return "already_uploaded"
     if isinstance(reason, str) and reason.startswith("일 업로드 한도("):
@@ -134,6 +139,15 @@ def main() -> None:
         f"{cleanup['removed_bytes']}바이트"
     )
     cleanup_old_work(data_dir, int(os.getenv("WORK_RETENTION_DAYS", "7")))
+    rejected_cleanup = cleanup_rejected_artifacts(
+        data_dir,
+        int(os.getenv("REJECTED_RETENTION_DAYS", "7")),
+        datetime.now().astimezone(),
+    )
+    print(
+        f"반려 산출물 정리: {rejected_cleanup['removed_dirs']}개, "
+        f"{rejected_cleanup['removed_bytes']}바이트"
+    )
 
     run_id = _scheduled_run_id(slot)
     try:

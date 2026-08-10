@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import tempfile
 from datetime import datetime, timezone
@@ -11,6 +12,7 @@ from pathlib import Path
 
 TEMP_PREFIX = "shorts-factory-"
 OWNER_FILE = ".owner.json"
+REJECTED_ARTIFACT = re.compile(r"^\d{8}-[1-4]-attempt-\d+$")
 
 
 def _process_alive(pid: int) -> bool:
@@ -85,6 +87,41 @@ def cleanup_stale_temp_dirs(
                 continue
             age = now.timestamp() - resolved.stat().st_mtime
             if age < max_age_seconds or _owned_by_live_process(resolved):
+                continue
+            size = _directory_bytes(resolved)
+            shutil.rmtree(resolved)
+            removed_dirs += 1
+            removed_bytes += size
+        except OSError:
+            continue
+    return {"removed_dirs": removed_dirs, "removed_bytes": removed_bytes}
+
+
+def cleanup_rejected_artifacts(
+    data_dir: Path,
+    retention_days: int,
+    now: datetime,
+) -> dict:
+    """Delete only expired manual artifacts inside the rejected store."""
+    if retention_days < 0:
+        raise ValueError("retention_days must be non-negative")
+    rejected_root = (Path(data_dir) / "rejected").resolve()
+    if not rejected_root.is_dir():
+        return {"removed_dirs": 0, "removed_bytes": 0}
+    current = now if now.tzinfo is not None else now.replace(tzinfo=timezone.utc)
+    cutoff = current.timestamp() - retention_days * 86400
+    removed_dirs = 0
+    removed_bytes = 0
+    for candidate in rejected_root.iterdir():
+        try:
+            resolved = candidate.resolve()
+            if (
+                candidate.is_symlink()
+                or resolved.parent != rejected_root
+                or not REJECTED_ARTIFACT.fullmatch(resolved.name)
+                or not resolved.is_dir()
+                or resolved.stat().st_mtime > cutoff
+            ):
                 continue
             size = _directory_bytes(resolved)
             shutil.rmtree(resolved)

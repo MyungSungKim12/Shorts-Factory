@@ -10,6 +10,11 @@ from app.agents.producer import run_producer
 from app.agents.researcher import run_researcher
 from app.agents.uploader import run_uploader
 from app.agents.writer import run_writer
+from app.services.manual_slot_actions import (
+    fail_upload_claim,
+    record_upload_result,
+    upload_decision,
+)
 
 
 def _output_matches_script(work_dir: Path) -> bool:
@@ -83,10 +88,33 @@ async def run_pipeline(data_dir: Path, ffmpeg_path: str, slot: int = None) -> di
         run_log dict (각 단계 결과)
     """
     content_format = get_content_format()
-    date_str = datetime.now().strftime("%Y%m%d")
+    now = datetime.now().astimezone()
+    date_str = now.strftime("%Y%m%d")
     if slot is None:
         slot = _next_slot(data_dir, date_str)
     run_id = f"{date_str}-{slot}"
+
+    decision = upload_decision(data_dir, run_id, now)
+    if decision == "hold":
+        run_log = {
+            "date": run_id,
+            "timestamp": now.isoformat(),
+            "content_format": content_format,
+            "stages": {
+                "uploader": {
+                    "status": "skipped",
+                    "reason": "manual_review_required",
+                }
+            },
+            "success": True,
+            "message": "수동 영상 승인 대기",
+        }
+        log_file = data_dir / "logs" / f"run-{run_id}.json"
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        log_file.write_text(
+            json.dumps(run_log, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        return run_log
 
     work_dir = data_dir / "work" / run_id
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -111,14 +139,22 @@ async def run_pipeline(data_dir: Path, ffmpeg_path: str, slot: int = None) -> di
         topic = None
         if topic_file.exists():
             try:
-                topic = validate_topic(
-                    json.loads(topic_file.read_text(encoding="utf-8")), content_format
-                )
+                saved_topic = json.loads(topic_file.read_text(encoding="utf-8"))
+                if decision == "approved":
+                    from app.models import validate_manual_story_topic
+
+                    topic = validate_manual_story_topic(saved_topic)
+                else:
+                    topic = validate_topic(saved_topic, content_format)
                 run_log["stages"]["researcher"] = {"status": "skipped", "topic": topic.get("topic", "")}
                 print(f"[1/4] 리서처 건너뜀 (오늘 소재 이미 있음: {topic.get('topic', '')})")
             except Exception as e:
+                if decision == "approved":
+                    raise RuntimeError("승인된 수동 소재 파일이 유효하지 않습니다") from e
                 print(f"[1/4] 기존 topic.json 검증 실패({e}) — 재생성")
         if topic is None:
+            if decision == "approved":
+                raise RuntimeError("승인된 수동 소재 파일이 없습니다")
             print("[1/4] 트렌드 리서처 실행 중...")
             topic = run_researcher(data_dir, run_id, content_format=content_format)
             run_log["stages"]["researcher"] = {
@@ -146,8 +182,12 @@ async def run_pipeline(data_dir: Path, ffmpeg_path: str, slot: int = None) -> di
                 }
                 print(f"[2/4] 작가 건너뜀 (오늘 대본 이미 있음: {script.get('title', '')})")
             except Exception as e:
+                if decision == "approved":
+                    raise RuntimeError("승인된 수동 대본 파일이 유효하지 않습니다") from e
                 print(f"[2/4] 기존 script.json 검증 실패({e}) — 재생성")
         if script is None:
+            if decision == "approved":
+                raise RuntimeError("승인된 수동 대본 파일이 없습니다")
             print("[2/4] 대본 작가 실행 중...")
             script = run_writer(data_dir, run_id, content_format=content_format)
             run_log["stages"]["writer"] = {
@@ -166,6 +206,8 @@ async def run_pipeline(data_dir: Path, ffmpeg_path: str, slot: int = None) -> di
             run_log["stages"]["producer"] = {"status": "skipped", "output_file": str(output_file)}
             print(f"[3/4] 프로듀서 건너뜀 (영상이 현재 대본과 일치)")
         else:
+            if decision == "approved":
+                raise RuntimeError("승인된 수동 영상 패키지가 유효하지 않습니다")
             if output_file.exists() and not fresh:
                 print("[3/4] 대본 변경 감지(해시 불일치) — 기존 영상 폐기 후 재생성")
             print("[3/4] 영상 프로듀서 실행 중...")
@@ -183,6 +225,10 @@ async def run_pipeline(data_dir: Path, ffmpeg_path: str, slot: int = None) -> di
         print("[4/4] 업로더 실행 중...")
         upload_result = run_uploader(data_dir, run_id)
         run_log["stages"]["uploader"] = upload_result
+        if decision == "approved":
+            record_upload_result(
+                data_dir, run_id, upload_result, datetime.now().astimezone()
+            )
         if upload_result.get("status") == "uploaded":
             print(f"✓ 업로드 완료: {upload_result.get('url')}")
         else:
@@ -208,6 +254,11 @@ async def run_pipeline(data_dir: Path, ffmpeg_path: str, slot: int = None) -> di
         return run_log
 
     except Exception as e:
+        if decision == "approved":
+            try:
+                fail_upload_claim(data_dir, run_id, datetime.now().astimezone())
+            except Exception:
+                pass
         run_log["success"] = False
         run_log["message"] = str(e)
         # 실패한 단계 표시 (성공 기록된 단계 다음이 실패 지점)

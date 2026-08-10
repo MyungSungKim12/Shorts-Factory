@@ -1,0 +1,270 @@
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+import os
+import sqlite3
+from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+import pytest
+
+from app.agents import orchestrator
+from app.services.manual_slot_actions import (
+    approve_slot,
+    reject_slot,
+    retry_slot,
+    skip_slot,
+    upload_decision,
+)
+from app.services.slot_reservations import (
+    SlotConflict,
+    create_check,
+    reserve_checked_topic,
+    save_check_result,
+    transition_slot,
+)
+
+
+KST = ZoneInfo("Asia/Seoul")
+RUN_ID = "20260810-1"
+
+
+def kst(hour: int, minute: int = 0) -> datetime:
+    return datetime(2026, 8, 10, hour, minute, tzinfo=KST)
+
+
+def checked_result() -> dict:
+    return {
+        "status": "reservable",
+        "normalized_topic": "검증된 수동 소재",
+        "topic_payload": {"format": "story", "topic": "검증된 수동 소재"},
+        "visual": {"level": "high", "reservable": True},
+    }
+
+
+def seed_review_ready_slot(
+    data_dir: Path,
+    run_id: str = RUN_ID,
+    *,
+    state: str = "review_ready",
+    with_artifact: bool = False,
+) -> None:
+    create_check(data_dir, run_id, {"topic_input": "검증된 수동 소재"}, kst(8, 40))
+    save_check_result(data_dir, run_id, checked_result(), kst(8, 41))
+    reserve_checked_topic(data_dir, run_id, kst(8, 42))
+    transition_slot(
+        data_dir, run_id, {"reserved"}, "locked", kst(9), worker_id="worker"
+    )
+    for source, target in (
+        ("locked", "researching"),
+        ("researching", "writing"),
+        ("writing", "producing"),
+        ("producing", "quality_check"),
+        ("quality_check", "review_ready"),
+    ):
+        fields = {"worker_id": None} if target == "review_ready" else {}
+        transition_slot(data_dir, run_id, {source}, target, kst(9, 1), **fields)
+    if state == "held":
+        transition_slot(data_dir, run_id, {"review_ready"}, "held", kst(11))
+    if with_artifact:
+        artifact = data_dir / "work" / run_id
+        artifact.mkdir(parents=True)
+        (artifact / "output.mp4").write_bytes(b"review-video")
+        with sqlite3.connect(data_dir / "videos.sqlite") as db:
+            db.execute(
+                "UPDATE slot_reservations SET artifact_path = ? WHERE run_id = ?",
+                (str(artifact), run_id),
+            )
+
+
+def read_slot(data_dir: Path, run_id: str = RUN_ID) -> dict:
+    with sqlite3.connect(data_dir / "videos.sqlite") as db:
+        db.row_factory = sqlite3.Row
+        return dict(
+            db.execute(
+                "SELECT * FROM slot_reservations WHERE run_id = ?", (run_id,)
+            ).fetchone()
+        )
+
+
+def test_unapproved_manual_slot_is_held_without_auto_fallback(tmp_path, monkeypatch):
+    seed_review_ready_slot(tmp_path, with_artifact=True)
+    calls: list[str] = []
+    for name in ("run_researcher", "run_writer", "run_producer", "run_uploader"):
+        monkeypatch.setattr(
+            orchestrator, name, lambda *args, _name=name, **kwargs: calls.append(_name)
+        )
+
+    result = asyncio.run(orchestrator.run_pipeline(tmp_path, "ffmpeg", slot=1))
+
+    assert result["success"] is True
+    assert result["stages"]["uploader"] == {
+        "status": "skipped",
+        "reason": "manual_review_required",
+    }
+    assert calls == []
+    assert (tmp_path / "work" / RUN_ID / "output.mp4").read_bytes() == b"review-video"
+
+
+def test_approval_before_upload_waits_for_scheduler(tmp_path):
+    seed_review_ready_slot(tmp_path)
+
+    result = approve_slot(tmp_path, RUN_ID, kst(10, 30))
+
+    assert result["state"] == "approved"
+    assert result["upload_action"] == "scheduled"
+
+
+def test_approval_after_upload_requests_one_immediate_upload(tmp_path):
+    seed_review_ready_slot(tmp_path, state="held")
+
+    result = approve_slot(tmp_path, RUN_ID, kst(11, 5))
+
+    assert result["state"] == "approved"
+    assert result["upload_action"] == "immediate"
+    with pytest.raises(SlotConflict):
+        approve_slot(tmp_path, RUN_ID, kst(11, 6))
+
+
+def test_upload_decision_atomically_claims_approved_slot_once(tmp_path):
+    seed_review_ready_slot(tmp_path)
+    approve_slot(tmp_path, RUN_ID, kst(10, 30))
+
+    assert upload_decision(tmp_path, RUN_ID, kst(10, 59)) == "hold"
+    assert read_slot(tmp_path)["state"] == "approved"
+    assert upload_decision(tmp_path, RUN_ID, kst(11)) == "approved"
+    assert upload_decision(tmp_path, RUN_ID, kst(11)) == "hold"
+    assert read_slot(tmp_path)["state"] == "uploading"
+
+
+def test_approved_manual_package_reuses_artifacts_and_records_uploaded_state(
+    tmp_path, monkeypatch
+):
+    seed_review_ready_slot(tmp_path, with_artifact=True)
+    work = tmp_path / "work" / RUN_ID
+    topic = {"format": "story", "topic": "검증된 수동 소재"}
+    script = {"format": "story", "title": "검증된 수동 영상"}
+    (work / "topic.json").write_text(json.dumps(topic), encoding="utf-8")
+    (work / "script.json").write_text(json.dumps(script), encoding="utf-8")
+    (work / "produce_log.json").write_text(
+        json.dumps(
+            {
+                "script_sha256": hashlib.sha256(
+                    (work / "script.json").read_bytes()
+                ).hexdigest()
+            }
+        ),
+        encoding="utf-8",
+    )
+    (work / "prepared.json").write_text(
+        json.dumps({"run_id": RUN_ID, "quality_gate": {"passed": True}}),
+        encoding="utf-8",
+    )
+    approve_slot(tmp_path, RUN_ID, kst(11, 5))
+    calls = []
+
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return kst(11, 5) if tz is not None else kst(11, 5).replace(tzinfo=None)
+
+    monkeypatch.setattr(orchestrator, "datetime", FixedDatetime)
+    monkeypatch.setattr(
+        "app.models.validate_manual_story_topic", lambda payload: payload
+    )
+    monkeypatch.setattr("app.models.validate_script", lambda payload, *_: payload)
+    for name in ("run_researcher", "run_writer", "run_producer"):
+        monkeypatch.setattr(
+            orchestrator,
+            name,
+            lambda *args, _name=name, **kwargs: pytest.fail(
+                f"승인된 패키지에서 {_name}가 호출됨"
+            ),
+        )
+    monkeypatch.setattr(
+        orchestrator,
+        "run_uploader",
+        lambda *args, **kwargs: calls.append("uploader")
+        or {"status": "uploaded", "video_id": "manual-video"},
+    )
+    monkeypatch.setattr(
+        "app.agents.analyst.run_analyst", lambda *args, **kwargs: {"insight": "ok"}
+    )
+
+    result = asyncio.run(orchestrator.run_pipeline(tmp_path, "ffmpeg", slot=1))
+
+    assert result["success"] is True
+    assert calls == ["uploader"]
+    assert read_slot(tmp_path)["state"] == "uploaded"
+    assert read_slot(tmp_path)["video_id"] == "manual-video"
+
+
+def test_reject_archives_artifact_and_allows_same_topic_retry(tmp_path):
+    seed_review_ready_slot(tmp_path, with_artifact=True)
+
+    result = reject_slot(tmp_path, RUN_ID, "대본 수정 필요", kst(10, 20))
+
+    archived = Path(result["archived_path"])
+    assert archived == tmp_path / "rejected" / f"{RUN_ID}-attempt-1"
+    assert archived.is_dir()
+    assert (archived / "output.mp4").read_bytes() == b"review-video"
+    assert not (tmp_path / "work" / RUN_ID).exists()
+    assert result["state"] == "rejected"
+    assert read_slot(tmp_path)["artifact_path"] is None
+
+    retried = retry_slot(tmp_path, RUN_ID, "same_topic", kst(10, 21))
+    assert retried["state"] == "reserved"
+    assert retried["attempt"] == 2
+    assert json.loads(read_slot(tmp_path)["check_result"])["status"] == "reservable"
+
+
+def test_new_topic_retry_clears_previous_check_fields(tmp_path):
+    seed_review_ready_slot(tmp_path, with_artifact=True)
+    reject_slot(tmp_path, RUN_ID, "다른 소재 필요", kst(10, 20))
+
+    retried = retry_slot(tmp_path, RUN_ID, "new_topic", kst(10, 21))
+
+    assert retried["state"] == "checking"
+    assert retried["attempt"] == 2
+    assert retried["normalized_topic"] is None
+    assert retried["check_result"] is None
+
+
+def test_same_topic_retry_requires_a_valid_last_check(tmp_path):
+    seed_review_ready_slot(tmp_path, with_artifact=True)
+    reject_slot(tmp_path, RUN_ID, "재검증 필요", kst(10, 20))
+    with sqlite3.connect(tmp_path / "videos.sqlite") as db:
+        db.execute(
+            "UPDATE slot_reservations SET check_result = ? WHERE run_id = ?",
+            (json.dumps({"status": "failed"}), RUN_ID),
+        )
+
+    with pytest.raises(SlotConflict, match="검증"):
+        retry_slot(tmp_path, RUN_ID, "same_topic", kst(10, 21))
+
+
+def test_reject_refuses_a_live_global_lock(tmp_path):
+    seed_review_ready_slot(tmp_path, with_artifact=True)
+    lock = tmp_path / "recovery" / "pipeline.lock"
+    lock.parent.mkdir(parents=True)
+    lock.write_text(
+        json.dumps({"pid": os.getpid(), "run_id": RUN_ID}), encoding="utf-8"
+    )
+
+    with pytest.raises(SlotConflict, match="잠금"):
+        reject_slot(tmp_path, RUN_ID, "대본 수정 필요", kst(10, 20))
+
+    assert (tmp_path / "work" / RUN_ID).is_dir()
+    assert read_slot(tmp_path)["state"] == "review_ready"
+
+
+def test_skip_finishes_rejected_slot_without_upload(tmp_path):
+    seed_review_ready_slot(tmp_path, with_artifact=True)
+    reject_slot(tmp_path, RUN_ID, "이번 회차 중단", kst(10, 20))
+
+    result = skip_slot(tmp_path, RUN_ID, kst(10, 21))
+
+    assert result["state"] == "skipped"
