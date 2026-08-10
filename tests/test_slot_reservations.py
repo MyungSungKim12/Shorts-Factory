@@ -21,6 +21,7 @@ from app.services.slot_reservations import (
     slot_window,
     transition_slot,
 )
+from app.services import slot_reservations
 
 
 KST = ZoneInfo("Asia/Seoul")
@@ -175,6 +176,64 @@ def test_cancel_transition_is_rejected_at_production_cutoff(tmp_path: Path) -> N
         )
 
     assert lock_reserved_slot(tmp_path, "20260810-1", "worker-a", kst(9))["state"] == "locked"
+
+
+def test_cancel_manual_reservation_removes_gate_and_preserves_audit(tmp_path: Path) -> None:
+    seed_reserved(tmp_path)
+
+    result = slot_reservations.cancel_manual_reservation(
+        tmp_path, "20260810-1", kst(8, 50)
+    )
+
+    assert result == {
+        "run_id": "20260810-1",
+        "cancelled": True,
+        "mode": "auto",
+        "state": "auto",
+    }
+    cards = list_slot_cards(tmp_path, date(2026, 8, 10), kst(8, 51))
+    assert cards[0]["mode"] == "auto"
+    assert cards[0]["state"] == "auto"
+    audit = events_after(tmp_path, "20260810-1", 0)
+    assert audit[-1]["stage"] == "cancelled"
+    assert audit[-1]["metadata"] == {}
+
+
+@pytest.mark.parametrize(
+    ("state", "worker_id"),
+    [
+        ("locked", "worker"),
+        ("producing", "worker"),
+        ("review_ready", None),
+        ("approved", None),
+        ("uploading", "worker"),
+    ],
+)
+def test_cancel_manual_reservation_rejects_active_or_produced_states(
+    tmp_path: Path, state: str, worker_id: str | None
+) -> None:
+    seed_reserved(tmp_path)
+    with sqlite3.connect(tmp_path / "videos.sqlite") as db:
+        db.execute(
+            "UPDATE slot_reservations SET state = ?, worker_id = ? WHERE run_id = ?",
+            (state, worker_id, "20260810-1"),
+        )
+
+    with pytest.raises(SlotConflict):
+        slot_reservations.cancel_manual_reservation(
+            tmp_path, "20260810-1", kst(8, 50)
+        )
+
+    assert list_slot_cards(tmp_path, date(2026, 8, 10), kst(8, 51))[0]["mode"] == "manual"
+
+
+def test_cancel_manual_reservation_is_rejected_at_cutoff(tmp_path: Path) -> None:
+    seed_reserved(tmp_path)
+
+    with pytest.raises(SlotConflict, match="입력 시간이 종료되었습니다"):
+        slot_reservations.cancel_manual_reservation(tmp_path, "20260810-1", kst(9))
+
+    assert lock_reserved_slot(tmp_path, "20260810-1", "worker", kst(9))["state"] == "locked"
 
 
 def test_cutoff_cancel_cannot_compete_with_due_worker_lock(tmp_path: Path) -> None:

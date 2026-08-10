@@ -84,3 +84,26 @@
 ### 우려 사항
 
 - 현재 확인된 미해결 결함은 없다.
+
+## Final integration cancellation fix
+
+### RED
+
+- 기존 DELETE는 예약 행을 `mode=manual`, `state=cancelled`로 남겨 카드가 계속 수동으로 보이고 `upload_decision`이 `hold`를 반환하며 새 check가 409가 되는 문제를 재현했다.
+- 서비스 단위 행 제거/감사, API auto 카드/재검사, 업로드 판정 automatic 통합 회귀를 추가했다.
+- RED 명령: `D:\ms\shorts-factory-be\venv\Scripts\python.exe -m pytest -q tests/test_slot_reservations.py tests/test_manual_slot_actions.py tests/test_slot_api.py -k "cancel_manual_reservation or cancelled_preproduction or cancel_restores_auto"`
+- RED 결과: `9 failed, 66 deselected`.
+
+### GREEN
+
+- `cancel_manual_reservation`이 `BEGIN IMMEDIATE` 안에서 회차 존재, 제작 마감, worker 부재, 취소 가능 상태를 확인한 뒤 예약 행을 원자적으로 삭제한다.
+- 취소 가능 상태는 `draft`, `checking`, `needs_input`, `reservable`, `reserved`이며 active/produced/review/approved/upload 상태는 거부한다.
+- 예약 행 삭제 후 자격 증명 없는 일반 감사 이벤트를 별도 이벤트 테이블에 남기며, 감사 기록 실패가 자동 경로 복원을 되돌리지 않는다.
+- API DELETE는 auto mode/state를 반환하고 이후 카드/업로드 판정/새 check가 자동 경로 계약을 따른다.
+- 신규 회귀 결과: `9 passed, 66 deselected in 0.93s`.
+- 영향 범위 전체 결과: `75 passed in 2.36s`.
+- 요청에 따라 전체 백엔드 스위트는 실행하지 않았다.
+
+### 우려 사항
+
+- 현재 확인된 미해결 결함은 없다.

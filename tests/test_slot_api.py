@@ -180,6 +180,44 @@ def test_reservation_maps_missing_conflict_and_cutoff(configured_api):
     ).status_code == 422
 
 
+def test_cancel_restores_auto_card_and_allows_fresh_manual_check(
+    configured_api, monkeypatch
+):
+    from app.routes import slots
+
+    run_id = _run_id()
+    _seed_manual(configured_api, run_id, "reserved")
+    day = datetime.strptime(run_id[:8], "%Y%m%d").date()
+
+    cancelled = client.delete(
+        f"/api/slots/{run_id}/reservation", headers=TOKEN
+    )
+    cards = client.get(f"/api/slots?date={day.isoformat()}").json()["slots"]
+
+    assert cancelled.status_code == 200
+    assert cancelled.json()["mode"] == "auto"
+    assert cancelled.json()["state"] == "auto"
+    assert cards[0]["mode"] == "auto"
+    assert cards[0]["state"] == "auto"
+
+    monkeypatch.setattr(
+        slots,
+        "check_requested_topic",
+        lambda *args, **kwargs: {
+            "status": "needs_input",
+            "interpretations": ["A", "B"],
+        },
+    )
+    recheck = client.post(
+        f"/api/slots/{run_id}/check-topic",
+        json=_checked_request(),
+        headers=TOKEN,
+    )
+
+    assert recheck.status_code == 202
+    assert client.get(f"/api/slots/{run_id}").json()["state"] == "needs_input"
+
+
 def test_public_detail_and_events_never_expose_raw_payload(configured_api):
     from app.services.slot_reservations import append_slot_event
 

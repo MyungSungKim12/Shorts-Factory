@@ -20,6 +20,7 @@ SLOT_TIMES = {
 ACTIVE_STATES = {
     "locked", "researching", "writing", "producing", "quality_check", "uploading"
 }
+_CANCELLABLE_STATES = {"draft", "checking", "needs_input", "reservable", "reserved"}
 ALLOWED_TRANSITIONS = {
     "draft": {"checking", "cancelled"},
     "checking": {"reservable", "needs_input", "failed"},
@@ -358,6 +359,53 @@ def reserve_checked_topic(data_dir: Path, run_id: str, now: datetime) -> dict:
         raise
     finally:
         db.close()
+
+
+def cancel_manual_reservation(
+    data_dir: Path, run_id: str, now: datetime
+) -> dict:
+    """Atomically remove an inactive pre-cutoff manual gate back to automatic."""
+    db = _begin_immediate(data_dir)
+    try:
+        row = _fetch_reservation(db, run_id)
+        if row is None or row["mode"] != "manual":
+            raise SlotConflict("reservation does not exist")
+        _ensure_input_open(run_id, now)
+        if row["worker_id"] is not None or row["state"] not in _CANCELLABLE_STATES:
+            raise SlotConflict("reservation cannot be cancelled from its current state")
+        deleted = db.execute(
+            """
+            DELETE FROM slot_reservations
+            WHERE run_id = ? AND mode = 'manual' AND worker_id IS NULL
+              AND state IN ('draft', 'checking', 'needs_input', 'reservable', 'reserved')
+            """,
+            (run_id,),
+        ).rowcount
+        if deleted != 1:
+            raise SlotConflict("reservation changed while cancellation was requested")
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+    try:
+        append_slot_event(
+            data_dir,
+            run_id,
+            "cancelled",
+            "info",
+            "수동 회차 예약을 취소하고 자동 회차로 복원했습니다",
+        )
+    except Exception:
+        pass
+    return {
+        "run_id": run_id,
+        "cancelled": True,
+        "mode": "auto",
+        "state": "auto",
+    }
 
 
 def lock_reserved_slot(

@@ -27,6 +27,7 @@ from app.services.slot_reservations import (
     save_check_result,
     transition_slot,
 )
+from app.services import slot_reservations
 
 
 KST = ZoneInfo("Asia/Seoul")
@@ -211,6 +212,16 @@ def test_upload_decision_atomically_claims_approved_slot_once(tmp_path):
     assert upload_decision(tmp_path, RUN_ID, kst(11)) == "approved"
     assert upload_decision(tmp_path, RUN_ID, kst(11)) == "hold"
     assert read_slot(tmp_path)["state"] == "uploading"
+
+
+def test_cancelled_preproduction_slot_returns_upload_decision_to_automatic(tmp_path):
+    create_check(tmp_path, RUN_ID, {"topic_input": "검증된 수동 소재"}, kst(8, 40))
+    save_check_result(tmp_path, RUN_ID, checked_result(), kst(8, 41))
+    reserve_checked_topic(tmp_path, RUN_ID, kst(8, 42))
+
+    slot_reservations.cancel_manual_reservation(tmp_path, RUN_ID, kst(8, 50))
+
+    assert upload_decision(tmp_path, RUN_ID, kst(11)) == "automatic"
 
 
 def test_approved_manual_package_reuses_artifacts_and_records_uploaded_state(

@@ -28,13 +28,13 @@ from app.services.slot_reservations import (
     KST,
     SlotConflict,
     append_slot_event,
+    cancel_manual_reservation,
     create_check,
     events_after,
     init_slot_tables,
     list_slot_cards,
     reserve_checked_topic,
     save_check_result,
-    transition_slot,
 )
 
 
@@ -449,13 +449,7 @@ def reserve(run_id: RunId, body: ReservationRequest):
 def cancel_reservation(run_id: RunId):
     data_dir = _data_dir()
     _manual_slot_or_404(data_dir, run_id)
-    result = _call_service(
-        transition_slot, data_dir, run_id,
-        {"draft", "reservable", "needs_input", "reserved"},
-        "cancelled", _now(), stage="cancelled",
-    )
-    append_slot_event(data_dir, run_id, "cancelled", "info", "수동 회차 예약을 취소했습니다")
-    return _public_slot(result)
+    return _call_service(cancel_manual_reservation, data_dir, run_id, _now())
 
 
 @router.get("/{run_id}")
