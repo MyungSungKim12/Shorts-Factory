@@ -19,6 +19,7 @@ from app.services.slot_reservations import (
     ACTIVE_STATES,
     KST,
     append_slot_event,
+    fail_owned_slot,
     lock_reserved_slot,
     slot_window,
     transition_slot,
@@ -64,6 +65,107 @@ def _tag_boundary(exc: Exception, boundary: str) -> None:
             pass
 
 
+def _safe_note(exc: Exception, message: str) -> None:
+    try:
+        exc.add_note(message)
+    except (AttributeError, TypeError):
+        pass
+
+
+def _archive_promoted_artifact(
+    data_dir: Path, destination: Path, staging_id: str
+) -> Path:
+    archive_root = data_dir / "recovery" / "manual-artifacts"
+    archive_root.mkdir(parents=True, exist_ok=True)
+    stem = f"{staging_id}-failed-{_now():%Y%m%d-%H%M%S}-{os.getpid()}"
+    archive = archive_root / stem
+    suffix = 1
+    while archive.exists():
+        archive = archive_root / f"{stem}-{suffix}"
+        suffix += 1
+    destination.replace(archive)
+    return archive
+
+
+def _write_cleanup_report(
+    data_dir: Path, run_id: str, attempt: int, stage: str
+) -> None:
+    report = data_dir / "recovery" / "manual-cleanup" / f"{run_id}-{attempt}.json"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    _write_json(
+        report,
+        {
+            "run_id": run_id,
+            "attempt": attempt,
+            "stage": stage,
+            "status": "cleanup_required",
+        },
+    )
+
+
+def _persist_failure(
+    data_dir: Path,
+    run_id: str,
+    worker_id: str,
+    attempt: int,
+    failed_stage: str,
+    original: Exception,
+    *,
+    artifact_path: Path | None = None,
+) -> bool:
+    fields = {
+        "stage": failed_stage,
+        "worker_id": None,
+    }
+    if artifact_path is not None:
+        fields["artifact_path"] = str(artifact_path)
+    persisted = False
+    for _ in range(2):
+        try:
+            transition_slot(
+                data_dir,
+                run_id,
+                {failed_stage},
+                "failed",
+                _now(),
+                **fields,
+            )
+            persisted = True
+            break
+        except Exception:
+            continue
+    if not persisted:
+        try:
+            fail_owned_slot(
+                data_dir,
+                run_id,
+                worker_id,
+                failed_stage,
+                _now(),
+                artifact_path=str(artifact_path) if artifact_path is not None else None,
+            )
+            persisted = True
+        except Exception:
+            _safe_note(original, "수동 제작 실패 상태 정리에 실패했습니다")
+            try:
+                _write_cleanup_report(data_dir, run_id, attempt, failed_stage)
+            except Exception:
+                _safe_note(original, "수동 제작 정리 보고서 기록에 실패했습니다")
+    if persisted:
+        try:
+            append_slot_event(
+                data_dir,
+                run_id,
+                failed_stage,
+                "error",
+                "수동 영상 제작 중 오류가 발생했습니다",
+                {"attempt": attempt, "failed_stage": failed_stage},
+            )
+        except Exception:
+            _safe_note(original, "수동 제작 실패 이벤트 기록에 실패했습니다")
+    return persisted
+
+
 def run_manual_prebuild(
     data_dir: Path,
     ffmpeg_path: str,
@@ -87,6 +189,9 @@ def run_manual_prebuild(
         raise RuntimeError("수동 사전 제작 전역 파이프라인 잠금 획득 실패")
 
     current_state: str | None = None
+    slot_cleanup_complete = True
+    artifact_recovery_complete = True
+    promoted_destination: Path | None = None
     boundary = "lock"
     previous_pipeline_run_id = os.environ.get("PIPELINE_RUN_ID")
     os.environ["PIPELINE_RUN_ID"] = run_id
@@ -95,6 +200,7 @@ def run_manual_prebuild(
         if locked is None:
             raise RuntimeError("수동 예약을 제작 작업자가 잠그지 못했습니다")
         current_state = "locked"
+        slot_cleanup_complete = False
         topic = _checked_topic(locked)
         selected = topic.get("format")
         if not isinstance(selected, str) or not selected:
@@ -197,11 +303,8 @@ def run_manual_prebuild(
 
         boundary = "promotion"
         scheduled_at = slot_window(run_id).upload_at
-        destination = promote_staging(
-            data_dir, staging_id, run_id, scheduled_at, quality
-        )
         _write_json(
-            destination / "manual_review.json",
+            staging_dir / "manual_review.json",
             {
                 "run_id": run_id,
                 "attempt": attempt,
@@ -209,6 +312,10 @@ def run_manual_prebuild(
                 "topic_sha256": topic_sha256,
             },
         )
+        destination = promote_staging(
+            data_dir, staging_id, run_id, scheduled_at, quality
+        )
+        promoted_destination = destination
         transition_slot(
             data_dir,
             run_id,
@@ -220,6 +327,7 @@ def run_manual_prebuild(
             artifact_path=str(destination),
         )
         current_state = "review_ready"
+        slot_cleanup_complete = True
         append_slot_event(
             data_dir,
             run_id,
@@ -240,30 +348,29 @@ def run_manual_prebuild(
         _tag_boundary(exc, boundary)
         if current_state in ACTIVE_STATES:
             failed_stage = current_state
-            try:
-                transition_slot(
-                    data_dir,
-                    run_id,
-                    {current_state},
-                    "failed",
-                    _now(),
-                    stage=failed_stage,
-                    worker_id=None,
-                )
-                append_slot_event(
-                    data_dir,
-                    run_id,
-                    failed_stage,
-                    "error",
-                    "수동 영상 제작 중 오류가 발생했습니다",
-                    {"attempt": attempt, "failed_stage": failed_stage},
-                )
-            except Exception:
-                pass
+            archived_artifact = None
+            if promoted_destination is not None and promoted_destination.exists():
+                try:
+                    archived_artifact = _archive_promoted_artifact(
+                        data_dir, promoted_destination, staging_id
+                    )
+                except Exception:
+                    artifact_recovery_complete = False
+                    _safe_note(exc, "승격된 수동 영상 복구 보관에 실패했습니다")
+            slot_cleanup_complete = _persist_failure(
+                data_dir,
+                run_id,
+                worker_id,
+                attempt,
+                failed_stage,
+                exc,
+                artifact_path=archived_artifact,
+            )
         raise
     finally:
         if previous_pipeline_run_id is None:
             os.environ.pop("PIPELINE_RUN_ID", None)
         else:
             os.environ["PIPELINE_RUN_ID"] = previous_pipeline_run_id
-        release_owned_lock(lock_path, worker_id, os.getpid())
+        if slot_cleanup_complete and artifact_recovery_complete:
+            release_owned_lock(lock_path, worker_id, os.getpid())

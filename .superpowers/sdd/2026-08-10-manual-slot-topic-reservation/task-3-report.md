@@ -139,3 +139,97 @@ git diff --check
 - `run_manual_prebuild()`는 현재 공개 인터페이스 계획대로 잠금 대기 옵션이 없으며, 다른 살아 있는 pipeline worker가 전역 잠금을 보유하면 즉시 실패 상태가 아닌 호출 오류로 반환한다. 예약 worker 선점 전이므로 `reserved` 상태와 `worker_id=NULL`은 유지된다. 재시도 정책은 Task 4의 명시적 retry 동작에서 결정할 수 있다.
 - 승격 이후 `manual_review.json` 쓰기 또는 최종 SQLite 전이가 실패하면 완성된 `work/<run_id>`는 보존되지만 예약은 `failed`가 될 수 있다. 데이터 손실보다 복구 가능 보존을 택한 동작이며 Task 4의 재시도/폐기 로직은 기존 artifact 존재 여부를 확인해야 한다.
 - 수동 writer 선택자는 기본값이 `False`라 기존 모든 자동 호출과 테스트에는 영향이 없다. 향후 다른 수동 호출자가 writer를 직접 사용할 때만 명시적으로 `manual_checked=True`를 전달해야 한다.
+
+---
+
+## 게이트 리뷰 수정 라운드 1
+
+### 기준과 상태
+
+- 수정 기준 커밋: `c552c58 기능: 예약 소재 회차 영상 사전제작`
+- IMPORTANT 2건을 재현 테스트로 확인한 뒤 수정했다.
+- 자동 `prepare_slot` 라우팅과 자동 researcher/writer/producer 결과 계약은 변경하지 않았다.
+
+### 원인 분석
+
+1. 기존 worker는 `promote_staging()`이 staging을 제거한 뒤 `manual_review.json`을 쓰고 `review_ready` DB 전이를 수행했다. marker 또는 DB 전이가 실패하면 완성본이 `work/<run_id>`에 남아 이후 `ensure_target_available()`이 재시도를 차단했다.
+2. 기존 예외 정리는 failed 상태 전이와 실패 이벤트 append를 한 broad `try`에 넣고 모든 정리 예외를 삼켰다. 상태 전이가 실패하면 active 상태와 `worker_id`가 남은 채 global lock만 해제될 수 있었고, 이벤트 실패도 관찰할 수 없었다.
+
+### 수정 내용
+
+#### 승격 이후 복구 가능성
+
+- `manual_review.json`을 quality gate 통과 후 staging에 먼저 기록한다. 따라서 marker 쓰기 실패는 promotion 전에 발생하며 `work/<run_id>`를 만들지 않는다.
+- marker가 포함된 staging만 기존 `promote_staging()` 경계로 승격한다.
+- promotion 이후 `review_ready` DB 전이가 실패하면 완성 패키지를 삭제하지 않고 `data/recovery/manual-artifacts/manual-prebuild-<run_id>-<attempt>-failed-.../`로 같은 파일시스템에서 원자 이동한다.
+- 실패 예약의 `artifact_path`에는 복구 보관 경로를 기록한다.
+- 원래 `work/<run_id>`가 비워지므로 `ensure_target_available()`이 통과하고 다음 attempt promotion을 막지 않는다.
+- archive 이동까지 실패한 비정상 상황은 원래 예외에 비밀 없는 note를 추가하고 global lock을 유지해, active worker/artifact 충돌 상태에서 다른 pipeline이 진입하지 않게 한다.
+
+#### 실패 상태와 worker 정리
+
+- 정상 `transition_slot(..., target="failed")`을 최대 2회 시도한다.
+- 두 번 모두 실패하면 새 `fail_owned_slot()` fallback이 `BEGIN IMMEDIATE` 안에서 active 상태와 정확한 `worker_id` 소유권을 확인하고 `state=failed`, `worker_id=NULL`, 실패 단계와 선택적 archive 경로를 원자 저장한다.
+- fallback은 이미 `failed`이고 worker가 없는 상태에 대해 idempotent하다.
+- 정상 전이와 fallback이 모두 실패하면 `data/recovery/manual-cleanup/<run_id>-<attempt>.json`에 raw 오류 없이 cleanup 필요 상태를 기록하고 global lock을 해제하지 않는다.
+- 실패 이벤트 append는 상태 정리와 별도 경계로 실행한다. 이벤트 저장 실패는 상태 정리를 되돌리거나 가리지 않으며 원래 pipeline 예외에 `수동 제작 실패 이벤트 기록에 실패했습니다`라는 bounded note만 추가한다.
+- provider 예외·이벤트 저장 예외의 원문과 raw payload는 DB 이벤트, cleanup report, exception note에 기록하지 않는다.
+
+### 수정 라운드 TDD 증거
+
+#### RED — post-promotion 및 cleanup 실패 재현
+
+명령:
+
+```powershell
+D:\ms\shorts-factory-be\venv\Scripts\python.exe -m pytest -q tests/test_manual_slot_pipeline.py
+```
+
+수정 전 결과: `5 failed, 3 passed in 0.86s`.
+
+- promotion 진입 시 staging에 `manual_review.json`이 없어 실패
+- marker 실패 후 `work/<run_id>`가 남아 실패
+- `review_ready` 전이 실패 후 승격 artifact가 `work/<run_id>`에 남아 실패
+- failed 전이 주입 시 상태가 `producing`, worker가 설정된 채 남아 실패
+- 실패 이벤트 저장 오류가 원래 예외에 안전하게 보고되지 않아 실패
+
+#### GREEN — 수동 worker 회귀
+
+같은 명령 결과: `8 passed in 0.79s`.
+
+#### GREEN — 관련 집중 회귀
+
+명령:
+
+```powershell
+D:\ms\shorts-factory-be\venv\Scripts\python.exe -m pytest -q tests/test_manual_slot_pipeline.py tests/test_slot_prebuild.py tests/test_slot_reservations.py tests/test_recovery.py tests/test_quality_gate.py tests/test_story_prompts.py
+```
+
+결과: `101 passed in 2.47s`.
+
+추가 검사:
+
+```powershell
+D:\ms\shorts-factory-be\venv\Scripts\python.exe -m compileall -q app tests\test_manual_slot_pipeline.py
+git diff --check
+```
+
+결과: compileall 성공, diff 오류 없음(CRLF 변환 안내만 존재).
+
+#### 전체 백엔드
+
+명령:
+
+```powershell
+D:\ms\shorts-factory-be\venv\Scripts\python.exe -m pytest -q
+```
+
+결과: `366 passed in 3.93s`.
+
+### 수정 라운드 셀프 리뷰와 우려
+
+- archive에는 `topic.json`, `script.json`, `produce_log.json`, `output.mp4`, `prepared.json`, `manual_review.json`을 포함한 완성 패키지가 보존된다.
+- marker 실패와 DB 전이 실패 테스트 모두 worker 해제, global lock 해제, `work/<run_id>` 부재와 target 재사용 가능성을 확인한다.
+- 일반 failed 전이 오류 테스트는 ownership fallback으로 상태와 worker가 정리된 뒤에만 global lock이 해제됨을 확인한다.
+- 이벤트 저장 오류 테스트는 원래 render 예외를 유지하고 DB 상태 cleanup이 먼저 완료되며 provider 비밀 문자열이 note에 포함되지 않음을 확인한다.
+- 파일시스템 자체가 archive 이동을 거부하거나 SQLite 정상 전이와 ownership fallback이 모두 실패한 경우에는 global lock을 의도적으로 유지한다. 호출 프로세스 종료 후 기존 stale-lock 회수 경로가 잠금을 정리할 수 있으며, cleanup report가 운영자 복구 단서를 남긴다.

@@ -442,6 +442,49 @@ def transition_slot(
         db.close()
 
 
+def fail_owned_slot(
+    data_dir: Path,
+    run_id: str,
+    worker_id: str,
+    stage: str,
+    now: datetime,
+    *,
+    artifact_path: str | None = None,
+) -> dict:
+    """Clear one owned active worker through an idempotent failure fallback."""
+    if not worker_id:
+        raise ValueError("worker_id is required")
+    timestamp = _as_kst(now).isoformat()
+    db = _begin_immediate(data_dir)
+    try:
+        row = _fetch_reservation(db, run_id)
+        if row is None:
+            raise SlotConflict("reservation does not exist")
+        if row["state"] == "failed" and row["worker_id"] is None:
+            result = _row_to_dict(row)
+            db.commit()
+            return result
+        if row["state"] not in ACTIVE_STATES or row["worker_id"] != worker_id:
+            raise SlotConflict("active reservation is not owned by this worker")
+        db.execute(
+            """
+            UPDATE slot_reservations
+            SET state = 'failed', stage = ?, worker_id = NULL,
+                artifact_path = COALESCE(?, artifact_path), updated_at = ?
+            WHERE run_id = ? AND worker_id = ?
+            """,
+            (stage, artifact_path, timestamp, run_id, worker_id),
+        )
+        failed = _row_to_dict(_fetch_reservation(db, run_id))
+        db.commit()
+        return failed
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
 def _redact_text(value: str) -> str:
     redacted = _AUTHORIZATION_VALUE.sub("Authorization: [redacted]", value)
     redacted = _SECRET_VALUE.sub(r"\g<label>[redacted]", redacted)

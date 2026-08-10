@@ -11,7 +11,10 @@ import pytest
 
 from app.services import manual_slot_pipeline
 from app.services.manual_slot_pipeline import run_manual_prebuild
-from app.services.slot_prebuild import manual_reservation_for_prebuild
+from app.services.slot_prebuild import (
+    ensure_target_available,
+    manual_reservation_for_prebuild,
+)
 from app.services.slot_reservations import (
     create_check,
     events_after,
@@ -196,3 +199,195 @@ def test_manual_failure_records_stage_releases_worker_and_hides_provider_error(
     assert events[-1]["level"] == "error"
     assert events[-1]["metadata"] == {"attempt": 1, "failed_stage": "producing"}
     assert "provider-secret" not in json.dumps(events, ensure_ascii=False)
+
+
+def test_review_marker_is_staged_before_promotion(tmp_path, monkeypatch):
+    reserve_manual_slot(tmp_path)
+    calls: list[str] = []
+    writer, producer = _successful_boundaries(tmp_path, calls)
+    monkeypatch.setattr(manual_slot_pipeline, "_now", lambda: kst(9))
+    monkeypatch.setattr(
+        manual_slot_pipeline,
+        "validate_upload_package",
+        lambda *args: {"passed": True, "failures": []},
+    )
+    real_promote = manual_slot_pipeline.promote_staging
+
+    def assert_marker_then_promote(data_dir, staging_id, run_id, scheduled_at, quality):
+        marker = data_dir / "staging" / staging_id / "manual_review.json"
+        assert marker.is_file()
+        return real_promote(data_dir, staging_id, run_id, scheduled_at, quality)
+
+    monkeypatch.setattr(
+        manual_slot_pipeline, "promote_staging", assert_marker_then_promote
+    )
+
+    result = run_manual_prebuild(
+        tmp_path,
+        "ffmpeg",
+        RUN_ID,
+        writer_fn=writer,
+        producer_fn=producer,
+    )
+
+    assert result["state"] == "review_ready"
+
+
+def test_review_marker_failure_never_creates_retry_blocking_work(tmp_path, monkeypatch):
+    reserve_manual_slot(tmp_path)
+    calls: list[str] = []
+    writer, producer = _successful_boundaries(tmp_path, calls)
+    monkeypatch.setattr(manual_slot_pipeline, "_now", lambda: kst(9))
+    monkeypatch.setattr(
+        manual_slot_pipeline,
+        "validate_upload_package",
+        lambda *args: {"passed": True, "failures": []},
+    )
+    real_write_json = manual_slot_pipeline._write_json
+
+    def fail_review_marker(path: Path, value: dict):
+        if path.name == "manual_review.json":
+            raise RuntimeError("marker write failed")
+        return real_write_json(path, value)
+
+    monkeypatch.setattr(manual_slot_pipeline, "_write_json", fail_review_marker)
+
+    with pytest.raises(RuntimeError, match="marker write failed"):
+        run_manual_prebuild(
+            tmp_path,
+            "ffmpeg",
+            RUN_ID,
+            writer_fn=writer,
+            producer_fn=producer,
+        )
+
+    state = read_reservation(tmp_path)
+    assert state["state"] == "failed"
+    assert state["worker_id"] is None
+    assert not (tmp_path / "work" / RUN_ID).exists()
+    assert not (tmp_path / "recovery" / "pipeline.lock").exists()
+    ensure_target_available(tmp_path, RUN_ID)
+
+
+def test_review_ready_transition_failure_archives_promoted_artifact(
+    tmp_path, monkeypatch
+):
+    reserve_manual_slot(tmp_path)
+    calls: list[str] = []
+    writer, producer = _successful_boundaries(tmp_path, calls)
+    monkeypatch.setattr(manual_slot_pipeline, "_now", lambda: kst(9))
+    monkeypatch.setattr(
+        manual_slot_pipeline,
+        "validate_upload_package",
+        lambda *args: {"passed": True, "failures": []},
+    )
+    real_transition = manual_slot_pipeline.transition_slot
+
+    def fail_review_ready(data_dir, run_id, expected, target, now, **fields):
+        if target == "review_ready":
+            raise RuntimeError("review state write failed")
+        return real_transition(data_dir, run_id, expected, target, now, **fields)
+
+    monkeypatch.setattr(manual_slot_pipeline, "transition_slot", fail_review_ready)
+
+    with pytest.raises(RuntimeError, match="review state write failed"):
+        run_manual_prebuild(
+            tmp_path,
+            "ffmpeg",
+            RUN_ID,
+            writer_fn=writer,
+            producer_fn=producer,
+        )
+
+    state = read_reservation(tmp_path)
+    assert state["state"] == "failed"
+    assert state["worker_id"] is None
+    assert not (tmp_path / "work" / RUN_ID).exists()
+    archives = list(
+        (tmp_path / "recovery" / "manual-artifacts").glob(
+            f"manual-prebuild-{RUN_ID}-1-*"
+        )
+    )
+    assert len(archives) == 1
+    assert (archives[0] / "output.mp4").is_file()
+    assert (archives[0] / "manual_review.json").is_file()
+    assert state["artifact_path"] == str(archives[0])
+    assert not (tmp_path / "recovery" / "pipeline.lock").exists()
+    ensure_target_available(tmp_path, RUN_ID)
+
+
+def test_failed_transition_uses_owned_fallback_before_lock_release(
+    tmp_path, monkeypatch
+):
+    reserve_manual_slot(tmp_path)
+    monkeypatch.setattr(manual_slot_pipeline, "_now", lambda: kst(9))
+    real_transition = manual_slot_pipeline.transition_slot
+
+    def fail_normal_cleanup(data_dir, run_id, expected, target, now, **fields):
+        if target == "failed":
+            raise RuntimeError("transition unavailable")
+        return real_transition(data_dir, run_id, expected, target, now, **fields)
+
+    monkeypatch.setattr(manual_slot_pipeline, "transition_slot", fail_normal_cleanup)
+
+    def fake_writer(root: Path, staging_id: str, **kwargs):
+        (root / "staging" / staging_id / "script.json").write_text(
+            "{}", encoding="utf-8"
+        )
+
+    async def raising_producer(*args, **kwargs):
+        raise RuntimeError("render failed")
+
+    with pytest.raises(RuntimeError, match="render failed"):
+        run_manual_prebuild(
+            tmp_path,
+            "ffmpeg",
+            RUN_ID,
+            writer_fn=fake_writer,
+            producer_fn=raising_producer,
+        )
+
+    state = read_reservation(tmp_path)
+    assert state["state"] == "failed"
+    assert state["worker_id"] is None
+    assert not (tmp_path / "recovery" / "pipeline.lock").exists()
+
+
+def test_failure_event_error_is_reported_without_blocking_state_cleanup(
+    tmp_path, monkeypatch
+):
+    reserve_manual_slot(tmp_path)
+    monkeypatch.setattr(manual_slot_pipeline, "_now", lambda: kst(9))
+    real_append = manual_slot_pipeline.append_slot_event
+
+    def fail_error_event(data_dir, run_id, stage, level, message, metadata=None):
+        if level == "error":
+            raise RuntimeError("event store included provider-secret")
+        return real_append(data_dir, run_id, stage, level, message, metadata)
+
+    monkeypatch.setattr(manual_slot_pipeline, "append_slot_event", fail_error_event)
+
+    def fake_writer(root: Path, staging_id: str, **kwargs):
+        (root / "staging" / staging_id / "script.json").write_text(
+            "{}", encoding="utf-8"
+        )
+
+    async def raising_producer(*args, **kwargs):
+        raise RuntimeError("render failed")
+
+    with pytest.raises(RuntimeError, match="render failed") as captured:
+        run_manual_prebuild(
+            tmp_path,
+            "ffmpeg",
+            RUN_ID,
+            writer_fn=fake_writer,
+            producer_fn=raising_producer,
+        )
+
+    state = read_reservation(tmp_path)
+    assert state["state"] == "failed"
+    assert state["worker_id"] is None
+    assert not (tmp_path / "recovery" / "pipeline.lock").exists()
+    notes = getattr(captured.value, "__notes__", [])
+    assert notes == ["수동 제작 실패 이벤트 기록에 실패했습니다"]
+    assert "provider-secret" not in json.dumps(notes, ensure_ascii=False)
