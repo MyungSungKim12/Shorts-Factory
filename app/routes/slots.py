@@ -298,7 +298,11 @@ def _public_slot(slot: dict) -> dict:
             for key, value in check_result.items()
             if key in _CHECK_RESULT_FIELDS
         }
-        if result["check_result"].get("grounding_error") not in _PUBLIC_GROUNDING_ERRORS:
+        grounding_error = result["check_result"].get("grounding_error")
+        if (
+            not isinstance(grounding_error, str)
+            or grounding_error not in _PUBLIC_GROUNDING_ERRORS
+        ):
             result["check_result"].pop("grounding_error", None)
     run_id = result.get("run_id")
     if "slot" not in result and isinstance(run_id, str):

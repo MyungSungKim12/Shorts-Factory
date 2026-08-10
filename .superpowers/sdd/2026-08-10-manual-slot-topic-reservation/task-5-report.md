@@ -64,3 +64,23 @@
 ### 우려 사항
 
 - 현재 확인된 미해결 결함은 없다.
+
+## Gate review fix round 2
+
+### RED
+
+- `grounding_error`가 dict 또는 list일 때 공개 상세 직렬화의 set membership에서 `TypeError`가 발생함을 재현했다.
+- 알 수 없는 제공자 오류 문자열도 함께 회귀 입력으로 고정했다.
+- RED 명령: `D:\ms\shorts-factory-be\venv\Scripts\python.exe -m pytest -q tests/test_slot_api.py::test_detail_omits_non_allowlisted_grounding_error`
+- RED 결과: dict/list 2건 실패, unknown provider text 1건 통과.
+
+### GREEN
+
+- `grounding_error`가 문자열인지 먼저 검사한 뒤 공개 코드 허용 목록과 비교하고, 비문자열 또는 미등록 문자열은 모두 생략한다.
+- 집중 명령 결과: `39 passed in 1.23s`.
+- 전체 명령 결과: `422 passed in 5.40s`.
+- 보조 확인: `compileall`과 `git diff --check` 통과.
+
+### 우려 사항
+
+- 현재 확인된 미해결 결함은 없다.

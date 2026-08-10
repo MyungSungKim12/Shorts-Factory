@@ -452,7 +452,18 @@ def test_events_use_explicit_schema_and_defensive_secret_redaction(
         assert secret not in response.text
 
 
-def test_detail_omits_non_allowlisted_grounding_error(configured_api):
+@pytest.mark.parametrize(
+    "grounding_error",
+    [
+        {"provider_error": "dict-secret"},
+        ["list-secret"],
+        "provider access_token=grounding-secret",
+    ],
+    ids=["dict", "list", "unknown-provider-text"],
+)
+def test_detail_omits_non_allowlisted_grounding_error(
+    configured_api, grounding_error
+):
     run_id = _run_id()
     _seed_manual(configured_api, run_id, "failed")
     with sqlite3.connect(configured_api / "videos.sqlite") as db:
@@ -463,7 +474,7 @@ def test_detail_omits_non_allowlisted_grounding_error(configured_api):
                     {
                         "status": "failed",
                         "reason": "grounding_invalid",
-                        "grounding_error": "provider access_token=grounding-secret",
+                        "grounding_error": grounding_error,
                     }
                 ),
                 run_id,
@@ -474,4 +485,5 @@ def test_detail_omits_non_allowlisted_grounding_error(configured_api):
 
     assert response.status_code == 200
     assert "grounding_error" not in response.json()["check_result"]
-    assert "grounding-secret" not in response.text
+    for secret in ("dict-secret", "list-secret", "grounding-secret"):
+        assert secret not in response.text
