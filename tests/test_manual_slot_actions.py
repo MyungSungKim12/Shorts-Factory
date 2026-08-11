@@ -180,7 +180,11 @@ def test_unapproved_manual_slot_is_held_without_auto_fallback(tmp_path, monkeypa
             orchestrator, name, lambda *args, _name=name, **kwargs: calls.append(_name)
         )
 
-    result = asyncio.run(orchestrator.run_pipeline(tmp_path, "ffmpeg", slot=1))
+    result = asyncio.run(
+        orchestrator.run_pipeline(
+            tmp_path, "ffmpeg", slot=1, run_id_override=RUN_ID
+        )
+    )
 
     assert result["success"] is True
     assert result["stages"]["uploader"] == {
