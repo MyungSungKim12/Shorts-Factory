@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from app.services import slot_prebuild
+from app.services.slot_reservations import init_slot_tables
 from app.services.slot_prebuild import next_scheduled_slot, promote_staging
 from scripts import prepare_next_slot as command
 
@@ -232,6 +233,32 @@ def test_explicit_manual_route_runs_before_automatic_global_lock(
 
     assert result is manual_result
     assert calls == [("lookup", "20260810-1"), ("manual", "20260810-1")]
+
+
+def test_failed_manual_topic_check_falls_back_to_automatic_prebuild(
+    tmp_path: Path,
+) -> None:
+    run_id = "20260811-2"
+    init_slot_tables(tmp_path)
+    with sqlite3.connect(tmp_path / "videos.sqlite") as db:
+        db.execute(
+            """
+            INSERT INTO slot_reservations (
+                run_id, mode, original_input, request_json, check_result,
+                state, stage, production_at, upload_at, created_at, updated_at
+            ) VALUES (?, 'manual', ?, '{}', '{}', 'failed', 'checked', ?, ?, ?, ?)
+            """,
+            (
+                run_id,
+                "오디세우스의 항해",
+                "2026-08-11T12:00:00+09:00",
+                "2026-08-11T14:00:00+09:00",
+                "2026-08-11T10:00:00+09:00",
+                "2026-08-11T10:01:00+09:00",
+            ),
+        )
+
+    assert slot_prebuild.manual_reservation_for_prebuild(tmp_path, run_id) is None
 
 
 def test_prepare_command_tags_the_failed_pipeline_stage(tmp_path: Path, monkeypatch) -> None:

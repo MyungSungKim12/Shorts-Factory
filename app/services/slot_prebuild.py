@@ -43,7 +43,8 @@ def manual_reservation_for_prebuild(data_dir: Path, run_id: str) -> dict | None:
                 return None
             row = db.execute(
                 """
-                SELECT run_id, state, attempt, check_result, production_at, upload_at
+                SELECT run_id, state, stage, attempt, check_result,
+                       production_at, upload_at
                 FROM slot_reservations
                 WHERE run_id = ? AND mode = 'manual'
                 """,
@@ -52,6 +53,10 @@ def manual_reservation_for_prebuild(data_dir: Path, run_id: str) -> dict | None:
     except sqlite3.Error as exc:
         raise RuntimeError(f"수동 예약 조회 실패: {exc}") from exc
     if row is None:
+        return None
+    if row["state"] in {"draft", "checking", "needs_input", "reservable", "cancelled"}:
+        return None
+    if row["state"] == "failed" and row["stage"] in {None, "checked", "topic_check"}:
         return None
     if row["state"] != "reserved":
         return {
