@@ -135,6 +135,43 @@ def test_history_merges_matching_recovery_without_changing_pagination(tmp_path, 
     assert payload["pagination"]["total_items"] == 2
 
 
+def test_auto_topics_combines_prepared_and_uploaded_runs_with_pagination(
+    tmp_path, monkeypatch
+):
+    _create_video_db(tmp_path)
+    prepared = tmp_path / "work" / "20260726-1"
+    prepared.mkdir(parents=True)
+    (prepared / "topic.json").write_text(
+        json.dumps({"topic": "자동 생성 미스터리 소재"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (prepared / "script.json").write_text(
+        json.dumps({"title": "자동 생성 영상 제목"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (prepared / "prepared.json").write_text(
+        json.dumps({"prepared_at": "2026-07-26T09:15:00+09:00"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(main, "DATA_DIR", tmp_path)
+
+    response = client.get("/api/auto-topics?page=1&page_size=2")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["topics"][0] == {
+        "run_id": "20260726-1",
+        "slot": 1,
+        "topic": "자동 생성 미스터리 소재",
+        "title": "자동 생성 영상 제목",
+        "status": "prepared",
+        "generated_at": "2026-07-26T09:15:00+09:00",
+        "uploaded_at": None,
+    }
+    assert payload["pagination"]["total_items"] == 6
+    assert payload["pagination"]["has_next"] is True
+
+
 @pytest.mark.parametrize(
     "path",
     [
@@ -144,6 +181,8 @@ def test_history_merges_matching_recovery_without_changing_pagination(tmp_path, 
         "/api/history?page=0",
         "/api/history?page_size=0",
         "/api/history?page_size=51",
+        "/api/auto-topics?page=0",
+        "/api/auto-topics?page_size=51",
     ],
 )
 def test_paged_endpoints_reject_invalid_bounds(path):

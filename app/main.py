@@ -2,6 +2,8 @@
 import asyncio
 import json
 import os
+import re
+import sqlite3
 from datetime import date
 from pathlib import Path
 
@@ -41,6 +43,31 @@ def _pagination(page: int, page_size: int, total_items: int) -> dict:
         "total_pages": total_pages,
         "has_previous": page > 1 and total_pages > 0,
         "has_next": page < total_pages,
+    }
+
+
+_SLOT_RUN_ID = re.compile(r"^\d{8}-([1-4])$")
+
+
+def _json_object(path: Path) -> dict:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _manual_run_ids(db: sqlite3.Connection) -> set[str]:
+    table = db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='slot_reservations'"
+    ).fetchone()
+    if table is None:
+        return set()
+    return {
+        str(row[0])
+        for row in db.execute(
+            "SELECT run_id FROM slot_reservations WHERE mode = 'manual'"
+        )
     }
 
 
@@ -136,6 +163,72 @@ def run_history(
     offset = (page - 1) * page_size
     return {
         "runs": runs[offset:offset + page_size],
+        "pagination": _pagination(page, page_size, total_items),
+    }
+
+
+@app.get("/api/auto-topics")
+def automatic_topic_history(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=50),
+):
+    """Return persisted automatic topics, including prepared and uploaded slots."""
+    entries: dict[str, dict] = {}
+    manual_ids: set[str] = set()
+    database = DATA_DIR / "videos.sqlite"
+    if database.exists():
+        with sqlite3.connect(database) as db:
+            manual_ids = _manual_run_ids(db)
+            videos_table = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='videos'"
+            ).fetchone()
+            if videos_table is not None:
+                for run_id, title, topic, status, uploaded_at in db.execute(
+                    "SELECT date, title, topic, status, uploaded_at FROM videos "
+                    "WHERE status = 'uploaded'"
+                ):
+                    run_id = str(run_id)
+                    if run_id in manual_ids:
+                        continue
+                    match = _SLOT_RUN_ID.fullmatch(run_id)
+                    entries[run_id] = {
+                        "run_id": run_id,
+                        "slot": int(match.group(1)) if match else None,
+                        "topic": topic or title or "",
+                        "title": title or topic or "",
+                        "status": status,
+                        "generated_at": None,
+                        "uploaded_at": uploaded_at,
+                    }
+
+    work_root = DATA_DIR / "work"
+    if work_root.exists():
+        for work in work_root.iterdir():
+            if not work.is_dir() or not _SLOT_RUN_ID.fullmatch(work.name):
+                continue
+            run_id = work.name
+            if run_id in manual_ids:
+                continue
+            topic = _json_object(work / "topic.json")
+            script = _json_object(work / "script.json")
+            prepared = _json_object(work / "prepared.json")
+            match = _SLOT_RUN_ID.fullmatch(run_id)
+            current = entries.get(run_id, {})
+            entries[run_id] = {
+                "run_id": run_id,
+                "slot": int(match.group(1)),
+                "topic": topic.get("topic") or current.get("topic") or "",
+                "title": script.get("title") or current.get("title") or "",
+                "status": current.get("status") or "prepared",
+                "generated_at": prepared.get("prepared_at"),
+                "uploaded_at": current.get("uploaded_at"),
+            }
+
+    topics = sorted(entries.values(), key=lambda item: item["run_id"], reverse=True)
+    total_items = len(topics)
+    offset = (page - 1) * page_size
+    return {
+        "topics": topics[offset:offset + page_size],
         "pagination": _pagination(page, page_size, total_items),
     }
 
