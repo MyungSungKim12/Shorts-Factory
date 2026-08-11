@@ -10,6 +10,34 @@ from app.services.claude_client import call_agent
 from app.services.json_extract import extract_json
 
 
+_PREVIEW_ONLY_FILLER = (
+    "알아보겠습니다",
+    "살펴보겠습니다",
+    "확인해 보겠습니다",
+    "파헤쳐 보겠습니다",
+)
+
+
+def ensure_story_information_density(script: dict) -> dict:
+    """Reject newly written stories that are long on screen but short on facts."""
+    scenes = script.get("scenes") or []
+    if not 8 <= len(scenes) <= 10:
+        raise ValueError("story requires 8~10 information scenes")
+    narration_chars = sum(len(str(scene.get("narration") or "")) for scene in scenes)
+    if not 320 <= narration_chars <= 440:
+        raise ValueError(f"story narration {narration_chars} chars outside 320~440")
+    duration = round(sum(float(scene.get("duration_sec") or 0) for scene in scenes), 1)
+    if not 60 <= duration <= 75:
+        raise ValueError(f"story duration {duration:.1f}s outside 60~75s")
+    roles = {scene.get("role") for scene in scenes}
+    if not {"hook", "context", "problem", "mechanism", "payoff", "close"} <= roles:
+        raise ValueError("story information roles are incomplete")
+    narration = " ".join(str(scene.get("narration") or "") for scene in scenes)
+    if any(phrase in narration for phrase in _PREVIEW_ONLY_FILLER):
+        raise ValueError("story contains preview-only filler")
+    return script
+
+
 def run_writer(
     data_dir: Path,
     date_str: str,
@@ -66,6 +94,8 @@ def run_writer(
         )
         try:
             script_dict = validate_script(extract_json(script_text), selected)
+            if selected == "story":
+                script_dict = ensure_story_information_density(script_dict)
             script_dict["writer_mode"] = "llm" if attempt == 0 else "llm_retry"
             break
         except ValueError as exc:
@@ -74,6 +104,7 @@ def run_writer(
                 if selected == "story":
                     safe_print("  [script-writer] 모델 응답 2회 실패 → 검증 사실 템플릿으로 전환")
                     script_dict = validate_script(build_verified_story_script(topic), selected)
+                    script_dict = ensure_story_information_density(script_dict)
                     script_dict["writer_mode"] = "verified_template"
                     break
                 raise
@@ -103,9 +134,9 @@ def build_verified_story_script(topic: dict) -> dict:
 
     roles = [
         "hook", "context", "problem", "mechanism",
-        "mechanism", "payoff", "close",
+        "mechanism", "payoff", "payoff", "close",
     ]
-    durations = [7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 8.0]
+    durations = [7.5] * 8
 
     def sentence(value: str) -> str:
         normalized = " ".join(str(value).split()).rstrip(" ,.;:!?")
@@ -118,16 +149,35 @@ def build_verified_story_script(topic: dict) -> dict:
 
         return f"{normalized}."
 
+    first = facts[0]
+    second = facts[1] if len(facts) > 1 else facts[0]
     narrations = [
         sentence(topic["hook_angle"]),
-        sentence(topic["topic"]),
-        sentence(topic["core_question"]),
+        sentence(f"{topic['topic']}, 핵심 질문은 {topic['core_question']}"),
+        sentence(f"{first['source']} 기록은 {first['claim']}"),
+        sentence(f"구체적인 내용은 {first['value']}"),
+        sentence(f"{second['source']} 자료는 {second['claim']}"),
+        sentence(f"별도로 확인된 내용은 {second['value']}"),
+        sentence(topic.get("selection_reason") or topic["core_question"]),
+        sentence(f"확인된 기록이 남긴 질문은 {topic['core_question']}"),
     ]
-    fact_units = [fact["claim"] for fact in facts]
-    if len(fact_units) < 4:
-        fact_units.extend(fact["value"] for fact in facts)
-    for index in range(4):
-        narrations.append(sentence(fact_units[index % len(fact_units)]))
+    verified_units = [
+        f"{fact['source']}의 공개 자료에는 {fact['claim']}, {fact['value']}"
+        for fact in facts
+    ]
+    unit_index = 0
+    while sum(len(item) for item in narrations) < 320 and unit_index < 24:
+        index = 1 + (unit_index % 6)
+        expanded = narrations[index].rstrip(".") + ", " + verified_units[unit_index % len(verified_units)]
+        narrations[index] = sentence(expanded)
+        unit_index += 1
+    while sum(len(item) for item in narrations) > 440:
+        index = max(range(len(narrations)), key=lambda item: len(narrations[item]))
+        current = narrations[index].rstrip(".")
+        overflow = sum(len(item) for item in narrations) - 440
+        keep = max(32, len(current) - overflow)
+        shortened = current[:keep].rstrip(" ,.;:!?")
+        narrations[index] = f"{shortened}."
 
     scenes = []
     for index, (role, duration, narration) in enumerate(
@@ -197,8 +247,10 @@ Preserve exact_queries as the hook and close subject anchor. Use safe_fallbacks 
 - 위 NARRATIVE_PATTERN의 순서를 이번 영상의 중심 구조로 사용하고, 제목과 첫 문장을 매번 같은 공식으로 반복하지 마라.
 
 [잔존 구조]
-- 7~10개 씬으로 작성하고 duration_sec 합계는 반드시 53~58초다. 앞에 제목 음성 인트로, 뒤에 CTA가 붙으며 전체 음성은 피치를 유지한 채 1.2배로 재생된다.
-- 각 narration은 공백 포함 55자 이하, 모든 씬 narration 합계는 공백 포함 400자 이하다. 핵심 사실만 남기고 같은 의미를 반복하지 않는다.
+- 8~10개 씬으로 작성하고 duration_sec 합계는 반드시 60~68초다. 앞에 제목 음성 인트로, 뒤에 CTA가 붙으며 최종 영상은 70~85초를 목표로 하고 90초를 넘지 않는다. 전체 음성은 피치를 유지한 채 1.2배로 재생된다.
+- 각 narration은 공백 포함 75자 이하, 모든 씬 narration 합계는 공백 포함 320~440자다. 핵심 사실만 남기고 같은 의미를 반복하지 않는다.
+- 정보 전달 순서는 배경, 구체적 기록, 기묘한 이유, 가능한 설명 또는 원리, 아직 불확실한 부분, 이 기록이 중요한 이유를 모두 포함한다.
+- "알아보겠습니다", "살펴보겠습니다", "확인해 보겠습니다", "파헤쳐 보겠습니다"처럼 내용을 말하지 않고 다음 설명을 예고하는 문장을 쓰지 않는다.
 - 모든 narration은 마침표·물음표·느낌표 중 하나의 종결 문장부호로 끝나는 완결 문장이다.
 - 전환·대조·조건·원인과 결과의 경계에는 쉼표를 넣고, 문장부호 없이 여러 절을 이어 쓰지 않는다. 소리 내어 읽었을 때 한 호흡이 지나치게 길어지지 않게 한다.
 - 0~3초 hook: 인사, 채널명, 로고, 주제 소개 없이 결과나 모순부터 말한다.

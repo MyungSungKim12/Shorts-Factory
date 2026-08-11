@@ -106,12 +106,12 @@ def test_story_contract_accepts_concise_body():
     assert validate_script(data, "story")["format"] == "story"
 
 
-def test_story_contract_rejects_body_over_400_characters():
+def test_story_contract_rejects_body_over_440_characters():
     data = story_script()
     for scene in data["scenes"]:
         scene["narration"] = "가" * 38 + "," + "나" * 37 + "."
 
-    with pytest.raises(ValueError, match="400자 상한"):
+    with pytest.raises(ValueError, match="440자 상한"):
         validate_script(data, "story")
 
 

@@ -40,7 +40,7 @@ def _script():
         "hook": "비가 없는데 호수가 마르지 않습니다.",
         "scenes": [{
             "n": n, "role": roles[n - 1],
-            "narration": "검증된 기록이 중요한 단서를 보여줍니다.",
+            "narration": "검증된 기록은 구체적인 관측값과 그 의미, 아직 남은 한계를 함께 보여줍니다.",
             "visuals": ["desert lake aerial", "desert water closeup"],
             "duration_sec": 8, "emphasis": ["호수"],
         } for n in range(1, 10)],
@@ -127,12 +127,14 @@ def test_research_prompt_requires_selected_domain_and_semantic_deduplication():
 def test_writer_prompt_contains_retention_beats():
     prompt = writer._story_writer_prompt(_topic())
     assert "완성 영상 목표는 70~80초" in prompt
-    assert "400자 이하다" in prompt
-    assert "55자 이하" in prompt
-    assert "duration_sec 합계는 반드시 53~58초" in prompt
+    assert "320~440자" in prompt
+    assert "75자 이하" in prompt
+    assert "duration_sec 합계는 반드시 60~68초" in prompt
     assert "구독" in prompt
     assert "좋아요" in prompt
-    assert "7~10개" in prompt
+    assert "8~10개" in prompt
+    assert "알아보겠습니다" in prompt
+    assert "아직 불확실한 부분" in prompt
     assert "문장부호 없이 여러 절을 이어 쓰지" in prompt
     assert "종결 문장부호" in prompt
     assert "12~15초" in prompt
@@ -150,6 +152,19 @@ def test_writer_prompt_contains_retention_beats():
     assert "close 본문에는 \"\uad6c독\"과 \"좋아요\"를 절대 넣지 마라" in prompt
     assert '"title": "100자 이하 제목"' not in prompt
     assert '"title": "10분만 머물러도 위험한 지하 수정 동굴의 비밀"' in prompt
+
+
+def test_story_information_density_rejects_short_preview_only_narration():
+    script = _script()
+    for scene in script["scenes"]:
+        scene["narration"] = "이제 자세히 알아보겠습니다."
+
+    try:
+        writer.ensure_story_information_density(script)
+    except ValueError as exc:
+        assert "320~440" in str(exc) or "preview-only" in str(exc)
+    else:
+        raise AssertionError("information-poor story was accepted")
 
 
 def test_writer_routes_story_format_and_saves_validated_json(tmp_path, monkeypatch):
@@ -216,10 +231,10 @@ def test_writer_uses_verified_template_after_two_invalid_responses(tmp_path, mon
 
     assert len(calls) == 2
     assert result["writer_mode"] == "verified_template"
-    assert len(result["scenes"]) == 7
-    assert 53 <= result["total_duration_sec"] <= 75
+    assert len(result["scenes"]) == 8
+    assert 60 <= result["total_duration_sec"] <= 75
     narration = " ".join(scene["narration"] for scene in result["scenes"])
-    assert sum(len(scene["narration"]) for scene in result["scenes"]) <= 400
+    assert 320 <= sum(len(scene["narration"]) for scene in result["scenes"]) <= 440
     assert all(scene["narration"].endswith((".", "?", "!")) for scene in result["scenes"])
     assert topic["facts"][0]["claim"] in narration
     assert topic["facts"][0]["value"] in narration
@@ -253,8 +268,8 @@ def test_verified_template_stays_in_contract_with_long_verified_facts():
     script = writer.build_verified_story_script(topic)
     lengths = [len(scene["narration"]) for scene in script["scenes"]]
 
-    assert max(lengths) <= 55
-    assert sum(lengths) <= 400
+    assert max(lengths) <= 80
+    assert 320 <= sum(lengths) <= 440
     assert writer.validate_script(script, "story")["format"] == "story"
 
 
@@ -442,6 +457,7 @@ def test_writer_uses_manual_contract_for_prechecked_topic(tmp_path, monkeypatch)
     monkeypatch.setattr(writer, "validate_topic", reject_automatic_contract)
     monkeypatch.setattr(writer, "call_agent", lambda **kwargs: '{"title":"ok"}')
     monkeypatch.setattr(writer, "validate_script", lambda value, selected: value)
+    monkeypatch.setattr(writer, "ensure_story_information_density", lambda value: value)
 
     result = writer.run_writer(
         tmp_path,

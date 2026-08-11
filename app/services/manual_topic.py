@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+import hashlib
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -31,6 +33,67 @@ class ManualTopicInput:
     include_text: str = ""
     exclude_text: str = ""
     reference_urls: tuple[str, ...] = ()
+
+
+_QUESTION_MARKERS = re.compile(r"[?!.]|(?:왜|어떻게|무엇|사실|비밀|이유|논쟁|가능|실제)")
+
+
+def is_keyword_topic(request: ManualTopicInput) -> bool:
+    """Return true for short subject-only input that needs editorial choices."""
+    text = " ".join(str(request.topic_input or "").split())
+    return bool(
+        text
+        and len(text) <= 30
+        and len(text.split()) <= 4
+        and _QUESTION_MARKERS.search(text) is None
+    )
+
+
+def build_candidate_topic_prompt(
+    request: ManualTopicInput,
+    recent_topics: list[str],
+    excluded_topics: list[str] | None = None,
+) -> str:
+    references = "\n".join(f"- {url}" for url in request.reference_urls) or "없음"
+    recent = "\n".join(f"- {topic}" for topic in recent_topics) or "없음"
+    excluded = "\n".join(f"- {topic}" for topic in (excluded_topics or [])) or "없음"
+    return f"""당신은 '이상한 지구기록' 유튜브 Shorts의 소재 기획자다.
+
+[사용자 단어 소재]
+- 입력: {_display(request.topic_input)}
+- 강조점: {_display(request.emphasis)}
+- 반드시 포함: {_display(request.include_text)}
+- 제외: {_display(request.exclude_text)}
+- 참고 URL:
+{references}
+
+[최근 14일 중복 제외]
+{recent}
+
+[이번 보충 생성에서 제외할 후보]
+{excluded}
+
+[작업]
+- 입력 단어를 서로 다른 질문과 반전으로 재구성한 영상 기획 3~5개를 만든다.
+- 단순히 제목 표현만 바꾸지 말고 핵심 질문과 설명 경로가 달라야 한다.
+- 각 후보는 검색 결과로 검증된 서로 다른 도메인의 출처를 최소 2개 사용한다.
+- 신화·전설은 역사적 사실로 단정하지 않고 기록, 유물, 지리, 과학적 가능성과 한계를 구분한다.
+- 각 후보의 topic은 아래 StoryTopic 계약을 완전히 만족해야 한다.
+- 후보마다 안전성과 채널 적합성을 별도로 판단한다.
+
+각 candidates 항목 형식:
+{{
+  "channel_fit": true,
+  "safety": {{"allowed": true, "reason": "판단 이유"}},
+  "topic": {{StoryTopic 계약 전체}}
+}}
+
+최상위 JSON 형식:
+{{"candidates": [후보 3~5개]}}
+
+{requested_topic_contract_prompt()}
+
+설명이나 마크다운 없이 JSON 하나만 출력하라."""
 
 
 def _display(value: str) -> str:
@@ -235,6 +298,142 @@ def _safety_result(raw: dict) -> dict | None:
     return {"allowed": safety["allowed"], "reason": reason}
 
 
+def _candidate_result(data_dir: Path, raw: object) -> dict | None:
+    if not isinstance(raw, dict):
+        return None
+    safety = _safety_result(raw)
+    if safety is None or not safety["allowed"]:
+        return None
+    grounded_topic = raw.get("topic")
+    if _grounding_error(grounded_topic) is not None:
+        return None
+    try:
+        topic = validate_manual_story_topic(grounded_topic)
+    except ValueError:
+        return None
+    visual = assess_visual_feasibility({**topic, "_data_dir": str(data_dir)})
+    if not visual.get("reservable"):
+        return None
+    channel_fit = raw.get("channel_fit") is True
+    return {
+        "status": "reservable",
+        "reservable": True,
+        "normalized_topic": topic["topic"],
+        "core_question": topic["core_question"],
+        "channel_fit": channel_fit,
+        "channel_warning": not channel_fit,
+        "verification_method": topic["verification_method"],
+        "safety": safety,
+        "sources": _source_summary(topic),
+        "visual": visual,
+        "topic_payload": topic,
+    }
+
+
+def _candidate_id(result: dict) -> str:
+    value = f"{result['normalized_topic']}\0{result['core_question']}"
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+
+
+def _candidate_option(candidate_id: str, result: dict) -> dict:
+    topic = result["topic_payload"]
+    return {
+        "id": candidate_id,
+        "topic": result["normalized_topic"],
+        "core_question": result["core_question"],
+        "hook_angle": topic.get("hook_angle", ""),
+        "interest_score": topic.get("interest_score", 0),
+        "channel_fit": result["channel_fit"],
+        "verification_method": result["verification_method"],
+        "source_count": len(result["sources"]),
+        "sources": result["sources"],
+        "visual": result["visual"],
+    }
+
+
+def suggest_requested_topic_candidates(
+    data_dir: Path,
+    run_id: str,
+    request: ManualTopicInput,
+    *,
+    call_agent_fn=call_agent,
+) -> dict:
+    """Return up to three grounded, visually feasible editorial choices."""
+    append_slot_event(
+        data_dir, run_id, "topic_check", "info", "단어 소재의 영상 기획 후보를 찾고 있습니다"
+    )
+    recent = _load_recent_topics(data_dir)
+    results: dict[str, dict] = {}
+    excluded: list[str] = []
+    for _ in range(2):
+        try:
+            raw = extract_json(
+                call_agent_fn(
+                    prompt=build_candidate_topic_prompt(request, recent, excluded),
+                    agent_name="manual-topic-candidates",
+                    prefer="gemini",
+                    grounded=True,
+                )
+            )
+        except Exception:
+            if results:
+                break
+            raise
+        # Older/provider-specific responses may already contain one fully
+        # resolved topic. Preserve that result instead of turning a usable
+        # response into an empty candidate list.
+        if isinstance(raw, dict) and not isinstance(raw.get("candidates"), list):
+            if "topic" in raw or raw.get("needs_clarification"):
+                return {"_direct_response": raw}
+        candidates = raw.get("candidates") if isinstance(raw, dict) else None
+        if not isinstance(candidates, list):
+            candidates = []
+        for raw_candidate in candidates[:5]:
+            result = _candidate_result(data_dir, raw_candidate)
+            if result is None:
+                continue
+            candidate_id = _candidate_id(result)
+            if candidate_id in results:
+                continue
+            results[candidate_id] = result
+            excluded.append(result["normalized_topic"])
+            if len(results) >= 3:
+                break
+        if len(results) >= 3:
+            break
+
+    ranked = sorted(
+        results.items(),
+        key=lambda item: (
+            int(item[1]["topic_payload"].get("interest_score", 0)),
+            item[1]["visual"].get("level") == "high",
+        ),
+        reverse=True,
+    )[:3]
+    if not ranked:
+        return {
+            "status": "failed",
+            "reservable": False,
+            "reason": "no_viable_candidates",
+        }
+    options = [_candidate_option(candidate_id, result) for candidate_id, result in ranked]
+    candidate_results = {candidate_id: result for candidate_id, result in ranked}
+    append_slot_event(
+        data_dir,
+        run_id,
+        "topic_check",
+        "info",
+        "제작 가능한 영상 소재 후보를 준비했습니다",
+        {"candidate_count": len(options)},
+    )
+    return {
+        "status": "needs_input",
+        "reservable": False,
+        "candidate_options": options,
+        "candidate_results": candidate_results,
+    }
+
+
 def _grounding_error(topic: object) -> str | None:
     if not isinstance(topic, dict):
         return "topic"
@@ -332,17 +531,26 @@ def check_requested_topic(
     call_agent_fn=call_agent,
 ) -> dict:
     """Interpret, ground, validate, and preflight one user-entered topic."""
+    raw = None
+    if is_keyword_topic(request):
+        suggested = suggest_requested_topic_candidates(
+            data_dir, run_id, request, call_agent_fn=call_agent_fn
+        )
+        raw = suggested.get("_direct_response") if isinstance(suggested, dict) else None
+        if raw is None:
+            return suggested
     append_slot_event(
         data_dir, run_id, "topic_check", "info", "입력 소재를 해석하고 있습니다"
     )
-    raw = extract_json(
-        call_agent_fn(
-            prompt=build_requested_topic_prompt(request, _load_recent_topics(data_dir)),
-            agent_name="manual-topic-researcher",
-            prefer="gemini",
-            grounded=True,
+    if raw is None:
+        raw = extract_json(
+            call_agent_fn(
+                prompt=build_requested_topic_prompt(request, _load_recent_topics(data_dir)),
+                agent_name="manual-topic-researcher",
+                prefer="gemini",
+                grounded=True,
+            )
         )
-    )
     if raw.get("needs_clarification"):
         choices = _interpretations(raw)
         append_slot_event(

@@ -232,7 +232,7 @@ class StoryScene(BaseModel):
 
 
 class StoryScriptContract(BaseModel):
-    """자연스럽고 간결한 53~75초 스토리 본문 계약."""
+    """기존 산출물 호환 범위 안에서 최대 75초인 스토리 본문 계약."""
     format: Literal["story"] = "story"
     title: str = Field(min_length=5, max_length=100)
     description: str = ""
@@ -258,9 +258,9 @@ class StoryScriptContract(BaseModel):
         if self.scenes[-1].role != "close":
             raise ValueError("마지막 씬 role은 close여야 함")
         narration_chars = sum(len(scene.narration) for scene in self.scenes)
-        if narration_chars > 400:
+        if narration_chars > 440:
             raise ValueError(
-                f"본문 narration 합계 {narration_chars}자 — 400자 상한 초과"
+                f"본문 narration 합계 {narration_chars}자 — 440자 상한 초과"
             )
         total = round(sum(scene.duration_sec for scene in self.scenes), 1)
         if not 53 <= total <= 75:

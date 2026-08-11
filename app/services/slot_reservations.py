@@ -378,6 +378,50 @@ def save_check_result(
         db.close()
 
 
+def select_checked_candidate(
+    data_dir: Path, run_id: str, candidate_id: str, now: datetime
+) -> dict:
+    """Atomically promote one persisted, validated candidate to reservable."""
+    if not isinstance(candidate_id, str) or not candidate_id.strip():
+        raise ValueError("candidate_id is required")
+    timestamp = _as_kst(now).isoformat()
+    db = _begin_immediate(data_dir)
+    try:
+        row = _fetch_reservation(db, run_id)
+        if row is None or row["state"] != "needs_input":
+            raise SlotConflict("candidate selection requires needs_input state")
+        stored = _decode_json(row["check_result"])
+        candidates = stored.get("candidate_results") if isinstance(stored, dict) else None
+        selected = candidates.get(candidate_id) if isinstance(candidates, dict) else None
+        if not isinstance(selected, dict):
+            raise SlotConflict("candidate is not available")
+        from app.services.manual_topic import validate_reservable_check_result
+
+        selected = validate_reservable_check_result(selected)
+        db.execute(
+            """
+            UPDATE slot_reservations
+            SET normalized_topic = ?, check_result = ?, state = 'reservable',
+                stage = 'checked', updated_at = ?
+            WHERE run_id = ? AND state = 'needs_input'
+            """,
+            (
+                selected["normalized_topic"],
+                _json(selected),
+                timestamp,
+                run_id,
+            ),
+        )
+        saved = _row_to_dict(_fetch_reservation(db, run_id))
+        db.commit()
+        return saved
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
 def reserve_checked_topic(data_dir: Path, run_id: str, now: datetime) -> dict:
     """Reserve a successfully checked manual topic before production starts."""
     slot_window(run_id)

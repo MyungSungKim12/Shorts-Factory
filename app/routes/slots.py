@@ -43,6 +43,7 @@ from app.services.slot_reservations import (
     list_slot_cards,
     reserve_checked_topic,
     save_check_result,
+    select_checked_candidate,
 )
 
 
@@ -80,6 +81,7 @@ _CHECK_RESULT_FIELDS = {
     "status", "reservable", "reason", "interpretations", "normalized_topic",
     "core_question", "channel_fit", "channel_warning", "verification_method",
     "safety", "sources", "visual", "topic_payload", "grounding_error",
+    "candidate_options",
 }
 _PUBLIC_GROUNDING_ERRORS = {
     "verification_method",
@@ -102,6 +104,7 @@ _EVENT_METADATA_COUNTS = {
     "attempt": 1_000,
     "interpretation_count": 5,
     "visual_candidate_count": 1_000_000,
+    "candidate_count": 5,
 }
 _EVENT_METADATA_FLAGS = {"channel_warning", "truncated"}
 _SAFE_CODE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
@@ -162,6 +165,11 @@ class TopicCheckRequest(BaseModel):
 class ReservationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     checked: Literal[True]
+
+
+class CandidateSelectionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    candidate_id: str = Field(min_length=12, max_length=12, pattern=r"^[a-f0-9]{12}$")
 
 
 class RejectRequest(BaseModel):
@@ -568,6 +576,31 @@ def check_topic(run_id: RunId, body: TopicCheckRequest, tasks: BackgroundTasks):
         "attempt": created["attempt"],
         "revision": revision,
     }
+
+
+@router.post(
+    "/{run_id}/select-candidate",
+    dependencies=[Depends(require_dashboard_token)],
+)
+def select_candidate(run_id: RunId, body: CandidateSelectionRequest):
+    data_dir = _data_dir()
+    _manual_slot_or_404(data_dir, run_id)
+    result = _call_service(
+        select_checked_candidate,
+        data_dir,
+        run_id,
+        body.candidate_id,
+        _now(),
+    )
+    append_slot_event(
+        data_dir,
+        run_id,
+        "topic_check",
+        "info",
+        "선택한 영상 소재를 예약 가능한 상태로 확정했습니다",
+        {"mode": "candidate"},
+    )
+    return _public_slot(result, include_private=True)
 
 
 @router.put("/{run_id}/reservation", dependencies=[Depends(require_dashboard_token)])

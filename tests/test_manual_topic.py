@@ -1,6 +1,7 @@
 """사용자 입력 소재 해석과 시각자료 사전검사 테스트."""
 from __future__ import annotations
 
+import copy
 import json
 
 import pytest
@@ -89,7 +90,7 @@ def test_single_ambiguous_word_requires_two_to_three_user_choices(tmp_path):
     result = check_requested_topic(
         tmp_path,
         "20260810-1",
-        ManualTopicInput(topic_input="단종"),
+        ManualTopicInput(topic_input="단종이 조선의 왕인지 제품 종료인지?"),
         call_agent_fn=_agent_returning(response),
     )
 
@@ -110,11 +111,46 @@ def test_ambiguous_response_never_exposes_more_than_three_choices(tmp_path):
     result = check_requested_topic(
         tmp_path,
         "20260810-1",
-        ManualTopicInput(topic_input="모호한 말"),
+        ManualTopicInput(topic_input="모호한 말은 어떤 의미인가?"),
         call_agent_fn=_agent_returning(response),
     )
 
     assert result["interpretations"] == ["첫째", "둘째", "셋째"]
+
+
+def test_keyword_topic_returns_only_grounded_visually_feasible_choices(
+    tmp_path, monkeypatch
+):
+    candidates = []
+    for index in range(3):
+        topic = copy.deepcopy(_story_topic(category="history_mystery"))
+        topic["topic"] = f"오디세이아 영상 기획 {index + 1}"
+        topic["core_question"] = f"오디세이아의 검증 질문 {index + 1}은 무엇인가"
+        topic["hook_angle"] = f"같은 서사에서 서로 다른 단서 {index + 1}이 발견됐다"
+        topic["interest_score"] = 25 + index
+        candidates.append({
+            "channel_fit": True,
+            "safety": {"allowed": True, "reason": "공개된 고전과 연구를 설명"},
+            "topic": topic,
+        })
+    monkeypatch.setattr(
+        manual_topic, "assess_visual_feasibility", lambda _: _reservable_visual()
+    )
+
+    result = check_requested_topic(
+        tmp_path,
+        "20260810-1",
+        ManualTopicInput(topic_input="오디세이아"),
+        call_agent_fn=_agent_returning({"candidates": candidates}),
+    )
+
+    assert result["status"] == "needs_input"
+    assert len(result["candidate_options"]) == 3
+    assert result["candidate_options"][0]["topic"] == "오디세이아 영상 기획 3"
+    assert all(option["source_count"] == 2 for option in result["candidate_options"])
+    assert set(result["candidate_results"]) == {
+        option["id"] for option in result["candidate_options"]
+    }
 
 
 def test_off_channel_topic_is_reservable_with_warning_when_other_checks_pass(

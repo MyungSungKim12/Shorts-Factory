@@ -70,6 +70,11 @@ def test_mutations_require_shared_dashboard_token(monkeypatch):
     run_id = _run_id()
     paths = [
         ("post", f"/api/slots/{run_id}/check-topic", _checked_request()),
+        (
+            "post",
+            f"/api/slots/{run_id}/select-candidate",
+            {"candidate_id": "abcdef123456"},
+        ),
         ("put", f"/api/slots/{run_id}/reservation", {"checked": True}),
         ("delete", f"/api/slots/{run_id}/reservation", None),
         ("post", f"/api/slots/{run_id}/approve", None),
@@ -128,6 +133,48 @@ def test_check_topic_returns_202_and_persists_one_background_result(configured_a
     assert isinstance(payload["revision"], str) and payload["revision"]
     assert calls == [(configured_api, run_id, "와우 신호의 실제 기록")]
     assert client.get(f"/api/slots/{run_id}").json()["state"] == "needs_input"
+
+
+def test_selecting_a_persisted_keyword_candidate_makes_slot_reservable(
+    configured_api, monkeypatch
+):
+    from app.services import manual_topic
+    from app.services.slot_reservations import save_check_result
+
+    run_id = _run_id()
+    now = datetime.now(tz=KST)
+    created = create_check(configured_api, run_id, _checked_request(), now)
+    candidate_id = "a" * 12
+    selected = {
+        "status": "reservable",
+        "reservable": True,
+        "normalized_topic": "오디세이아의 실제 지리 논쟁",
+    }
+    save_check_result(
+        configured_api,
+        run_id,
+        {
+            "status": "needs_input",
+            "reservable": False,
+            "candidate_options": [{"id": candidate_id, "topic": selected["normalized_topic"]}],
+            "candidate_results": {candidate_id: selected},
+        },
+        now,
+        revision=created["check_revision"],
+    )
+    monkeypatch.setattr(
+        manual_topic, "validate_reservable_check_result", lambda value: value
+    )
+
+    response = client.post(
+        f"/api/slots/{run_id}/select-candidate",
+        json={"candidate_id": candidate_id},
+        headers=TOKEN,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "reservable"
+    assert response.json()["normalized_topic"] == selected["normalized_topic"]
 
 
 def test_check_topic_conflict_does_not_start_duplicate_worker(configured_api, monkeypatch):
