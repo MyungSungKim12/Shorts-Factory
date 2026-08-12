@@ -232,6 +232,44 @@ def test_cancel_manual_reservation_removes_gate_and_preserves_audit(tmp_path: Pa
     assert audit[-1]["metadata"] == {}
 
 
+@pytest.mark.parametrize("state", ["needs_input", "failed", "rejected", "skipped"])
+def test_restore_automatic_slot_removes_failed_manual_gate_after_cutoff(
+    tmp_path: Path, state: str
+) -> None:
+    seed_reserved(tmp_path)
+    with sqlite3.connect(tmp_path / "videos.sqlite") as db:
+        db.execute(
+            "UPDATE slot_reservations SET state = ?, stage = ? WHERE run_id = ?",
+            (state, state, "20260810-1"),
+        )
+
+    result = slot_reservations.restore_automatic_slot(
+        tmp_path, "20260810-1", kst(10)
+    )
+
+    assert result == {"run_id": "20260810-1", "mode": "auto", "state": "auto"}
+    assert list_slot_cards(tmp_path, date(2026, 8, 10), kst(10))[0]["mode"] == "auto"
+    assert events_after(tmp_path, "20260810-1", 0)[-1]["stage"] == "automatic"
+
+
+@pytest.mark.parametrize(
+    ("state", "worker_id"),
+    [("failed", "worker-a"), ("producing", None), ("review_ready", None), ("uploaded", None)],
+)
+def test_restore_automatic_slot_rejects_active_or_completed_work(
+    tmp_path: Path, state: str, worker_id: str | None
+) -> None:
+    seed_reserved(tmp_path)
+    with sqlite3.connect(tmp_path / "videos.sqlite") as db:
+        db.execute(
+            "UPDATE slot_reservations SET state = ?, stage = ?, worker_id = ? WHERE run_id = ?",
+            (state, state, worker_id, "20260810-1"),
+        )
+
+    with pytest.raises(SlotConflict, match="automatic"):
+        slot_reservations.restore_automatic_slot(tmp_path, "20260810-1", kst(10))
+
+
 @pytest.mark.parametrize(
     ("state", "worker_id"),
     [

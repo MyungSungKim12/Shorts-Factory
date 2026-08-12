@@ -77,6 +77,7 @@ def test_mutations_require_shared_dashboard_token(monkeypatch):
         ),
         ("put", f"/api/slots/{run_id}/reservation", {"checked": True}),
         ("delete", f"/api/slots/{run_id}/reservation", None),
+        ("post", f"/api/slots/{run_id}/automatic", None),
         ("post", f"/api/slots/{run_id}/approve", None),
         ("post", f"/api/slots/{run_id}/reject", {"reason": "수정 필요"}),
         ("post", f"/api/slots/{run_id}/retry", {"mode": "same_topic"}),
@@ -106,6 +107,59 @@ def test_slot_list_exposes_auto_and_manual_cards(configured_api):
     assert "artifact_path" not in payload["slots"][0]
     assert "request_json" not in payload["slots"][0]
     assert "raw_response" not in payload["slots"][0]["check_result"]
+
+
+@pytest.mark.parametrize(
+    ("now_hour", "expected_action", "expected_prebuilds", "expected_pipelines"),
+    [
+        (8, "scheduled", [], []),
+        (10, "prebuild", [1], []),
+        (12, "immediate", [], ["20260810-1"]),
+    ],
+)
+def test_restore_automatic_uses_schedule_prebuild_or_immediate_pipeline(
+    configured_api,
+    monkeypatch,
+    now_hour,
+    expected_action,
+    expected_prebuilds,
+    expected_pipelines,
+):
+    from app.routes import slots
+
+    run_id = "20260810-1"
+    _seed_manual(configured_api, run_id, "failed")
+    monkeypatch.setattr(
+        slots, "_now", lambda: datetime(2026, 8, 10, now_hour, 0, tzinfo=KST)
+    )
+    prebuilds = []
+    pipelines = []
+
+    def fake_prebuild(data_dir, ffmpeg_path, slot):
+        prebuilds.append(slot)
+        return {"run_id": run_id}
+
+    async def fake_pipeline(data_dir, ffmpeg_path, slot=None, *, run_id_override=None):
+        pipelines.append(run_id_override)
+        return {"success": True}
+
+    monkeypatch.setattr(slots, "prepare_slot", fake_prebuild)
+    monkeypatch.setattr(slots, "run_pipeline", fake_pipeline)
+
+    response = client.post(f"/api/slots/{run_id}/automatic", headers=TOKEN)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "run_id": run_id,
+        "mode": "auto",
+        "state": "auto",
+        "automatic_action": expected_action,
+    }
+    assert expected_prebuilds == prebuilds
+    assert expected_pipelines == pipelines
+    day = datetime(2026, 8, 10).date()
+    card = client.get(f"/api/slots?date={day.isoformat()}", headers=TOKEN).json()["slots"][0]
+    assert card["mode"] == "auto"
 
 
 def test_check_topic_returns_202_and_persists_one_background_result(configured_api, monkeypatch):

@@ -22,6 +22,10 @@ ACTIVE_STATES = {
     "locked", "researching", "writing", "producing", "quality_check", "uploading"
 }
 _CANCELLABLE_STATES = {"draft", "checking", "needs_input", "reservable", "reserved"}
+_AUTOMATIC_RESTORE_STATES = {
+    "draft", "checking", "needs_input", "reservable", "reserved",
+    "failed", "rejected", "skipped",
+}
 ALLOWED_TRANSITIONS = {
     "draft": {"checking", "cancelled"},
     "checking": {"reservable", "needs_input", "failed"},
@@ -497,6 +501,45 @@ def cancel_manual_reservation(
         "mode": "auto",
         "state": "auto",
     }
+
+
+def restore_automatic_slot(data_dir: Path, run_id: str, now: datetime) -> dict:
+    """Remove one idle manual gate so the existing automatic pipeline can run."""
+    slot_window(run_id)
+    db = _begin_immediate(data_dir)
+    try:
+        row = _fetch_reservation(db, run_id)
+        if row is None or row["mode"] != "manual":
+            raise SlotConflict("manual slot is not available for automatic restore")
+        if row["worker_id"] is not None or row["state"] not in _AUTOMATIC_RESTORE_STATES:
+            raise SlotConflict("slot cannot be restored to automatic from its current state")
+        placeholders = ", ".join("?" for _ in _AUTOMATIC_RESTORE_STATES)
+        deleted = db.execute(
+            f"""
+            DELETE FROM slot_reservations
+            WHERE run_id = ? AND mode = 'manual' AND worker_id IS NULL
+              AND state IN ({placeholders})
+            """,
+            (run_id, *sorted(_AUTOMATIC_RESTORE_STATES)),
+        ).rowcount
+        if deleted != 1:
+            raise SlotConflict("slot changed while automatic restore was requested")
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+    append_slot_event(
+        data_dir,
+        run_id,
+        "automatic",
+        "info",
+        "수동 소재를 해제하고 자동 소재 제작으로 전환했습니다",
+        {"mode": "auto"},
+    )
+    return {"run_id": run_id, "mode": "auto", "state": "auto"}
 
 
 def lock_reserved_slot(

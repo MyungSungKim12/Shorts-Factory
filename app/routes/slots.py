@@ -42,9 +42,12 @@ from app.services.slot_reservations import (
     init_slot_tables,
     list_slot_cards,
     reserve_checked_topic,
+    restore_automatic_slot,
     save_check_result,
     select_checked_candidate,
+    slot_window,
 )
+from scripts.prepare_next_slot import prepare_slot
 
 
 router = APIRouter(prefix="/api/slots", tags=["slots"])
@@ -621,6 +624,31 @@ def cancel_reservation(run_id: RunId):
     return _call_service(cancel_manual_reservation, data_dir, run_id, _now())
 
 
+@router.post("/{run_id}/automatic", dependencies=[Depends(require_dashboard_token)])
+def restore_automatic(run_id: RunId, tasks: BackgroundTasks):
+    data_dir = _data_dir()
+    _manual_slot_or_404(data_dir, run_id)
+    now = _now()
+    result = _call_service(restore_automatic_slot, data_dir, run_id, now)
+    window = slot_window(run_id)
+    slot = int(run_id[-1])
+    if now < window.production_at:
+        action = "scheduled"
+    elif now < window.upload_at:
+        action = "prebuild"
+        tasks.add_task(prepare_slot, data_dir, _ffmpeg_path(), slot)
+    else:
+        action = "immediate"
+        tasks.add_task(
+            run_pipeline,
+            data_dir,
+            _ffmpeg_path(),
+            slot=slot,
+            run_id_override=run_id,
+        )
+    return {**result, "automatic_action": action}
+
+
 @router.get("/{run_id}")
 def slot_detail(run_id: RunId, x_token: str = Header(default="")):
     data_dir = _data_dir()
@@ -640,8 +668,6 @@ def slot_events(
     limit: int = Query(default=100, ge=0, le=100),
 ):
     data_dir = _data_dir()
-    if _manual_slot(data_dir, run_id) is None:
-        return {"run_id": run_id, "events": []}
     events = (
         public
         for event in events_after(data_dir, run_id, after_id, limit)
