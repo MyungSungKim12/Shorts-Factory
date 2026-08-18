@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import statistics
 from collections import defaultdict
@@ -417,10 +418,46 @@ def _median_optional(values: Iterable[Any]) -> float | None:
     return round(statistics.median(numbers), 2) if numbers else None
 
 
+def _title_pattern(title: Any) -> str:
+    text = str(title or "")
+    if "?" in text:
+        return "question"
+    if re.search(r"\d", text):
+        return "numbered"
+    if "미스터리" in text or "비밀" in text:
+        return "mystery_keyword"
+    return "statement" if text else "unknown"
+
+
+def _duration_bucket(value: Any) -> str:
+    try:
+        duration = float(value)
+    except (TypeError, ValueError):
+        return "unknown"
+    if duration < 50:
+        return "under_50s"
+    if duration < 65:
+        return "50_64s"
+    if duration < 80:
+        return "65_79s"
+    return "80s_plus"
+
+
+def _add_report_dimensions(rows: list[dict]) -> None:
+    for row in rows:
+        row["title_pattern"] = _title_pattern(row.get("title"))
+        row["duration_bucket"] = _duration_bucket(row.get("actual_duration_sec"))
+        ai_opening = row.get("ai_opening_used")
+        row["ai_opening"] = (
+            "used" if ai_opening == 1 else "not_used" if ai_opening == 0 else "unknown"
+        )
+
+
 def build_performance_report(data_dir: Path, generated_at: datetime) -> dict:
     with _connect(data_dir) as db:
         _init_schema(db)
         rows = _latest_performance_rows(db)
+    _add_report_dimensions(rows)
     mature = [row for row in rows if (row.get("age_hours") or 0) >= 24]
     views = [int(row["views"]) for row in mature if row.get("views") is not None]
     mature.sort(key=lambda row: int(row.get("views") or 0), reverse=True)
@@ -445,6 +482,9 @@ def build_performance_report(data_dir: Path, generated_at: datetime) -> dict:
         "groups": {
             "category": _group_summary(mature, "category"),
             "writer_mode": _group_summary(mature, "writer_mode"),
+            "title_pattern": _group_summary(mature, "title_pattern"),
+            "duration_bucket": _group_summary(mature, "duration_bucket"),
+            "ai_opening": _group_summary(mature, "ai_opening"),
         },
         "videos": mature,
         "warnings": warnings,

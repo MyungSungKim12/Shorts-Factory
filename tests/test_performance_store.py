@@ -223,3 +223,27 @@ def test_report_uses_latest_mature_medians_and_warns_for_small_groups(tmp_path):
         "표본 8개 미만: 성과 차이를 소재 규칙으로 확정하지 마세요."
     ]
     assert [row["views"] for row in report["videos"]] == [3300, 1200, 1000]
+    assert report["groups"]["title_pattern"] == [
+        {
+            "title_pattern": "numbered",
+            "videos": 3,
+            "median_views": 1200.0,
+            "median_average_view_percentage": 75.0,
+        }
+    ]
+    assert report["groups"]["duration_bucket"] == [
+        {
+            "duration_bucket": "unknown",
+            "videos": 3,
+            "median_views": 1200.0,
+            "median_average_view_percentage": 75.0,
+        }
+    ]
+    assert report["groups"]["ai_opening"] == [
+        {
+            "ai_opening": "unknown",
+            "videos": 3,
+            "median_views": 1200.0,
+            "median_average_view_percentage": 75.0,
+        }
+    ]
