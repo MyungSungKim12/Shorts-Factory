@@ -357,3 +357,51 @@ TELEGRAM_CHAT_ID=
 - 무료 웹검색(DuckDuckGo) 붙여 model_memory 비중 줄이고 실제 검증 강화
 - YouTube Analytics(시청지속·24/72h 성과) — 재인증 필요
 - 두 소재군의 2주 성과를 구독 전환 기준으로 재평가
+# YouTube Analytics 독립 성과 수집
+
+## 최초 1회 읽기 인증
+
+Google Cloud 프로젝트에서 YouTube Analytics API와 YouTube Data API v3가 활성화되어 있어야 한다. 채널 소유 Google 계정으로 다음 명령을 로컬에서 실행한다.
+
+```powershell
+cd D:\ms\shorts-factory-be
+venv\Scripts\python.exe scripts\auth_youtube_analytics.py
+```
+
+브라우저에서 다음 읽기 전용 권한을 승인한다.
+
+- `youtube.readonly`
+- `yt-analytics.readonly`
+
+성공하면 `credentials/analytics_token.json`이 생성된다. 이 파일은 Git에 포함하지 않으며 기존 업로드 토큰 `credentials/token.json`과 서로 독립적이다.
+
+## 서버 전송과 최초 역수집
+
+```powershell
+scp -i "D:\ms\ssh-key-2026-07-10.key" "D:\ms\shorts-factory-be\credentials\analytics_token.json" ubuntu@168.107.15.146:~/shorts-factory-be/credentials/analytics_token.json
+ssh -i "D:\ms\ssh-key-2026-07-10.key" ubuntu@168.107.15.146 "chmod 600 shorts-factory-be/credentials/analytics_token.json"
+ssh -i "D:\ms\ssh-key-2026-07-10.key" ubuntu@168.107.15.146 "cd shorts-factory-be && venv/bin/python -u scripts/collect_performance.py"
+```
+
+정상 결과는 `status=success`다. Analytics 최신 날짜가 아직 확정되지 않았거나 한 API만 실패하면 `status=partial`이지만 성공한 공개 통계는 저장된다. 두 데이터 소스가 모두 실패할 때만 종료 코드 1을 반환한다.
+
+## 독립 cron
+
+기존 제작·업로드 cron 행은 그대로 보존하고 다음 행 하나만 추가한다.
+
+```cron
+20 2,8,14,20 * * * cd /home/ubuntu/shorts-factory-be && venv/bin/python -u scripts/collect_performance.py >> data/performance.log 2>&1
+```
+
+KST 02:20·08:20·14:20·20:20에 공개 통계 스냅샷을 만들고, API가 제공하는 최신 확정일까지 Analytics 지표를 갱신한다. 작업 로그는 기존 `data/cron.log`가 아닌 `data/performance.log`에만 기록한다.
+
+## 확인
+
+```powershell
+ssh -i "D:\ms\ssh-key-2026-07-10.key" ubuntu@168.107.15.146 "tail -40 shorts-factory-be/data/performance.log"
+ssh -i "D:\ms\ssh-key-2026-07-10.key" ubuntu@168.107.15.146 "cd shorts-factory-be && python3 -c \"import json; r=json.load(open('data/reports/performance_latest.json',encoding='utf-8')); print(r['collection']); print(r['summary'])\""
+```
+
+## 원복
+
+분석 기능을 중지할 때는 crontab에서 `scripts/collect_performance.py` 행 하나만 제거한다. 분석 테이블은 기존 `videos` 테이블과 분리되어 있으므로 자동 제작·업로드 설정이나 작업 파일을 복원할 필요가 없다. 분석 토큰을 폐기하려면 서버와 로컬의 `credentials/analytics_token.json`만 삭제하고 Google 계정의 앱 접근 권한을 취소한다.

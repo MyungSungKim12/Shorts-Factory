@@ -170,3 +170,13 @@ TTS_PROVIDER=google
 ```
 
 Google TTS 호출이 실패하면 제작 로그에 실제 공급자를 기록하고 gTTS로 자동 폴백한다.
+# 독립 성과 분석
+
+자동 제작·업로드와 분리된 성과 수집 명령을 제공한다.
+
+```powershell
+venv\Scripts\python.exe scripts\auth_youtube_analytics.py
+venv\Scripts\python.exe scripts\collect_performance.py
+```
+
+분석 인증은 `credentials/analytics_token.json`을 사용하며 업로드 인증인 `credentials/token.json`을 변경하지 않는다. 수집 결과는 `data/reports/performance_latest.json`과 `data/videos.sqlite`의 영구 분석 테이블에 저장된다. 분석 API가 실패해도 자동 제작·업로드 프로세스에는 영향을 주지 않는다.

@@ -7,3 +7,4 @@ data/
 *.mp3
 .worktrees/
 .analysis_reference/
+.pytest-*/
