@@ -324,13 +324,28 @@ def test_public_stats_are_saved_when_analytics_is_unavailable(tmp_path):
 
 공개 통계와 소유자 통계를 각각 `try` 블록으로 분리한다. 하나만 성공하면 `partial`, 둘 다 실패하면 `failed`를 반환한다. JSON은 같은 디렉터리의 임시 파일에 쓴 뒤 `Path.replace()`로 교체한다.
 
-- [ ] **Step 6: 파이프라인 비침범 정적 테스트 작성**
+- [ ] **Step 6: 파이프라인 비침범 행동 테스트 작성**
 
 ```python
-def test_existing_pipeline_does_not_import_independent_collector():
-    source = Path("app/agents/orchestrator.py").read_text(encoding="utf-8")
-    assert "collect_performance" not in source
-    assert "youtube_performance" not in source
+def test_failed_collection_does_not_mutate_upload_or_run_history(tmp_path):
+    create_uploaded_video(tmp_path, "v1", "20260815-1", uploaded_hours_ago=72)
+    run_log = tmp_path / "logs" / "run-20260815-1.json"
+    run_log.parent.mkdir()
+    run_log.write_text('{"success":true}', encoding="utf-8")
+    before_video = uploaded_video_row(tmp_path, "v1")
+    before_log = run_log.read_bytes()
+
+    result = collector.collect_performance(
+        tmp_path,
+        now=NOW,
+        public_fetcher=lambda ids: (_ for _ in ()).throw(RuntimeError("data api")),
+        owner_fetcher=lambda *args: (_ for _ in ()).throw(RuntimeError("analytics api")),
+        retention_fetcher=lambda *args: [],
+    )
+
+    assert result["status"] == "failed"
+    assert uploaded_video_row(tmp_path, "v1") == before_video
+    assert run_log.read_bytes() == before_log
 ```
 
 - [ ] **Step 7: CLI 구현**
