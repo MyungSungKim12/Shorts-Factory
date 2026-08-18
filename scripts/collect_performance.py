@@ -175,10 +175,11 @@ def collect_performance(
                     _video_start_date(by_id[video_id]),
                     end_date,
                 )
-                store.save_retention_points(
+                saved_points = store.save_retention_points(
                     data_dir, video_id, current.date().isoformat(), points
                 )
-                retention_videos += 1
+                if saved_points:
+                    retention_videos += 1
             except Exception as exc:
                 errors.append(_safe_error(f"retention[{video_id}]", exc))
 

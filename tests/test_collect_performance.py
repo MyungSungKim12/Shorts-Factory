@@ -118,6 +118,23 @@ def test_public_stats_are_saved_when_analytics_is_unavailable(tmp_path):
     assert _latest_snapshot(tmp_path, "v1")["source_status"] == "public_only"
 
 
+def test_empty_retention_response_is_not_counted_as_a_saved_video(tmp_path):
+    _seed_video(tmp_path)
+
+    result = collector.collect_performance(
+        tmp_path,
+        now=NOW,
+        public_fetcher=lambda ids: {
+            "v1": {"views": 1100, "likes": 12, "comments": 1}
+        },
+        owner_fetcher=lambda ids, start, end: {"v1": _owner_metrics()},
+        retention_fetcher=lambda video_id, start, end: [],
+    )
+
+    assert result["status"] == "success"
+    assert result["retention_videos"] == 0
+
+
 def test_failed_collection_does_not_mutate_upload_or_run_history(tmp_path):
     _seed_video(tmp_path)
     run_log = tmp_path / "logs" / "run-20260815-1.json"
