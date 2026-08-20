@@ -29,6 +29,44 @@ def validate_public_title(value: object) -> str:
 # model_memory도 허용. (리서처의 보수 모드 프롬프트가 '불변 기록만' 쓰도록 강제)
 UPLOADABLE_VERIFICATION = {"grounded_search", "verified_cache", "model_memory"}
 
+_ABSTRACT_SPACE_TOPIC_KEYWORDS = (
+    "암흑물질",
+    "블랙홀",
+    "우주론",
+    "은하",
+    "행성 대기",
+    "금성 대기",
+    "타이탄",
+    "토성",
+    "목성",
+    "외계행성",
+    "중력파",
+    "오우무아무아",
+    "우주 최고 에너지",
+    "dark matter",
+    "black hole",
+    "cosmology",
+    "galaxy",
+)
+
+
+def is_rejected_story_topic(data: dict) -> bool:
+    """자동 제작에서 조회수 저하가 반복된 추상 우주·천문 소재를 차단한다."""
+    if str(data.get("format") or "story") != "story":
+        return False
+    fields = [
+        data.get("topic"),
+        data.get("hook_angle"),
+        data.get("target_keyword"),
+        data.get("core_question"),
+        data.get("selection_reason"),
+    ]
+    for fact in data.get("facts") or []:
+        if isinstance(fact, dict):
+            fields.extend([fact.get("claim"), fact.get("value")])
+    haystack = " ".join(str(value or "") for value in fields).lower()
+    return any(keyword.lower() in haystack for keyword in _ABSTRACT_SPACE_TOPIC_KEYWORDS)
+
 
 class RankItem(BaseModel):
     rank: int = Field(ge=1, le=10)
@@ -196,6 +234,12 @@ class StoryTopicContract(BaseModel):
 
     def is_uploadable(self) -> bool:
         return self.verification_method in UPLOADABLE_VERIFICATION
+
+    @model_validator(mode="after")
+    def _reject_abstract_space_topics(self):
+        if is_rejected_story_topic(self.model_dump()):
+            raise ValueError("추상 우주·천문 소재는 자동 제작에서 제외됨")
+        return self
 
 
 class ManualStoryTopicContract(StoryTopicContract):

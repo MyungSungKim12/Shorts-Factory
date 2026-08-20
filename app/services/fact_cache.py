@@ -54,6 +54,7 @@ def pick_cached(
     reverify_days: int = 30,
     *,
     allowed_categories: set[str] | None = None,
+    reject_payload=None,
 ) -> dict | None:
     """해당 회차 카테고리의 검증 캐시에서 재사용할 소재 1건 선택.
 
@@ -79,6 +80,8 @@ def pick_cached(
                 allowed_categories is not None
                 and data.get("category") not in allowed_categories
             ):
+                continue
+            if reject_payload is not None and reject_payload(data):
                 continue
             db.execute(
                 "UPDATE verified_topics SET last_used_at = ? WHERE topic = ?",

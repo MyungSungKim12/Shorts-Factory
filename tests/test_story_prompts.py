@@ -148,6 +148,26 @@ def test_research_prompt_penalizes_recent_space_and_ocean_overuse():
     assert "특별히 강한 실물 장면" in prompt
 
 
+def test_research_prompt_hard_blocks_abstract_space_topics():
+    prompt = researcher._story_researcher_prompt(
+        {
+            "recent_topics": [],
+            "focus_domain": {
+                "name": "지구 기록·탐사 이상",
+                "desc": "지상 탐사와 계측 기록에서 확인된 예상 밖 결과",
+                "examples": "자연 핵반응로, 극한 압력 기록",
+            },
+        },
+        grounded=True,
+    )
+
+    assert "추상 우주·천문 소재는 자동 제작 금지" in prompt
+    assert "암흑물질" in prompt
+    assert "블랙홀" in prompt
+    assert "행성 대기" in prompt
+    assert "지하·빙하·동굴·도시·폐쇄 구역" in prompt
+
+
 def test_writer_prompt_contains_retention_beats():
     prompt = writer._story_writer_prompt(_topic())
     assert "완성 영상 목표는 70~80초" in prompt
@@ -173,6 +193,9 @@ def test_writer_prompt_contains_retention_beats():
     assert "NARRATIVE_PATTERN:" in prompt
     assert "CHANNEL_EDITORIAL_VIEW" in prompt
     assert "SUBJECT_ANCHORED_VISUALS" in prompt
+    assert "제목에서 '비밀'과 '미스터리'에 기대지 말고" in prompt
+    assert "장소 + 숫자 + 실제 장면" in prompt
+    assert "추상 우주·천문 소재" in prompt
     assert "close 본문에는 \"\uad6c독\"과 \"좋아요\"를 절대 넣지 마라" in prompt
     assert '"title": "100자 이하 제목"' not in prompt
     assert '"title": "10분만 머물러도 위험한 지하 수정 동굴의 비밀"' in prompt

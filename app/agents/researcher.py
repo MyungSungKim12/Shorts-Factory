@@ -5,6 +5,7 @@ from pathlib import Path
 
 from app.console import safe_print
 from app.content_format import get_content_format
+from app.models import is_rejected_story_topic
 from app.services.claude_client import call_agent
 from app.services.web_search import search_ranking_topics
 
@@ -228,6 +229,7 @@ def run_researcher(
                 cache_slot,
                 recent_topics,
                 allowed_categories=allowed_categories,
+                reject_payload=is_rejected_story_topic if selected == "story" else None,
             )
             if use_cache else None
         )
@@ -301,6 +303,12 @@ def _story_researcher_prompt(context: dict, grounded: bool = True) -> str:
         if overexposed_domains else
         "- 최근 과다 노출 영역: 없음. 그래도 우주·천문과 바다·심해는 강한 실물 장면이 있을 때만 예외적으로 고른다."
     )
+    hard_block = (
+        "- 추상 우주·천문 소재는 자동 제작 금지: 암흑물질, 블랙홀, 우주론, 은하, 행성 대기, "
+        "금성 대기, 타이탄·토성 같은 먼 천체 관측 소재를 선택하지 않는다.\n"
+        "- 위 소재는 설명이 흥미로워도 무료 영상이 추상적이고 첫 피드 테스트에서 이탈 위험이 높으므로 후보에서 탈락시킨다.\n"
+        "- 대신 지하·빙하·동굴·도시·폐쇄 구역, 사막·화산·호수·실제 구조물처럼 눈앞에 그려지는 지구 기반 소재를 우선한다."
+    )
     return f"""당신은 '이상한 지구기록' 채널의 한국어 Shorts 리서처다. 검증 가능한 자연·과학·숨겨진 장소·역사 미스터리만 조사한다.
 
 [목표]
@@ -316,6 +324,7 @@ def _story_researcher_prompt(context: dict, grounded: bool = True) -> str:
 {category_block}
 {focus_block}
 {overexposed_block}
+{hard_block}
 
 [재미 점수 — 후보마다 각 0~5점, 총 30점]
 1. 첫 3초 호기심: 설명을 듣기 전에도 결말이 궁금한가?

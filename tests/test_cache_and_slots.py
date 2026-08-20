@@ -113,6 +113,27 @@ def test_story_cache_rejects_removed_animal_category():
         assert got["topic"] == "미해결 관측 소재"
 
 
+def test_story_cache_skips_rejected_abstract_space_payloads():
+    with tempfile.TemporaryDirectory() as td:
+        d = Path(td)
+        abstract_space = _topic("암흑물질이 없는 은하의 미스터리")
+        abstract_space.update({"format": "story", "category": "science_mystery"})
+        grounded_place = _topic("지하 500m 자연 핵반응로")
+        grounded_place.update({"format": "story", "category": "science_mystery"})
+        save_verified(d, 0, abstract_space)
+        save_verified(d, 0, grounded_place)
+
+        got = pick_cached(
+            d,
+            0,
+            exclude_topics=[],
+            allowed_categories={"science_mystery"},
+            reject_payload=researcher.is_rejected_story_topic,
+        )
+
+        assert got["topic"] == "지하 500m 자연 핵반응로"
+
+
 def test_cached_topics_supports_warmer_exclusions():
     from app.services.fact_cache import cached_topics
 

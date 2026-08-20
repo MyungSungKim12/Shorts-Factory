@@ -141,6 +141,28 @@ def test_story_contract_rejects_removed_animal_category():
         validate_topic(story_topic(category="animal_survival"))
 
 
+@pytest.mark.parametrize(
+    "topic_text",
+    [
+        "암흑물질이 없는 은하의 미스터리",
+        "블랙홀 질량 공백의 충격적 발견",
+        "금성 대기의 생명 가능성 논쟁",
+        "타이탄 메탄 호수와 토성 위성의 비밀",
+    ],
+)
+def test_automatic_story_contract_rejects_abstract_space_topics(topic_text):
+    data = story_topic(
+        topic=topic_text,
+        hook_angle="우주론의 예상과 다른 관측값이 나왔습니다",
+        core_question="이 관측은 기존 이론과 어떻게 다른가",
+        target_keyword="abstract space mystery",
+        category="science_mystery",
+    )
+
+    with pytest.raises(ValueError, match="추상 우주"):
+        validate_topic(data, "story")
+
+
 def test_automatic_story_contract_still_rejects_off_channel_economy_category():
     with pytest.raises(ValueError):
         validate_topic(story_topic(category="economy"), "story")
