@@ -71,6 +71,42 @@ def _manual_run_ids(db: sqlite3.Connection) -> set[str]:
     }
 
 
+def _performance_video(row: dict) -> dict:
+    video_id = str(row.get("video_id") or "")
+    return {
+        "video_id": video_id,
+        "run_id": row.get("run_id"),
+        "title": row.get("title") or row.get("topic") or "",
+        "topic": row.get("topic") or row.get("title") or "",
+        "category": row.get("category") or "unknown",
+        "views": row.get("views"),
+        "engaged_view_rate": row.get("engaged_view_rate"),
+        "average_view_percentage": row.get("average_view_percentage"),
+        "source_status": row.get("source_status"),
+        "url": f"https://youtube.com/shorts/{video_id}" if video_id else None,
+    }
+
+
+def _performance_watch_items(videos: list[dict]) -> list[dict]:
+    items = []
+    for row in videos:
+        try:
+            views = int(row.get("views") or 0)
+        except (TypeError, ValueError):
+            views = 0
+        if views >= 50:
+            continue
+        items.append({
+            "run_id": row.get("run_id"),
+            "title": row.get("title") or row.get("topic") or "",
+            "views": views,
+            "reason": "low_views",
+        })
+        if len(items) >= 5:
+            break
+    return items
+
+
 @app.get("/api/health")
 def health():
     return {"status": "ok", "running": _pipeline_running}
@@ -230,6 +266,42 @@ def automatic_topic_history(
     return {
         "topics": topics[offset:offset + page_size],
         "pagination": _pagination(page, page_size, total_items),
+    }
+
+
+@app.get("/api/performance-summary")
+def performance_summary():
+    """독립 성과 수집기의 최신 리포트를 대시보드 표시용으로 축약한다."""
+    report_file = DATA_DIR / "reports" / "performance_latest.json"
+    if not report_file.exists():
+        return {
+            "available": False,
+            "message": "성과 수집 리포트 없음",
+            "summary": {},
+            "top_categories": [],
+            "top_videos": [],
+            "watch_items": [],
+            "warnings": [],
+            "collection": {},
+        }
+    report = _json_object(report_file)
+    videos = [
+        row for row in report.get("videos", [])
+        if isinstance(row, dict)
+    ]
+    categories = [
+        row for row in (report.get("groups", {}).get("category", []))
+        if isinstance(row, dict)
+    ]
+    return {
+        "available": True,
+        "generated_at": report.get("generated_at"),
+        "summary": report.get("summary") if isinstance(report.get("summary"), dict) else {},
+        "top_categories": categories[:5],
+        "top_videos": [_performance_video(row) for row in videos[:5]],
+        "watch_items": _performance_watch_items(videos),
+        "warnings": report.get("warnings") if isinstance(report.get("warnings"), list) else [],
+        "collection": report.get("collection") if isinstance(report.get("collection"), dict) else {},
     }
 
 

@@ -124,6 +124,30 @@ def test_research_prompt_requires_selected_domain_and_semantic_deduplication():
     assert "핵심 대상·사건·관측값" in prompt
 
 
+def test_research_prompt_penalizes_recent_space_and_ocean_overuse():
+    prompt = researcher._story_researcher_prompt(
+        {
+            "recent_topics": [
+                "암흑물질이 없는 은하",
+                "블랙홀 질량 공백",
+                "심해 열수구의 비밀",
+                "해저 구조 미스터리",
+            ],
+            "focus_domain": {
+                "name": "지하·금지 시설",
+                "desc": "지하와 산속에 감춰진 실제 시설·터널·공간",
+                "examples": "폐쇄 지하기지, 암반 터널",
+            },
+        },
+        grounded=True,
+    )
+
+    assert "최근 과다 노출 영역" in prompt
+    assert "우주·천문" in prompt
+    assert "바다·심해" in prompt
+    assert "특별히 강한 실물 장면" in prompt
+
+
 def test_writer_prompt_contains_retention_beats():
     prompt = writer._story_writer_prompt(_topic())
     assert "완성 영상 목표는 70~80초" in prompt

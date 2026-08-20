@@ -37,6 +37,15 @@ def _checked_request() -> dict:
     }
 
 
+def _symlink_or_skip(source: Path, link: Path, *, target_is_directory: bool = False):
+    try:
+        os.symlink(source, link, target_is_directory=target_is_directory)
+    except (OSError, NotImplementedError) as exc:
+        if getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Windows symlink privilege is not available")
+        raise
+
+
 def _seed_manual(data_dir: Path, run_id: str, state: str, *, artifact: Path | None = None):
     init_slot_tables(data_dir)
     now = datetime.now(tz=KST).isoformat()
@@ -511,7 +520,7 @@ def test_symlinked_work_root_outside_data_dir_is_never_trusted(
     (external_artifact / "script.json").write_text(
         json.dumps({"title": "outside-secret-title"}), encoding="utf-8"
     )
-    os.symlink(outside, configured_api / "work", target_is_directory=True)
+    _symlink_or_skip(outside, configured_api / "work", target_is_directory=True)
     _seed_manual(
         configured_api,
         run_id,
@@ -539,7 +548,7 @@ def test_detail_does_not_follow_symlinked_review_metadata(
     external_script.write_text(
         json.dumps({"title": "outside-secret-title"}), encoding="utf-8"
     )
-    os.symlink(external_script, work / "script.json")
+    _symlink_or_skip(external_script, work / "script.json")
     (work / "prepared.json").write_text(
         json.dumps({"run_id": run_id, "quality_gate": {"passed": True}}),
         encoding="utf-8",
@@ -783,7 +792,7 @@ def test_review_never_reads_symlinked_produce_log(configured_api, tmp_path_facto
         ),
         encoding="utf-8",
     )
-    os.symlink(outside, work / "produce_log.json")
+    _symlink_or_skip(outside, work / "produce_log.json")
     _seed_manual(configured_api, run_id, "review_ready", artifact=work)
 
     response = client.get(f"/api/slots/{run_id}")

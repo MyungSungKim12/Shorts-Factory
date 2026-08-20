@@ -75,6 +75,24 @@ def test_이틀_동안_여덟_하위영역을_한번씩_순환한다():
     assert len(domains) == 8
 
 
+def test_자동_하위영역에서_우주와_바다를_정규순환에서_제외한다():
+    domains = [
+        researcher.story_focus_domain(f"{day}-{slot}")
+        for day in ("20260804", "20260805")
+        for slot in (1, 2, 3, 4)
+    ]
+    text = " ".join(
+        f"{domain['key']} {domain['name']} {domain['desc']} {domain['examples']}"
+        for domain in domains
+    )
+
+    assert "space_astronomy" not in text
+    assert "ocean_depth" not in text
+    assert "우주" not in text
+    assert "바다" not in text
+    assert "심해" not in text
+
+
 def test_story_cache_rejects_removed_animal_category():
     with tempfile.TemporaryDirectory() as td:
         d = Path(td)

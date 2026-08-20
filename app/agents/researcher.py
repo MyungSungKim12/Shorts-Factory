@@ -28,14 +28,14 @@ _SCIENCE_MYSTERY = {
     "name": "과학의 경계/미해결 관측",
     "category": "science_mystery",
     "desc": "관측과 실험 기록은 분명하지만 원인·신호·결과 해석이 아직 완전히 합의되지 않은 과학 미스터리.",
-    "examples": "반복되지 않은 우주 신호, 예상과 달랐던 탐사 결과, 설명 후보가 여러 개인 관측 기록",
+    "examples": "극한 자연 관측, 예상과 달랐던 지상 탐사 결과, 설명 후보가 여러 개인 실험 기록",
     "visual_fallback": "unexplained scientific observation",
 }
 _HIDDEN_WORLD = {
     "name": "숨겨진 세계/금지된 구조",
     "category": "hidden_world",
-    "desc": "지하·심해·빙하 아래처럼 보이지 않는 곳에 실제로 존재하는 장소와 구조의 비밀.",
-    "examples": "빙하 아래 호수, 폐쇄된 지하 시설, 심해에서 확인된 거대 구조와 생태계",
+    "desc": "지하·빙하 아래·폐쇄 구역처럼 보이지 않는 곳에 실제로 존재하는 장소와 구조의 비밀.",
+    "examples": "빙하 아래 호수, 폐쇄된 지하 시설, 버려진 거대 구조와 금지 구역",
     "visual_fallback": "hidden underground structure",
 }
 SLOT_CATEGORIES = {
@@ -48,16 +48,26 @@ SLOT_CATEGORIES = {
 _SCIENCE_FOCUS_DOMAINS = (
     {"key": "atmosphere_weather", "name": "대기·기상", "desc": "극한 기상과 설명하기 어려운 대기 관측", "examples": "상층 번개, 원통 구름, 비정상적인 대기파"},
     {"key": "geology_extreme", "name": "지질·극한 자연", "desc": "사막·화산·암석·지각에서 확인된 상식 밖 현상", "examples": "움직이는 돌, 불타는 분화구, 거대 균열"},
-    {"key": "space_astronomy", "name": "우주·천문", "desc": "실제 관측 기록으로 남은 우주와 천체의 미해결 현상", "examples": "정체불명 신호, 비정상 궤도, 설명되지 않은 별빛"},
+    {"key": "earth_records", "name": "지구 기록·탐사 이상", "desc": "지상 탐사와 계측 기록에서 확인된 예상 밖 결과", "examples": "자연 핵반응로, 극한 압력 기록, 오래된 지질 흔적"},
     {"key": "anomalous_physics", "name": "변칙 물리·기술", "desc": "기존 예상과 어긋난 실험·탐사·공학 관측", "examples": "예상 밖 가속, 측정 장비의 반복 이상, 극한 기술 기록"},
 )
 
 _HIDDEN_FOCUS_DOMAINS = (
     {"key": "ancient_engineering", "name": "고대 구조·기술", "desc": "실제로 확인된 고대 건축·도시·공학의 숨겨진 구조", "examples": "매몰 도시, 거석 구조, 고대 수로"},
     {"key": "underground_forbidden", "name": "지하·금지 시설", "desc": "지하와 산속에 감춰진 실제 시설·터널·공간", "examples": "폐쇄 지하기지, 암반 터널, 비공개 저장 시설"},
-    {"key": "ocean_depth", "name": "바다·심해", "desc": "바다와 심해에서 확인된 구조·환경·관측 기록", "examples": "해저 구조, 심해 열수구, 수중 지형"},
+    {"key": "abandoned_restricted", "name": "버려진 장소·제한 구역", "desc": "폐쇄되었거나 접근이 어려운 실제 장소와 남겨진 구조", "examples": "폐광 도시, 버려진 연구소, 출입 제한 터널"},
     {"key": "ice_polar", "name": "빙하·극지", "desc": "빙하와 극지 아래 실제로 보존되거나 발견된 세계", "examples": "빙하 아래 호수, 얼음 터널, 극지 퇴적층"},
 )
+
+_OVEREXPOSED_DOMAIN_KEYWORDS = {
+    "우주·천문": (
+        "우주", "천문", "은하", "블랙홀", "암흑물질", "행성", "금성", "화성",
+        "소행성", "혜성", "중력파", "별빛",
+    ),
+    "바다·심해": (
+        "바다", "해저", "심해", "해양", "수중", "열수구", "해구", "대양",
+    ),
+}
 
 
 def story_focus_domain(run_id: str) -> dict[str, str] | None:
@@ -73,6 +83,17 @@ def story_focus_domain(run_id: str) -> dict[str, str] | None:
     if slot in (2, 4):
         return dict(_HIDDEN_FOCUS_DOMAINS[phase + (0 if slot == 2 else 1)])
     return None
+
+
+def _overexposed_recent_domains(recent_topics: list, threshold: int = 2) -> list[str]:
+    """Return broad topic domains that appeared too often in recent uploads."""
+    haystack = " ".join(str(topic or "") for topic in recent_topics)
+    overexposed = []
+    for domain, keywords in _OVEREXPOSED_DOMAIN_KEYWORDS.items():
+        hits = sum(1 for keyword in keywords if keyword in haystack)
+        if hits >= threshold:
+            overexposed.append(domain)
+    return overexposed
 
 
 def _load_recent_topics(data_dir: Path, days: int = 14) -> list:
@@ -257,6 +278,7 @@ def _story_researcher_prompt(context: dict, grounded: bool = True) -> str:
     recent = context.get("recent_topics") or []
     category = context.get("category") or {}
     focus_domain = context.get("focus_domain") or {}
+    overexposed_domains = _overexposed_recent_domains(recent)
     category_block = (
         f"- 이번 회차 방향: {category.get('name')}\n"
         f"- 방향 설명: {category.get('desc')}\n"
@@ -272,6 +294,13 @@ def _story_researcher_prompt(context: dict, grounded: bool = True) -> str:
         if focus_domain else
         "- 이번 회차 하위 영역: 상위 방향 안에서 최근 소재와 가장 다른 영역"
     )
+    overexposed_block = (
+        "- 최근 과다 노출 영역: " + ", ".join(overexposed_domains) + "\n"
+        "- 위 영역은 특별히 강한 실물 장면, 위험, 규모, 반전이 없는 한 후보 점수에서 크게 감점한다.\n"
+        "- 특히 추상적인 우주·천문 설명과 바다·심해 배경 반복은 피하고, 지상·지하·구조물·탐사 기록 중심으로 바꾼다."
+        if overexposed_domains else
+        "- 최근 과다 노출 영역: 없음. 그래도 우주·천문과 바다·심해는 강한 실물 장면이 있을 때만 예외적으로 고른다."
+    )
     return f"""당신은 '이상한 지구기록' 채널의 한국어 Shorts 리서처다. 검증 가능한 자연·과학·숨겨진 장소·역사 미스터리만 조사한다.
 
 [목표]
@@ -286,6 +315,7 @@ def _story_researcher_prompt(context: dict, grounded: bool = True) -> str:
 [이번 회차]
 {category_block}
 {focus_block}
+{overexposed_block}
 
 [재미 점수 — 후보마다 각 0~5점, 총 30점]
 1. 첫 3초 호기심: 설명을 듣기 전에도 결말이 궁금한가?
