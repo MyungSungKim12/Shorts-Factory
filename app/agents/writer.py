@@ -20,6 +20,12 @@ _PREVIEW_ONLY_FILLER = (
 
 def ensure_story_information_density(script: dict) -> dict:
     """Reject newly written stories that are long on screen but short on facts."""
+    title = " ".join(str(script.get("title") or "").split())
+    if len(title) > 42:
+        raise ValueError(f"story title {len(title)} chars outside Shorts title budget")
+    hook = " ".join(str(script.get("hook") or "").split())
+    if len(hook) > 55:
+        raise ValueError(f"story hook {len(hook)} chars outside Shorts hook budget")
     scenes = script.get("scenes") or []
     if not 8 <= len(scenes) <= 10:
         raise ValueError("story requires 8~10 information scenes")
@@ -35,7 +41,42 @@ def ensure_story_information_density(script: dict) -> dict:
     narration = " ".join(str(scene.get("narration") or "") for scene in scenes)
     if any(phrase in narration for phrase in _PREVIEW_ONLY_FILLER):
         raise ValueError("story contains preview-only filler")
+    if "관련 기록이 확인됐다" in narration:
+        raise ValueError("story contains template process boilerplate")
+    if sum(1 for token in ("University", "Institute", "Expeditions", "Museum") if token in narration) >= 1:
+        raise ValueError("story narration contains source names")
     return script
+
+
+def _compact_story_title(topic: dict) -> str:
+    """Produce a short Shorts title from a verified topic without adding facts."""
+    raw = " ".join(str(topic.get("topic") or "").split())
+    replacements = (
+        ("남극의 얼음 밑", "남극 얼음 밑"),
+        ("수천만 년 전", "수천만 년 전"),
+        ("바다를 지배했던 거대 해양 생물 화석의 비밀", "고대 생물 화석"),
+        ("거대 해양 생물 화석의 비밀", "고대 생물 화석"),
+        ("의 비밀", ""),
+        (" 미스터리", ""),
+        ("충격적 진실", ""),
+    )
+    title = raw
+    for old, new in replacements:
+        title = title.replace(old, new)
+    title = title.strip(" ,:：")
+    if len(title) <= 42:
+        return title
+    hook = " ".join(str(topic.get("hook_angle") or "").split()).strip(" ,:：")
+    if 10 <= len(hook) <= 42:
+        return hook
+    words = title.replace(",", " ").split()
+    compact = ""
+    for word in words:
+        candidate = f"{compact} {word}".strip()
+        if len(candidate) > 42:
+            break
+        compact = candidate
+    return compact or title[:42].rstrip(" ,:：")
 
 
 def run_writer(
@@ -141,28 +182,33 @@ def build_verified_story_script(topic: dict) -> dict:
     def sentence(value: str) -> str:
         normalized = " ".join(str(value).split()).rstrip(" ,.;:!?")
         if len(normalized) > 78:
-            shortened = normalized[:54]
+            shortened = normalized[:75]
             if " " in shortened:
                 shortened = shortened.rsplit(" ", 1)[0]
             normalized = shortened.rstrip(" ,.;:!?")
-            normalized = f"{normalized}, 관련 기록이 확인됐다"
 
         return f"{normalized}."
+
+    def fact_claim(fact: dict) -> str:
+        return sentence(fact["claim"])
+
+    def fact_value(fact: dict) -> str:
+        return sentence(fact["value"])
 
     first = facts[0]
     second = facts[1] if len(facts) > 1 else facts[0]
     narrations = [
         sentence(topic["hook_angle"]),
         sentence(f"{topic['topic']}, 핵심 질문은 {topic['core_question']}"),
-        sentence(f"{first['source']} 기록은 {first['claim']}"),
-        sentence(f"구체적인 내용은 {first['value']}"),
-        sentence(f"{second['source']} 자료는 {second['claim']}"),
-        sentence(f"별도로 확인된 내용은 {second['value']}"),
+        fact_claim(first),
+        fact_value(first),
+        fact_claim(second),
+        fact_value(second),
         sentence(topic.get("selection_reason") or topic["core_question"]),
         sentence(f"확인된 기록이 남긴 질문은 {topic['core_question']}"),
     ]
     verified_units = [
-        f"{fact['source']}의 공개 자료에는 {fact['claim']}, {fact['value']}"
+        f"{fact['claim']}, {fact['value']}"
         for fact in facts
     ]
     unit_index = 0
@@ -195,7 +241,7 @@ def build_verified_story_script(topic: dict) -> dict:
 
     return {
         "format": "story",
-        "title": topic["topic"],
+        "title": _compact_story_title(topic),
         "description": "검증된 자료를 바탕으로 핵심 내용을 정리했습니다.",
         "tags": [topic["category"], topic["target_keyword"]],
         "hook": topic["hook_angle"],
@@ -246,6 +292,7 @@ Preserve exact_queries as the hook and close subject anchor. Use safe_fallbacks 
 - SUBJECT_ANCHORED_VISUALS: 모든 일반 스톡 검색어에도 exact_queries의 실제 대상명 또는 같은 대상군을 식별하는 핵심 명사를 포함하라. 대상과 무관한 분위기 영상, 일몰, 일반 풍경, 캠핑, 도시 영상으로 빈 장면을 채우지 마라.
 - 위 NARRATIVE_PATTERN의 순서를 이번 영상의 중심 구조로 사용하고, 제목과 첫 문장을 매번 같은 공식으로 반복하지 마라.
 - 제목에서 '비밀'과 '미스터리'에 기대지 말고, 가능하면 장소 + 숫자 + 실제 장면이 한눈에 보이는 문장으로 쓴다.
+- 제목은 목표 22~34자, 최대 42자다. 42자를 넘기는 설명형 제목은 실패다.
 - 좋은 제목 구조: "지하 500m, 20억 년 전 자연 핵반응로", "땅속 85m, 2만 명이 숨은 도시", "10분만 머물러도 위험한 수정 동굴".
 - 나쁜 제목 구조: "충격적 진실", "생명의 증거일까?", "OO의 미스터리", "OO의 비밀"처럼 추상어만 남는 제목.
 - 추상 우주·천문 소재, 암흑물질·블랙홀·우주론·행성 대기 같은 설명형 소재처럼 영상 장면이 떠오르지 않는 표현을 제목과 hook에서 반복하지 마라.

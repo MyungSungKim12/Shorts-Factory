@@ -23,6 +23,64 @@ def _atomic_json(path: Path, value: dict) -> None:
     temporary.replace(path)
 
 
+_ANIMAL_VISUAL_TERMS = (
+    "animal", "animals", "wildlife", "turtle", "turtles", "sea turtle",
+    "fish", "shark", "whale", "dolphin", "bird", "birds", "dog", "cat",
+    "horse", "elephant", "lion", "bear", "reptile", "lizard", "snake",
+)
+
+_ANIMAL_STORY_TERMS = (
+    "동물", "거북", "상어", "고래", "돌고래", "물고기", "새", "조류",
+    "개", "고양이", "말", "코끼리", "사자", "곰", "파충류", "도마뱀", "뱀",
+    "animal", "wildlife", "turtle", "shark", "whale", "dolphin",
+)
+
+
+def _normalized_text(*values: object) -> str:
+    return " ".join(str(value or "").lower() for value in values)
+
+
+def _intro_visual_mismatch(script: dict, produce: dict) -> bool:
+    """Reject obvious stock-footage subject drift before upload.
+
+    Stock fallback is allowed, but the opening must not visually introduce a
+    different subject family. The recurring failure this catches is a geology
+    or fossil story opening on live animal footage such as sea turtles.
+    """
+    intro = produce.get("intro") if isinstance(produce.get("intro"), dict) else {}
+    visual_source = (
+        intro.get("visual_source")
+        if isinstance(intro.get("visual_source"), dict)
+        else {}
+    )
+    source_text = _normalized_text(
+        visual_source.get("keyword"),
+        visual_source.get("source_url"),
+        visual_source.get("subject_evidence"),
+        visual_source.get("title"),
+        visual_source.get("description"),
+    )
+    if not source_text:
+        return False
+
+    story_text = _normalized_text(
+        script.get("title"),
+        script.get("hook"),
+        script.get("description"),
+        " ".join(str(tag) for tag in script.get("tags") or []),
+    )
+    source_is_animal = any(term in source_text for term in _ANIMAL_VISUAL_TERMS)
+    story_is_animal = any(term in story_text for term in _ANIMAL_STORY_TERMS)
+    fossil_context = any(term in story_text for term in ("화석", "fossil", "고대 생물"))
+    live_animal_context = any(
+        term in source_text
+        for term in ("swimming", "running", "flying", "live animal", "wildlife")
+    )
+    if fossil_context and source_is_animal and live_animal_context:
+        return True
+    return source_is_animal and not story_is_animal and not fossil_context
+
+
 def validate_upload_package(work_dir: Path, ffmpeg_path: str) -> dict:
     work_dir = Path(work_dir)
     script_path = work_dir / "script.json"
@@ -109,6 +167,8 @@ def validate_upload_package(work_dir: Path, ffmpeg_path: str) -> dict:
         or invalid_exact_sources
     ):
         failures.append("visual_unrelated_fallback")
+    if _intro_visual_mismatch(script, produce):
+        failures.append("visual_intro_mismatch")
 
     result = {
         "passed": not failures,

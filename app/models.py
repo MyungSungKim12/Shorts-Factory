@@ -48,12 +48,29 @@ _ABSTRACT_SPACE_TOPIC_KEYWORDS = (
     "cosmology",
     "galaxy",
 )
+_OVEREXPOSED_OCEAN_TOPIC_KEYWORDS = (
+    "심해",
+    "해저",
+    "해양",
+    "바다를 지배",
+    "고대 해양",
+    "해양 생물",
+    "열수구",
+    "수중",
+    "ocean",
+    "deep sea",
+    "underwater",
+)
+
+STORY_TITLE_TARGET_MIN = 22
+STORY_TITLE_TARGET_MAX = 34
+STORY_TITLE_MAX = 42
 
 
-def is_rejected_story_topic(data: dict) -> bool:
-    """자동 제작에서 조회수 저하가 반복된 추상 우주·천문 소재를 차단한다."""
+def story_topic_rejection_reason(data: dict) -> str | None:
+    """Return the automatic-production rejection reason for weak Shorts topics."""
     if str(data.get("format") or "story") != "story":
-        return False
+        return None
     fields = [
         data.get("topic"),
         data.get("hook_angle"),
@@ -65,7 +82,16 @@ def is_rejected_story_topic(data: dict) -> bool:
         if isinstance(fact, dict):
             fields.extend([fact.get("claim"), fact.get("value")])
     haystack = " ".join(str(value or "") for value in fields).lower()
-    return any(keyword.lower() in haystack for keyword in _ABSTRACT_SPACE_TOPIC_KEYWORDS)
+    if any(keyword.lower() in haystack for keyword in _ABSTRACT_SPACE_TOPIC_KEYWORDS):
+        return "추상 우주·천문 소재는 자동 제작에서 제외됨"
+    if any(keyword.lower() in haystack for keyword in _OVEREXPOSED_OCEAN_TOPIC_KEYWORDS):
+        return "과다 노출 해양·심해 소재는 자동 제작에서 제외됨"
+    return None
+
+
+def is_rejected_story_topic(data: dict) -> bool:
+    """자동 제작에서 조회수 저하가 반복된 소재를 차단한다."""
+    return story_topic_rejection_reason(data) is not None
 
 
 class RankItem(BaseModel):
@@ -237,8 +263,9 @@ class StoryTopicContract(BaseModel):
 
     @model_validator(mode="after")
     def _reject_abstract_space_topics(self):
-        if is_rejected_story_topic(self.model_dump()):
-            raise ValueError("추상 우주·천문 소재는 자동 제작에서 제외됨")
+        reason = story_topic_rejection_reason(self.model_dump())
+        if reason:
+            raise ValueError(reason)
         return self
 
 
@@ -289,7 +316,12 @@ class StoryScriptContract(BaseModel):
     @field_validator("title", mode="before")
     @classmethod
     def _public_title_only(cls, value: object) -> str:
-        return validate_public_title(value)
+        title = validate_public_title(value)
+        if len(title) > STORY_TITLE_MAX:
+            raise ValueError(
+                f"제목 길이 {len(title)}자 — Shorts 제목은 {STORY_TITLE_MAX}자 이하여야 함"
+            )
+        return title
 
     @model_validator(mode="after")
     def _story_structure(self):

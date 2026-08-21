@@ -128,6 +128,11 @@ def test_story_title_rejects_prompt_instruction_leak(title):
         validate_script(story_script(title=title), "story")
 
 
+def test_story_title_rejects_overlong_shorts_title():
+    with pytest.raises(ValueError, match="제목 길이"):
+        validate_script(story_script(title="남극의 얼음 밑, 수천만 년 전 바다를 지배했던 거대 해양 생물 화석의 비밀을 추적한 기록"), "story")
+
+
 @pytest.mark.parametrize(
     "category",
     ["place_nature", "science_mystery", "hidden_world", "history_mystery"],
@@ -160,6 +165,26 @@ def test_automatic_story_contract_rejects_abstract_space_topics(topic_text):
     )
 
     with pytest.raises(ValueError, match="추상 우주"):
+        validate_topic(data, "story")
+
+
+@pytest.mark.parametrize(
+    "topic_text",
+    [
+        "남극의 얼음 밑, 수천만 년 전 바다를 지배했던 거대 해양 생물 화석의 비밀",
+        "빛도 산소도 없는 심해 4,000m, 생명체가 솟아나는 이유",
+        "해저 열수구의 미스터리",
+    ],
+)
+def test_automatic_story_contract_rejects_overexposed_ocean_topics(topic_text):
+    data = story_topic(
+        topic=topic_text,
+        hook_angle="바다와 관련된 오래된 흔적이 발견됐습니다",
+        target_keyword="ocean mystery",
+        category="hidden_world",
+    )
+
+    with pytest.raises(ValueError, match="과다 노출"):
         validate_topic(data, "story")
 
 

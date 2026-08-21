@@ -221,6 +221,30 @@ def test_quality_gate_revalidates_claimed_exact_sources(tmp_path, monkeypatch):
     assert "visual_unrelated_fallback" in saved["quality_gate"]["failures"]
 
 
+def test_quality_gate_rejects_animal_intro_for_non_animal_story(tmp_path, monkeypatch):
+    script, produce = _package(tmp_path)
+    script["title"] = "남극 얼음 밑, 바다괴물 알"
+    script["hook"] = "남극 얼음 아래에서 고대 생물의 흔적이 나왔습니다."
+    (tmp_path / "script.json").write_text(
+        json.dumps(script, ensure_ascii=False), encoding="utf-8"
+    )
+    produce["script_sha256"] = hashlib.sha256((tmp_path / "script.json").read_bytes()).hexdigest()
+    produce["intro"]["text"] = script["title"]
+    produce["intro"]["visual_source"] = {
+        "provider": "pexels_video",
+        "keyword": "Antarctica marine reptile fossils",
+        "source_url": "https://www.pexels.com/video/sea-turtles-swimming-11358398/",
+        "subject_evidence": "sea turtles swimming in sea life sanctuary",
+    }
+    (tmp_path / "produce_log.json").write_text(
+        json.dumps(produce, ensure_ascii=False), encoding="utf-8"
+    )
+    monkeypatch.setattr(quality_gate, "probe_video", lambda *args: _valid_probe())
+
+    with pytest.raises(RuntimeError, match="visual_intro_mismatch"):
+        quality_gate.validate_upload_package(tmp_path, "ffmpeg")
+
+
 @pytest.mark.parametrize(
     ("mutation", "failure"),
     [

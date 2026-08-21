@@ -330,6 +330,30 @@ def test_verified_template_does_not_repeat_process_boilerplate():
     assert "의문을 분리해 보겠습니다" not in narration
 
 
+def test_verified_template_avoids_source_names_and_compacts_title():
+    topic = _topic()
+    topic.update({
+        "topic": "남극의 얼음 밑, 수천만 년 전 바다를 지배했던 거대 해양 생물 화석의 비밀",
+        "hook_angle": "얼음 밑에서 고대 바다 생물 흔적이 발견됐습니다",
+        "target_keyword": "antarctic fossil",
+    })
+    topic["facts"] = [{
+        "claim": "남극에서 해양 파충류 화석이 발견되었다",
+        "value": "6,600만 년 전 화석 기록",
+        "source": "University of Melbourne, Oceanwide Expeditions",
+        "source_url": "https://example.com/antarctic-fossil",
+    }]
+
+    script = writer.build_verified_story_script(topic)
+    narration = " ".join(scene["narration"] for scene in script["scenes"])
+
+    assert len(script["title"]) <= 42
+    assert "University of Melbourne" not in narration
+    assert "Oceanwide Expeditions" not in narration
+    assert "관련 기록이 확인됐다" not in narration
+    assert writer.ensure_story_information_density(script)["format"] == "story"
+
+
 def test_verified_template_preserves_numeric_grouping_commas():
     topic = _topic()
     topic["facts"] = [{
