@@ -77,6 +77,19 @@ def test_manual_free_mode_disables_paid_features_but_reports_assets_reusable(
     assert credit_status(tmp_path)["reuse_existing_ai_assets"] is True
 
 
+def test_aggressive_mode_uses_paid_features_until_floor_or_expiry(
+    tmp_path, monkeypatch
+):
+    from app.services.credit_guard import credit_status, paid_features_enabled
+
+    _configure(monkeypatch)
+    monkeypatch.setenv("AI_CREDIT_MODE", "aggressive")
+
+    assert paid_features_enabled(tmp_path) is True
+    assert credit_status(tmp_path)["mode"] == "premium"
+    assert credit_status(tmp_path)["configured_mode"] == "aggressive"
+
+
 def test_mode_transition_is_reported_once(tmp_path, monkeypatch):
     from app.services.credit_guard import consume_mode_transition
 

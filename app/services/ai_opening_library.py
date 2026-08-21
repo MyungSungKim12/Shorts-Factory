@@ -119,7 +119,7 @@ def build_opening_derivative(
     duration = max_duration
     if duration is None:
         duration = float(os.getenv("VEO_OPENING_MAX_SEC", "3.0"))
-    duration = min(3.0, max(0.5, float(duration)))
+    duration = min(4.0, max(0.5, float(duration)))
     destination = Path(output)
     destination.parent.mkdir(parents=True, exist_ok=True)
     run_checked(

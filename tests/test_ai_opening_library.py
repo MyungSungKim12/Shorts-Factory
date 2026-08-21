@@ -154,3 +154,28 @@ def test_valid_vertical_silent_video_passes_ai_validation(tmp_path, monkeypatch)
 
     assert report["passed"] is True
     assert report["failures"] == []
+
+
+def test_opening_derivative_can_use_full_four_second_veo_clip(
+    tmp_path, monkeypatch
+):
+    from app.services import ai_opening_library
+
+    commands = []
+    master = tmp_path / "master.mp4"
+    output = tmp_path / "opening.mp4"
+    master.write_bytes(b"video")
+
+    def fake_run_checked(command, **kwargs):
+        commands.append(command)
+        output.write_bytes(b"opening")
+
+    monkeypatch.setattr(ai_opening_library, "run_checked", fake_run_checked)
+    monkeypatch.setenv("VEO_OPENING_MAX_SEC", "4.0")
+
+    ai_opening_library.build_opening_derivative(
+        master, output, ffmpeg_path="ffmpeg"
+    )
+
+    assert "-t" in commands[0]
+    assert commands[0][commands[0].index("-t") + 1] == "4.000"

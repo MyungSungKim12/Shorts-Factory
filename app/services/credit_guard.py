@@ -101,7 +101,7 @@ def credit_status(data_dir: Path) -> dict:
         mode = os.getenv("AI_CREDIT_MODE", "auto").strip().lower()
         paid = (
             valid
-            and mode in {"auto", "premium"}
+            and mode in {"auto", "premium", "aggressive"}
             and not _expired()
             and remaining > floor
         )
