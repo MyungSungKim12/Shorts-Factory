@@ -78,6 +78,33 @@ def test_wikimedia_credit_hides_internal_image_filename():
     assert "- Nan Madol 11.png" not in result
 
 
+def test_public_media_credits_include_nasa_sources_once():
+    result = uploader._description_with_wikimedia_credits(
+        "설명",
+        [
+            {
+                "provider": "nasa_image",
+                "media_id": "PIA00001",
+                "attribution": "NASA",
+                "license": "Public domain (NASA)",
+                "source_url": "https://images.nasa.gov/details/PIA00001",
+            },
+            {
+                "provider": "nasa_image",
+                "media_id": "PIA00001",
+                "attribution": "NASA",
+                "license": "Public domain (NASA)",
+                "source_url": "https://images.nasa.gov/details/PIA00001",
+            },
+        ],
+    )
+
+    assert result.count("https://images.nasa.gov/details/PIA00001") == 1
+    assert "NASA" in result
+    assert "Public domain (NASA)" in result
+    assert "https://images.nasa.gov/details/PIA00001" in result
+
+
 def test_synthetic_media_is_true_only_when_veo_footage_was_used():
     used = {
         "intro": {

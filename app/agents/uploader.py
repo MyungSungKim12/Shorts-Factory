@@ -70,32 +70,62 @@ def _description_with_wikimedia_credits(
     *,
     max_length: int = 5000,
 ) -> str:
-    """Append public Wikimedia attribution once per source URL."""
+    """Append public media attribution once per source URL."""
     base = str(description or "").rstrip()
     credits: list[str] = []
+    nasa_credits: list[str] = []
     seen_urls: set[str] = set()
 
     for raw in sources or []:
-        if not isinstance(raw, dict) or raw.get("provider") != "wikimedia_image":
+        if not isinstance(raw, dict):
             continue
         source_url = str(raw.get("source_url") or "").strip()
         if not source_url or source_url in seen_urls:
             continue
-
-        title = _public_wikimedia_title(raw.get("media_id"))
-        attribution = str(raw.get("attribution") or "저작자 정보는 원본 페이지 참조").strip()
-        license_name = str(raw.get("license") or "라이선스는 원본 페이지 참조").strip()
-        credit = f"- {title} — {attribution} / {license_name}\n  {source_url}"
-        section = "자료 출처 (Wikimedia Commons)\n" + "\n".join([*credits, credit])
+        provider = raw.get("provider")
+        if provider == "wikimedia_image":
+            title = _public_wikimedia_title(raw.get("media_id"))
+            attribution = str(raw.get("attribution") or "저작자 정보는 원본 페이지 참조").strip()
+            license_name = str(raw.get("license") or "라이선스는 원본 페이지 참조").strip()
+            credit = f"- {title} — {attribution} / {license_name}\n  {source_url}"
+            candidate_sections = []
+            if credits or credit:
+                candidate_sections.append(
+                    "자료 출처 (Wikimedia Commons)\n" + "\n".join([*credits, credit])
+                )
+            if nasa_credits:
+                candidate_sections.append("자료 출처 (NASA)\n" + "\n".join(nasa_credits))
+        elif provider == "nasa_image":
+            title = str(raw.get("media_id") or "NASA 이미지 자료").strip()
+            attribution = str(raw.get("attribution") or "NASA").strip()
+            license_name = str(raw.get("license") or "Public domain (NASA)").strip()
+            credit = f"- {title} — {attribution} / {license_name}\n  {source_url}"
+            candidate_sections = []
+            if credits:
+                candidate_sections.append("자료 출처 (Wikimedia Commons)\n" + "\n".join(credits))
+            candidate_sections.append(
+                "자료 출처 (NASA)\n" + "\n".join([*nasa_credits, credit])
+            )
+        else:
+            continue
+        section = "\n\n".join(candidate_sections)
         combined = f"{base}\n\n{section}" if base else section
         if len(combined) > max_length:
             continue
-        credits.append(credit)
+        if provider == "wikimedia_image":
+            credits.append(credit)
+        else:
+            nasa_credits.append(credit)
         seen_urls.add(source_url)
 
-    if not credits:
+    sections = []
+    if credits:
+        sections.append("자료 출처 (Wikimedia Commons)\n" + "\n".join(credits))
+    if nasa_credits:
+        sections.append("자료 출처 (NASA)\n" + "\n".join(nasa_credits))
+    if not sections:
         return base
-    section = "자료 출처 (Wikimedia Commons)\n" + "\n".join(credits)
+    section = "\n\n".join(sections)
     return f"{base}\n\n{section}" if base else section
 
 

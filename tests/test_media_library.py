@@ -49,6 +49,7 @@ def test_all_duplicates_return_none():
 def test_fetch_records_provenance_and_marks_id_used(tmp_path, monkeypatch):
     picked = candidate(9, 1080, 1920)
     monkeypatch.setattr(media_library, "_wikimedia_image_candidates", lambda keyword: [])
+    monkeypatch.setattr(media_library, "_nasa_image_candidates", lambda keyword: [])
     monkeypatch.setattr(media_library, "_pexels_video_candidates", lambda keyword: [picked])
     monkeypatch.setattr(media_library, "_pixabay_video_candidates", lambda keyword: [])
     monkeypatch.setattr(media_library, "_pexels_photo_candidates", lambda keyword: [])
@@ -82,6 +83,7 @@ def test_fetch_uses_next_keyword_without_reusing_media(tmp_path, monkeypatch):
     duplicate = candidate(1, 1080, 1920, keyword="first keyword")
     fresh = candidate(2, 1080, 1920, keyword="second keyword")
     monkeypatch.setattr(media_library, "_wikimedia_image_candidates", lambda keyword: [])
+    monkeypatch.setattr(media_library, "_nasa_image_candidates", lambda keyword: [])
 
     def videos(keyword):
         return [duplicate] if keyword == "first keyword" else [fresh]
@@ -106,6 +108,7 @@ def test_fetch_uses_next_keyword_without_reusing_media(tmp_path, monkeypatch):
 
 def test_fetch_returns_black_metadata_when_no_source_exists(tmp_path, monkeypatch):
     monkeypatch.setattr(media_library, "_wikimedia_image_candidates", lambda keyword: [])
+    monkeypatch.setattr(media_library, "_nasa_image_candidates", lambda keyword: [])
     monkeypatch.setattr(media_library, "_pexels_video_candidates", lambda keyword: [])
     monkeypatch.setattr(media_library, "_pixabay_video_candidates", lambda keyword: [])
     monkeypatch.setattr(media_library, "_pexels_photo_candidates", lambda keyword: [])
@@ -121,6 +124,7 @@ def test_fetch_tries_next_candidate_after_invalid_download(tmp_path, monkeypatch
     monkeypatch.setattr(
         media_library, "_pexels_video_candidates", lambda keyword: [broken, valid]
     )
+    monkeypatch.setattr(media_library, "_nasa_image_candidates", lambda keyword: [])
     monkeypatch.setattr(media_library, "_pixabay_video_candidates", lambda keyword: [])
     monkeypatch.setattr(media_library, "_pexels_photo_candidates", lambda keyword: [])
     monkeypatch.setattr(
@@ -162,6 +166,7 @@ def test_exact_keyword_prefers_licensed_wikimedia_image(tmp_path, monkeypatch):
     generic = candidate(88, 1080, 1920)
     monkeypatch.setattr(media_library, "_wikimedia_image_candidates", lambda keyword: [exact])
     monkeypatch.setattr(media_library, "_pexels_video_candidates", lambda keyword: [generic])
+    monkeypatch.setattr(media_library, "_nasa_image_candidates", lambda keyword: [])
     monkeypatch.setattr(media_library, "_pixabay_video_candidates", lambda keyword: [])
     monkeypatch.setattr(media_library, "_pexels_photo_candidates", lambda keyword: [])
     monkeypatch.setattr(media_library, "_download_candidate", lambda item, output: output.write_bytes(b"image"))
@@ -303,6 +308,73 @@ def test_wikimedia_download_retries_original_when_thumbnail_is_rate_limited(tmp_
     assert media_library._download_candidate(exact, output) == 5
     assert output.read_bytes() == b"image"
     assert requested == [exact.download_url, exact.alternate_download_url]
+
+
+def test_nasa_image_candidates_record_public_domain_provenance(monkeypatch):
+    monkeypatch.setenv("NASA_MEDIA_ENABLED", "true")
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "collection": {
+                    "items": [{
+                        "data": [{
+                            "nasa_id": "PIA00001",
+                            "title": "Richat Structure from orbit",
+                            "description": "Sahara Richat Structure earth observation",
+                            "keywords": ["Richat", "Sahara", "Earth"],
+                        }],
+                        "links": [{
+                            "href": "https://images-assets.nasa.gov/image/PIA00001/PIA00001~orig.jpg",
+                            "rel": "preview",
+                            "render": "image",
+                        }],
+                    }]
+                }
+            }
+
+    monkeypatch.setattr(media_library.requests, "get", lambda *args, **kwargs: Response())
+
+    candidates = media_library._nasa_image_candidates("Richat Structure")
+
+    assert candidates[0].provider == "nasa_image"
+    assert candidates[0].media_id == "PIA00001"
+    assert candidates[0].source_url == "https://images.nasa.gov/details/PIA00001"
+    assert candidates[0].license == "Public domain (NASA)"
+    assert candidates[0].attribution == "NASA"
+    assert "Richat" in candidates[0].description
+
+
+def test_fetch_uses_nasa_image_before_generic_stock_photo(tmp_path, monkeypatch):
+    nasa = candidate(
+        "PIA00001", 1600, 900,
+        provider="nasa_image", media_type="image", keyword="Richat Structure",
+    )
+    nasa = media_library.MediaCandidate(
+        **{**nasa.__dict__, "description": "Richat Structure Sahara"}
+    )
+    photo = candidate(
+        44, 1080, 1920,
+        provider="pexels_image", media_type="image", keyword="Richat Structure",
+    )
+    monkeypatch.setattr(media_library, "_wikimedia_image_candidates", lambda keyword: [])
+    monkeypatch.setattr(media_library, "_pexels_video_candidates", lambda keyword: [])
+    monkeypatch.setattr(media_library, "_pixabay_video_candidates", lambda keyword: [])
+    monkeypatch.setattr(media_library, "_nasa_image_candidates", lambda keyword: [nasa])
+    monkeypatch.setattr(media_library, "_pexels_photo_candidates", lambda keyword: [photo])
+    monkeypatch.setattr(media_library, "_download_candidate", lambda item, output: output.write_bytes(b"image"))
+    monkeypatch.setattr(media_library, "_is_usable_download", lambda path: True)
+
+    path, meta = asyncio.run(
+        media_library.fetch_story_media(["Richat Structure"], tmp_path / "shot", set())
+    )
+
+    assert path == tmp_path / "shot.jpg"
+    assert meta["provider"] == "nasa_image"
+    assert meta["media_id"] == "PIA00001"
 
 
 def test_download_rejects_oversized_content_length_without_reading(tmp_path, monkeypatch):

@@ -34,6 +34,7 @@ from app.services.vertex_video import generate_opening_video
 
 
 DEFAULT_STORY_CTA = "이런 이야기가 더 궁금하다면, 구독과 좋아요 부탁드립니다."
+PRESERVE_FULL_IMAGE_PROVIDERS = {"wikimedia_image", "nasa_image"}
 
 
 STORY_LAYOUT = {
@@ -1307,7 +1308,7 @@ async def run_story_producer(
                     clip,
                     shot["duration_sec"],
                     ffmpeg_path,
-                    preserve_full=metadata.get("provider") == "wikimedia_image",
+                    preserve_full=metadata.get("provider") in PRESERVE_FULL_IMAGE_PROVIDERS,
                     motion_index=global_shot_n - 1,
                 )
                 visual_clips.append(clip)
@@ -1350,7 +1351,7 @@ async def run_story_producer(
                 stock_segment,
                 stock_duration,
                 ffmpeg_path,
-                preserve_full=first_metadata.get("provider") == "wikimedia_image",
+                preserve_full=first_metadata.get("provider") in PRESERVE_FULL_IMAGE_PROVIDERS,
             )
             _concat_files([ai_segment, stock_segment], intro_visual, ffmpeg_path, tmp_path)
         elif ai_media is not None:
@@ -1361,7 +1362,7 @@ async def run_story_producer(
                 intro_visual,
                 story_timing["intro_duration"],
                 ffmpeg_path,
-                preserve_full=first_metadata.get("provider") == "wikimedia_image",
+                preserve_full=first_metadata.get("provider") in PRESERVE_FULL_IMAGE_PROVIDERS,
             )
         if opening_source["ai_generation"] is not None:
             opening_source["ai_generation"]["used_duration_sec"] = ai_duration
@@ -1382,7 +1383,7 @@ async def run_story_producer(
                 cta_visual,
                 cta_audio_duration,
                 ffmpeg_path,
-                preserve_full=last_metadata.get("provider") == "wikimedia_image",
+                preserve_full=last_metadata.get("provider") in PRESERVE_FULL_IMAGE_PROVIDERS,
                 darken=True,
             )
             cta_video = tmp_path / "scene-cta.mp4"

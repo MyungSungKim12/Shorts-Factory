@@ -271,6 +271,10 @@ def _plain_text(value: str) -> str:
     return html.unescape(re.sub(r"<[^>]+>", "", value or "")).strip()
 
 
+def _enabled(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _wikimedia_image_candidates(keyword: str) -> list[MediaCandidate]:
     """허용 라이선스가 명시된 Wikimedia Commons 비트맵을 검색한다."""
     try:
@@ -332,6 +336,59 @@ def _wikimedia_image_candidates(keyword: str) -> list[MediaCandidate]:
         return []
 
 
+def _nasa_image_candidates(keyword: str) -> list[MediaCandidate]:
+    """NASA Images에서 공개 지구관측·탐사 이미지를 키 없이 검색한다."""
+    if not _enabled(os.getenv("NASA_MEDIA_ENABLED", "false")):
+        return []
+    try:
+        response = requests.get(
+            "https://images-api.nasa.gov/search",
+            params={"q": keyword, "media_type": "image", "page_size": 10},
+            headers={"User-Agent": "ShortsFactory/1.0 (local sample generator)"},
+            timeout=20,
+        )
+        response.raise_for_status()
+        candidates = []
+        for item in (response.json().get("collection") or {}).get("items", []):
+            data = (item.get("data") or [{}])[0]
+            links = item.get("links") or []
+            image_link = next(
+                (
+                    link
+                    for link in links
+                    if link.get("href") and link.get("render") == "image"
+                ),
+                None,
+            )
+            if not image_link:
+                continue
+            nasa_id = str(data.get("nasa_id") or "").strip()
+            if not nasa_id:
+                continue
+            title = _plain_text(str(data.get("title") or ""))
+            description = _plain_text(str(data.get("description") or ""))
+            keywords = data.get("keywords") or []
+            keyword_text = " ".join(str(value) for value in keywords)
+            candidates.append(MediaCandidate(
+                provider="nasa_image",
+                media_id=nasa_id,
+                source_url=f"https://images.nasa.gov/details/{nasa_id}",
+                download_url=str(image_link["href"]),
+                width=1600,
+                height=900,
+                media_type="image",
+                keyword=keyword,
+                license="Public domain (NASA)",
+                attribution="NASA",
+                description=" ".join(
+                    value for value in (title, description, keyword_text) if value
+                ),
+            ))
+        return candidates
+    except (requests.RequestException, ValueError, TypeError, AttributeError):
+        return []
+
+
 def _positive_env_int(name: str, default: int) -> int:
     try:
         value = int(os.getenv(name, str(default)))
@@ -349,7 +406,7 @@ def media_limit(media_type: str) -> int:
 def _download_candidate(candidate: MediaCandidate, output: Path) -> int:
     headers = (
         {"User-Agent": "ShortsFactory/1.0 (local sample generator)"}
-        if candidate.provider == "wikimedia_image" else None
+        if candidate.provider in {"wikimedia_image", "nasa_image"} else None
     )
     connect_timeout = _positive_env_int("MEDIA_CONNECT_TIMEOUT_SEC", 10)
     read_timeout = _positive_env_int("MEDIA_READ_TIMEOUT_SEC", 30)
@@ -432,6 +489,7 @@ async def fetch_story_media(
         ) + (
             _pexels_video_candidates,
             _pixabay_video_candidates,
+            _nasa_image_candidates,
             _pexels_photo_candidates,
         )
         for collect in providers:
