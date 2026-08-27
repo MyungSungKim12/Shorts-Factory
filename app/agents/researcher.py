@@ -7,6 +7,7 @@ from app.console import safe_print
 from app.content_format import get_content_format
 from app.models import is_rejected_story_topic
 from app.services.claude_client import call_agent
+from app.services.research_feedback import build_research_feedback, topic_duplicate_reason
 from app.services.web_search import search_ranking_topics
 
 
@@ -157,6 +158,11 @@ def run_researcher(
     selected = get_content_format(content_format)
     if recent_topics is None:
         recent_topics = _load_recent_topics(data_dir)
+    performance_feedback = (
+        build_research_feedback(data_dir)
+        if selected == "story"
+        else {"winning_patterns": [], "avoid_subjects": [], "evergreen_buckets": []}
+    )
 
     if run_id is None:
         run_id = datetime.now().strftime("%Y%m%d")
@@ -178,6 +184,7 @@ def run_researcher(
         "recent_topics": recent_topics,
         "category": category,
         "focus_domain": story_focus_domain(run_id) if selected == "story" else None,
+        "performance_feedback": performance_feedback,
     }
     if category:
         safe_print(f"  · 회차 {slot} 카테고리: {category['name']}")
@@ -189,6 +196,25 @@ def run_researcher(
     from app.models import validate_topic
     from app.services.fact_cache import save_verified, pick_cached, cache_size
     from app.services.json_extract import extract_json
+
+    def _reject_story_duplicate(payload: dict) -> bool:
+        if selected != "story":
+            return False
+        return topic_duplicate_reason(
+            payload,
+            performance_feedback.get("avoid_subjects") or [],
+        ) is not None
+
+    def _validate_candidate(raw_topic: dict) -> dict:
+        candidate = validate_topic(raw_topic, selected)
+        if selected == "story":
+            duplicate_reason = topic_duplicate_reason(
+                candidate,
+                performance_feedback.get("avoid_subjects") or [],
+            )
+            if duplicate_reason:
+                raise ValueError(duplicate_reason)
+        return candidate
 
     topic_dict = None
     try:
@@ -203,7 +229,7 @@ def run_researcher(
         raw_topic = extract_json(topic)
         raw_topic["verification_method"] = "grounded_search"
         raw_topic["verified_at"] = datetime.now().isoformat()
-        topic_dict = validate_topic(raw_topic, selected)
+        topic_dict = _validate_candidate(raw_topic)
         cache_slot = 0 if selected == "story" else slot
         if use_cache:
             save_verified(data_dir, cache_slot, topic_dict)
@@ -229,7 +255,9 @@ def run_researcher(
                 cache_slot,
                 recent_topics,
                 allowed_categories=allowed_categories,
-                reject_payload=is_rejected_story_topic if selected == "story" else None,
+                reject_payload=(
+                    lambda payload: is_rejected_story_topic(payload) or _reject_story_duplicate(payload)
+                ) if selected == "story" else None,
             )
             if use_cache else None
         )
@@ -251,7 +279,7 @@ def run_researcher(
             raw_topic = extract_json(topic)
             raw_topic["verification_method"] = "model_memory"
             raw_topic["verified_at"] = datetime.now().isoformat()
-            topic_dict = validate_topic(raw_topic, selected)
+            topic_dict = _validate_candidate(raw_topic)
 
     # 업로드 가능 검증 방식인지 최종 확인 (방어)
     from app.models import UPLOADABLE_VERIFICATION
@@ -280,6 +308,7 @@ def _story_researcher_prompt(context: dict, grounded: bool = True) -> str:
     recent = context.get("recent_topics") or []
     category = context.get("category") or {}
     focus_domain = context.get("focus_domain") or {}
+    feedback = context.get("performance_feedback") or {}
     overexposed_domains = _overexposed_recent_domains(recent)
     category_block = (
         f"- 이번 회차 방향: {category.get('name')}\n"
@@ -309,6 +338,31 @@ def _story_researcher_prompt(context: dict, grounded: bool = True) -> str:
         "- 위 소재는 설명이 흥미로워도 무료 영상이 추상적이고 첫 피드 테스트에서 이탈 위험이 높으므로 후보에서 탈락시킨다.\n"
         "- 대신 지하·빙하·동굴·도시·폐쇄 구역, 사막·화산·호수·실제 구조물처럼 눈앞에 그려지는 지구 기반 소재를 우선한다."
     )
+    winners = feedback.get("winning_patterns") or []
+    winner_lines = []
+    for item in winners[:6]:
+        tags = ", ".join(item.get("pattern_tags") or [])
+        winner_lines.append(
+            f"- 조회 {item.get('views', 0)}회: {item.get('title')} "
+            f"(패턴: {tags or '장소·반전·실물 장면'})"
+        )
+    avoid_subjects = feedback.get("avoid_subjects") or []
+    avoid_lines = [f"- {subject}" for subject in avoid_subjects[:40]]
+    buckets = feedback.get("evergreen_buckets") or []
+    bucket_lines = [f"- {bucket}" for bucket in buckets]
+    performance_block = (
+        "[성과 기반 추천 방식]\n"
+        "- 최근 성과가 좋았던 축은 '지하/숨겨진 장소/고대 공학/숫자/버려진 구조/빙하·화산·호수'처럼 눈에 보이는 실물 미스터리다.\n"
+        "- 아래 상위 소재를 그대로 반복하지 말고, 왜 잘됐는지 패턴만 빌려 새 장소·새 사건·새 관측값으로 바꿔라.\n"
+        + ("\n".join(winner_lines) if winner_lines else "- 성과 데이터가 부족하면 지하·고대 구조·폐쇄 시설·극한 지형을 우선한다.")
+        + "\n\n[강한 중복 회피]\n"
+        "- 같은 장소·대상·사건 재포장 금지. 제목만 바꾸거나 숫자만 바꾼 변주는 중복으로 탈락시킨다.\n"
+        "- 아래 과거 소재와 핵심 명사 2개 이상이 겹치면 다른 국가·다른 시대·다른 구조·다른 관측값으로 이동한다.\n"
+        + ("\n".join(avoid_lines) if avoid_lines else "- 과거 소재 목록 없음")
+        + "\n\n[소재 고갈 방지 확장 축]\n"
+        "- 소재가 부족하면 회차를 멈추지 말고 아래 축에서 아직 다루지 않은 실물 장소형 소재로 확장한다.\n"
+        + ("\n".join(bucket_lines) if bucket_lines else "- 지하·폐쇄시설·고대공학·극한지형·빙하 아래 세계")
+    )
     return f"""당신은 '이상한 지구기록' 채널의 한국어 Shorts 리서처다. 검증 가능한 자연·과학·숨겨진 장소·역사 미스터리만 조사한다.
 
 [목표]
@@ -325,6 +379,8 @@ def _story_researcher_prompt(context: dict, grounded: bool = True) -> str:
 {focus_block}
 {overexposed_block}
 {hard_block}
+
+{performance_block}
 
 [재미 점수 — 후보마다 각 0~5점, 총 30점]
 1. 첫 3초 호기심: 설명을 듣기 전에도 결말이 궁금한가?

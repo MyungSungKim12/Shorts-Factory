@@ -110,6 +110,16 @@ def test_research_prompt_requires_selected_domain_and_semantic_deduplication():
     prompt = researcher._story_researcher_prompt(
         {
             "recent_topics": ["기존 우주 신호 소재"],
+            "performance_feedback": {
+                "winning_patterns": [{
+                    "title": "유럽 지하, 2만 명 살던 도시가 버려진 미스터리",
+                    "topic": "유럽 지하에 숨겨진 고대 지하 도시의 비밀",
+                    "views": 3409,
+                    "pattern_tags": ["지하", "고대", "숫자", "버려진"],
+                }],
+                "avoid_subjects": ["유럽 지하에 숨겨진 고대 지하 도시의 비밀"],
+                "evergreen_buckets": ["지하 도시·동굴·터널", "폐쇄·금지 시설"],
+            },
             "focus_domain": {
                 "name": "대기·기상",
                 "desc": "극한 기상과 설명하기 어려운 대기 관측",
@@ -122,6 +132,10 @@ def test_research_prompt_requires_selected_domain_and_semantic_deduplication():
     assert "대기·기상" in prompt
     assert "상층 번개" in prompt
     assert "핵심 대상·사건·관측값" in prompt
+    assert "성과 기반 추천 방식" in prompt
+    assert "유럽 지하, 2만 명 살던 도시가 버려진 미스터리" in prompt
+    assert "같은 장소·대상·사건 재포장 금지" in prompt
+    assert "소재가 부족하면" in prompt
 
 
 def test_research_prompt_penalizes_recent_space_and_ocean_overuse():
