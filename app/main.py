@@ -8,11 +8,13 @@ from datetime import date
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, BackgroundTasks, Depends, Query
+from fastapi import FastAPI, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 from app.agents.orchestrator import run_pipeline
 from app.routes.slots import require_dashboard_token, router as slots_router
+from app.services.server_files import list_server_files, resolve_download
 
 load_dotenv()
 
@@ -303,6 +305,39 @@ def performance_summary():
         "warnings": report.get("warnings") if isinstance(report.get("warnings"), list) else [],
         "collection": report.get("collection") if isinstance(report.get("collection"), dict) else {},
     }
+
+
+@app.get("/api/server-files", dependencies=[Depends(require_dashboard_token)])
+def server_files(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    category: str | None = Query(default=None),
+):
+    """조회 전용 서버 운영 파일 목록."""
+    result = list_server_files(
+        DATA_DIR,
+        page=page,
+        page_size=page_size,
+        category=category,
+    )
+    result["pagination"] = _pagination(
+        page,
+        page_size,
+        result["summary"]["total_files"],
+    )
+    return result
+
+
+@app.get(
+    "/api/server-files/{file_id}/download",
+    dependencies=[Depends(require_dashboard_token)],
+)
+def server_file_download(file_id: str):
+    """허용된 운영 파일만 다운로드/미리보기로 제공."""
+    path = resolve_download(DATA_DIR, file_id)
+    if path is None:
+        raise HTTPException(status_code=404, detail="파일을 찾을 수 없습니다")
+    return FileResponse(path, filename=path.name)
 
 
 @app.get("/api/report")
