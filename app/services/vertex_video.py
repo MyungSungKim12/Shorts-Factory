@@ -47,6 +47,20 @@ def _video_cost_usd(model: str, duration: int, resolution: str = "720p") -> floa
     return round(duration * per_second, 4)
 
 
+def _veo_resolution() -> str:
+    value = os.getenv("VEO_RESOLUTION", "720p").strip().lower()
+    return value if value in {"720p", "1080p"} else "720p"
+
+
+def _cost_feature_name(model: str) -> str:
+    name = model.lower()
+    if "lite" in name:
+        return "veo_3_1_lite"
+    if "fast" in name:
+        return "veo_3_1_fast"
+    return "veo_3_1"
+
+
 def motion_prompt(subject: str) -> str:
     name = " ".join(str(subject or "verified subject").split())
     return (
@@ -105,7 +119,8 @@ def generate_opening_video(
 
     model = os.getenv("VEO_MODEL", "veo-3.1-fast-generate-001").strip()
     duration = 4
-    estimated_cost = _video_cost_usd(model, duration)
+    resolution = _veo_resolution()
+    estimated_cost = _video_cost_usd(model, duration, resolution)
     reservation = None
     if os.getenv("AI_CREDIT_MODE"):
         data_dir = Path(os.getenv("DATA_DIR", "./data"))
@@ -114,7 +129,7 @@ def generate_opening_video(
         try:
             reservation = reserve_cost(
                 data_dir,
-                "veo_3_1_fast" if "fast" in model.lower() else "veo_3_1",
+                _cost_feature_name(model),
                 estimated_cost,
                 os.getenv("PIPELINE_RUN_ID", subject),
             )
@@ -134,7 +149,7 @@ def generate_opening_video(
                 number_of_videos=1,
                 duration_seconds=duration,
                 aspect_ratio="9:16",
-                resolution="720p",
+                resolution=resolution,
                 generate_audio=False,
                 person_generation="dont_allow",
                 negative_prompt=(

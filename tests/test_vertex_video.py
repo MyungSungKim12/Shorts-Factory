@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -69,6 +70,7 @@ def test_image_generation_is_vertical_four_seconds_without_audio(
     monkeypatch.setenv("VEO_OPENING_ENABLED", "true")
     monkeypatch.delenv("AI_CREDIT_MODE", raising=False)
     monkeypatch.setenv("VEO_MODEL", "veo-3.1-fast-generate-001")
+    monkeypatch.setenv("VEO_RESOLUTION", "720p")
     reference = tmp_path / "reference.jpg"
     reference.write_bytes(b"image")
     client = FakeClient()
@@ -93,6 +95,33 @@ def test_image_generation_is_vertical_four_seconds_without_audio(
     assert result.estimated_cost_usd == 0.32
 
 
+def test_generation_uses_configured_resolution_and_matching_cost(
+    tmp_path, monkeypatch
+):
+    from app.services.vertex_video import generate_opening_video
+
+    monkeypatch.setenv("VEO_OPENING_ENABLED", "true")
+    monkeypatch.delenv("AI_CREDIT_MODE", raising=False)
+    monkeypatch.setenv("VEO_MODEL", "veo-3.1-fast-generate-001")
+    monkeypatch.setenv("VEO_RESOLUTION", "1080p")
+    reference = tmp_path / "reference.jpg"
+    reference.write_bytes(b"image")
+    client = FakeClient()
+
+    result = generate_opening_video(
+        reference,
+        tmp_path / "output.mp4",
+        "Richat Structure",
+        client=client,
+        sdk_types=FakeTypes,
+        sleep_fn=lambda seconds: None,
+    )
+
+    config = client.models.calls[0]["config"]
+    assert config.resolution == "1080p"
+    assert result.estimated_cost_usd == 0.4
+
+
 def test_credit_free_mode_prevents_new_veo_call(tmp_path, monkeypatch):
     from app.services.vertex_video import VeoUnavailable, generate_opening_video
 
@@ -109,6 +138,40 @@ def test_credit_free_mode_prevents_new_veo_call(tmp_path, monkeypatch):
             client=FakeClient(),
             sdk_types=FakeTypes,
         )
+
+
+def test_lite_model_reserves_lite_feature_cost(tmp_path, monkeypatch):
+    from app.services.vertex_video import generate_opening_video
+
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AI_CREDIT_MODE", "auto")
+    monkeypatch.setenv("CLOUD_CREDIT_START_KRW", "460418")
+    monkeypatch.setenv("CLOUD_CREDIT_FLOOR_KRW", "80000")
+    monkeypatch.setenv("CLOUD_USD_TO_KRW", "1400")
+    monkeypatch.delenv("CLOUD_CREDIT_EXPIRES_AT", raising=False)
+    monkeypatch.setenv("VEO_OPENING_ENABLED", "true")
+    monkeypatch.setenv("VEO_MODEL", "veo-3.1-lite-generate-preview")
+    monkeypatch.setenv("VEO_RESOLUTION", "1080p")
+    reference = tmp_path / "reference.jpg"
+    reference.write_bytes(b"image")
+
+    result = generate_opening_video(
+        reference,
+        tmp_path / "output.mp4",
+        "Richat Structure",
+        client=FakeClient(),
+        sdk_types=FakeTypes,
+        sleep_fn=lambda seconds: None,
+    )
+
+    assert result.estimated_cost_usd == 0.2
+    events = [
+        json.loads(line)
+        for line in (tmp_path / "billing" / "ai_spend.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    assert events[-1]["feature"] == "veo_3_1_lite"
 
 
 def test_generation_timeout_is_normalized(tmp_path, monkeypatch):
