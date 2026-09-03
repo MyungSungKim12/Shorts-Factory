@@ -473,7 +473,7 @@ def run_longform_producer(data_dir: Path, run_id: str, ffmpeg_path: str) -> dict
                 role=scene["role"],
                 index=index,
                 total=len(script["scenes"]),
-                style_id=str(script.get("style_id") or "documentary"),
+                style_id=str(script.get("style_id") or "clean_news"),
             )
             scene_video = tmp_path / f"scene-{index:02d}.mp4"
             _encode_longform_card(

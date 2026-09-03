@@ -177,7 +177,7 @@ python scripts\generate_longform.py --run-id longform-demo --preview-styles
 
 결과는 `data/longform/style-previews/{run_id}/` 아래 `documentary.png`, `cinematic.png`, `clean_news.png`로 저장된다.
 
-2. 마음에 드는 스타일을 고른 뒤 `data/longform/{run_id}/script.json`에 `style_id`를 넣고 렌더링한다.
+2. 마음에 드는 스타일을 고른 뒤 `data/longform/{run_id}/script.json`에 `style_id`를 넣고 렌더링한다. 기본값은 `clean_news`다.
 
 ```powershell
 python scripts\generate_longform.py --run-id longform-demo

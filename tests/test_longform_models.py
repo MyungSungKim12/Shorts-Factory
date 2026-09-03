@@ -119,3 +119,11 @@ def test_validate_longform_script_preserves_selected_style():
     result = validate_longform_script(_longform_script(style_id="clean_news"))
 
     assert result["style_id"] == "clean_news"
+
+
+def test_validate_longform_script_defaults_to_clean_news_style():
+    from app.models import validate_longform_script
+
+    result = validate_longform_script(_longform_script())
+
+    assert result["style_id"] == "clean_news"

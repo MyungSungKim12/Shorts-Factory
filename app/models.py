@@ -400,7 +400,7 @@ class LongformScriptContract(BaseModel):
     description: str = ""
     tags: list[str] = Field(default_factory=list)
     hook: str = Field(min_length=5)
-    style_id: Literal["documentary", "cinematic", "clean_news"] = "documentary"
+    style_id: Literal["documentary", "cinematic", "clean_news"] = "clean_news"
     scenes: list[LongformScene] = Field(min_length=6, max_length=16)
     visual_identity: VisualIdentity | None = None
     cta: str = ""
