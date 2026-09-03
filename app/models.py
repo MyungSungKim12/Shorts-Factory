@@ -61,6 +61,18 @@ _OVEREXPOSED_OCEAN_TOPIC_KEYWORDS = (
     "deep sea",
     "underwater",
 )
+_VAGUE_LONGFORM_UNITS = (
+    "아주 오래전",
+    "엄청",
+    "굉장히",
+    "상당히",
+    "수많은",
+    "많이",
+    "큰 규모",
+    "거대한 규모",
+    "오랜 시간",
+    "오래전",
+)
 
 STORY_TITLE_TARGET_MIN = 22
 STORY_TITLE_TARGET_MAX = 34
@@ -345,6 +357,82 @@ class StoryScriptContract(BaseModel):
         return self
 
 
+class LongformScene(BaseModel):
+    n: int = Field(ge=1)
+    role: Literal[
+        "hook",
+        "context",
+        "evidence",
+        "mechanism",
+        "counterpoint",
+        "payoff",
+        "close",
+    ]
+    chapter_title: str = Field(min_length=2, max_length=60)
+    narration: str = Field(min_length=10)
+    visuals: list[str] = Field(min_length=1, max_length=4)
+    duration_sec: float = Field(ge=15, le=90)
+
+    @field_validator("narration")
+    @classmethod
+    def _narration_is_spoken_text(cls, value: str) -> str:
+        normalized = " ".join((value or "").split())
+        if any(term in normalized for term in _VAGUE_LONGFORM_UNITS):
+            raise ValueError("롱폼 narration에 애매한 표현이 포함됨")
+        if not re.search(r"[.!?]$", normalized):
+            raise ValueError("롱폼 narration은 종결 문장부호로 끝나야 함")
+        return normalized
+
+    @field_validator("visuals")
+    @classmethod
+    def _visuals_are_searchable(cls, values: list[str]) -> list[str]:
+        cleaned = [(value or "").strip() for value in values]
+        if any(not value or value in _PLACEHOLDERS for value in cleaned):
+            raise ValueError("롱폼 씬마다 실제 visual 검색어가 필요함")
+        return cleaned
+
+
+class LongformScriptContract(BaseModel):
+    """수동 검토용 5~10분 롱폼 대본 계약."""
+
+    format: Literal["longform"] = "longform"
+    title: str = Field(min_length=5, max_length=100)
+    description: str = ""
+    tags: list[str] = Field(default_factory=list)
+    hook: str = Field(min_length=5)
+    style_id: Literal["documentary", "cinematic", "clean_news"] = "documentary"
+    scenes: list[LongformScene] = Field(min_length=6, max_length=16)
+    visual_identity: VisualIdentity | None = None
+    cta: str = ""
+    total_duration_sec: float = Field(default=0, ge=240, le=600)
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def _public_title_only(cls, value: object) -> str:
+        return validate_public_title(value)
+
+    @model_validator(mode="after")
+    def _longform_structure(self):
+        numbers = [scene.n for scene in self.scenes]
+        expected = list(range(1, len(self.scenes) + 1))
+        if numbers != expected:
+            raise ValueError(f"롱폼 씬 번호가 연속적이지 않음: {numbers}")
+        if self.scenes[0].role != "hook":
+            raise ValueError("롱폼 첫 씬 role은 hook이어야 함")
+        if self.scenes[-1].role != "close":
+            raise ValueError("롱폼 마지막 씬 role은 close여야 함")
+        roles = {scene.role for scene in self.scenes}
+        required = {"hook", "context", "evidence", "mechanism", "payoff", "close"}
+        if not required <= roles:
+            missing = ", ".join(sorted(required - roles))
+            raise ValueError(f"롱폼 필수 챕터 누락: {missing}")
+        total = round(sum(scene.duration_sec for scene in self.scenes), 1)
+        if not 240 <= total <= 600:
+            raise ValueError(f"롱폼 duration 합계 {total:.1f}초 — 4~10분 범위 벗어남")
+        self.total_duration_sec = total
+        return self
+
+
 def validate_topic(data: dict, content_format: str | None = None) -> dict:
     """topic.json 검증 — 실패 시 ValueError."""
     selected = content_format or data.get("format") or "ranking"
@@ -368,3 +456,8 @@ def validate_script(data: dict, content_format: str | None = None) -> dict:
     selected = content_format or data.get("format") or "ranking"
     model = StoryScriptContract if selected == "story" else ScriptContract
     return model.model_validate(data).model_dump()
+
+
+def validate_longform_script(data: dict) -> dict:
+    """longform/script.json 검증 — 실패 시 ValueError."""
+    return LongformScriptContract.model_validate(data).model_dump()

@@ -82,6 +82,7 @@ AI 오프닝은 검증된 실제 이미지를 첫 프레임으로 사용하고 �
 | `agents/02_script-writer.md` | 대본 작가 | 숏츠 대본, 제목/태그(SEO) |
 | `agents/03_video-producer.md` | 영상 프로듀서 | TTS·자막·합성 스크립트 실행 |
 | `agents/04_uploader.md` | 업로더 | 업로드, 메타데이터, 예약 발행 |
+| `agents/06_longform-producer.md` | 롱폼 프로듀서 | 수동 검토용 5~10분 롱폼 파일 제작 |
 | `agents/05_analyst.md` | 분석가 | 성과 수집, 개선 리포트 |
 
 각 md는 **역할 정의 + 입출력 계약 + 실제 런타임 위치**를 설명한다. 실제 실행은 `app/agents/`의 Python 모듈이 담당한다.
@@ -163,6 +164,28 @@ python scripts\generate_sample.py --sample-id story-v1
 ```
 
 결과는 `data/samples/story-v1/` 아래의 `topic.json`, `script.json`, `produce_log.json`, `validation.json`, `output.mp4`에 저장된다. Google 음성 호출에 실패하면 제작 로그에 실제 공급자를 기록하고 gTTS로 폴백한다.
+
+## 롱폼 제작
+
+쇼츠 자동 공장은 그대로 유지하고, 롱폼은 별도 수동 검토 라인으로 만든다.
+
+1. 먼저 스타일 미리보기를 만든다.
+
+```powershell
+python scripts\generate_longform.py --run-id longform-demo --preview-styles
+```
+
+결과는 `data/longform/style-previews/{run_id}/` 아래 `documentary.png`, `cinematic.png`, `clean_news.png`로 저장된다.
+
+2. 마음에 드는 스타일을 고른 뒤 `data/longform/{run_id}/script.json`에 `style_id`를 넣고 렌더링한다.
+
+```powershell
+python scripts\generate_longform.py --run-id longform-demo
+```
+
+결과는 `data/longform/{run_id}/output.mp4`와 `produce_log.json`에 저장된다. 롱폼은 자동 업로드하지 않으며, 사람이 확인한 뒤 별도 업로드한다.
+
+롱폼에서 사용한 AI 자산은 `data/media/ai_openings/` 영구 라이브러리에 남아 같은 실제 대상의 쇼츠 제작 시 재사용할 수 있다.
 
 운영 환경은 다음 값을 사용한다.
 

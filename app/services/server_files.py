@@ -10,6 +10,7 @@ from pathlib import Path
 
 ALLOWED_CATEGORIES = {
     "work": ("work",),
+    "longform": ("longform",),
     "staging": ("staging",),
     "rejected": ("rejected",),
     "recovery": ("recovery",),
@@ -69,7 +70,12 @@ def _safe_path(path: Path, data_dir: Path) -> bool:
     suffix = path.suffix.lower()
     if suffix not in ALLOWED_EXTENSIONS:
         return False
-    if suffix == ".json" and path.name not in SAFE_JSON_NAMES and "work" not in parts:
+    if (
+        suffix == ".json"
+        and path.name not in SAFE_JSON_NAMES
+        and "work" not in parts
+        and "longform" not in parts
+    ):
         return False
     return True
 

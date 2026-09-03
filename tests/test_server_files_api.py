@@ -57,6 +57,24 @@ def test_server_files_can_filter_ai_cache_and_reports_disk_usage(configured_api)
     assert payload["summary"]["categories"]["ai_cache"]["files"] == 1
 
 
+def test_server_files_can_filter_longform_outputs(configured_api):
+    longform = configured_api / "longform" / "longform-demo"
+    longform.mkdir(parents=True)
+    (longform / "output.mp4").write_bytes(b"longform-video")
+    (longform / "script.json").write_text(
+        json.dumps({"format": "longform"}), encoding="utf-8"
+    )
+
+    response = client.get("/api/server-files?category=longform", headers=TOKEN)
+
+    assert response.status_code == 200
+    payload = response.json()
+    paths = [item["relative_path"] for item in payload["files"]]
+    assert "longform/longform-demo/output.mp4" in paths
+    assert "longform/longform-demo/script.json" in paths
+    assert payload["summary"]["categories"]["longform"]["files"] == 2
+
+
 def test_server_file_download_requires_token_and_rejects_forged_paths(configured_api):
     work = configured_api / "work" / "20260827-1"
     work.mkdir(parents=True)
