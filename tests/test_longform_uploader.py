@@ -17,7 +17,7 @@ def _script():
                 "chapter_title": "붉은 빙하",
                 "narration": "남극 빙하 아래에서 붉은 물이 흘러나옵니다.",
                 "visuals": ["Blood Falls Antarctica"],
-                "duration_sec": 40,
+                "duration_sec": 60,
             },
             {
                 "n": 2,
@@ -25,7 +25,7 @@ def _script():
                 "chapter_title": "테일러 빙하",
                 "narration": "이 현상은 테일러 빙하 끝에서 관측됩니다.",
                 "visuals": ["Taylor Glacier Antarctica"],
-                "duration_sec": 40,
+                "duration_sec": 60,
             },
             {
                 "n": 3,
@@ -33,7 +33,7 @@ def _script():
                 "chapter_title": "철 성분",
                 "narration": "붉은 색은 철 성분이 산화되며 나타나는 것으로 설명됩니다.",
                 "visuals": ["iron oxide water"],
-                "duration_sec": 40,
+                "duration_sec": 60,
             },
             {
                 "n": 4,
@@ -41,7 +41,7 @@ def _script():
                 "chapter_title": "소금물 저장고",
                 "narration": "빙하 아래에는 오래 갇힌 소금물 저장고가 있습니다.",
                 "visuals": ["subglacial brine"],
-                "duration_sec": 40,
+                "duration_sec": 60,
             },
             {
                 "n": 5,
@@ -49,7 +49,7 @@ def _script():
                 "chapter_title": "극한의 생명",
                 "narration": "이곳은 극한 환경 생명 연구에도 단서를 남깁니다.",
                 "visuals": ["Antarctica research"],
-                "duration_sec": 40,
+                "duration_sec": 60,
             },
             {
                 "n": 6,
@@ -57,7 +57,7 @@ def _script():
                 "chapter_title": "남은 질문",
                 "narration": "남은 질문은 이 물길이 얼마나 오래 이어졌는지입니다.",
                 "visuals": ["Antarctica glacier aerial"],
-                "duration_sec": 40,
+                "duration_sec": 60,
             },
         ],
         "cta": "이런 지구의 기록이 더 궁금하다면 구독과 좋아요 부탁드립니다.",
@@ -96,7 +96,7 @@ def test_longform_uploader_uploads_output_and_writes_log(tmp_path, monkeypatch):
     monkeypatch.setattr(
         longform_uploader,
         "_validate_longform_upload_package",
-        lambda *args, **kwargs: {"passed": True, "report": {"duration": 240}},
+        lambda *args, **kwargs: {"passed": True, "report": {"duration": 360}},
     )
 
     result = longform_uploader.run_longform_uploader(tmp_path, run_id)
@@ -150,6 +150,38 @@ def test_validate_longform_upload_package_accepts_landscape_video_probe(
         lambda path, ffprobe: {
             "width": 1920,
             "height": 1080,
+            "duration": 360.0,
+            "video_codec": "h264",
+            "audio_codec": "aac",
+            "has_audio": True,
+            "duration_delta": 0.1,
+            "internal_silence_max": 24.0,
+        },
+    )
+
+    result = longform_uploader._validate_longform_upload_package(work_dir, "ffmpeg")
+
+    assert result["passed"] is True
+
+
+def test_validate_longform_upload_package_rejects_less_than_six_minutes(
+    tmp_path, monkeypatch
+):
+    from app.agents import longform_uploader
+
+    work_dir = tmp_path / "longform" / "longform-demo"
+    work_dir.mkdir(parents=True)
+    (work_dir / "script.json").write_text(
+        json.dumps(_script(), ensure_ascii=False), encoding="utf-8"
+    )
+    (work_dir / "produce_log.json").write_text("{}", encoding="utf-8")
+    (work_dir / "output.mp4").write_bytes(b"mp4")
+    monkeypatch.setattr(
+        longform_uploader,
+        "_probe_longform_video",
+        lambda path, ffprobe: {
+            "width": 1920,
+            "height": 1080,
             "duration": 300.0,
             "video_codec": "h264",
             "audio_codec": "aac",
@@ -159,6 +191,9 @@ def test_validate_longform_upload_package_accepts_landscape_video_probe(
         },
     )
 
-    result = longform_uploader._validate_longform_upload_package(work_dir, "ffmpeg")
-
-    assert result["passed"] is True
+    try:
+        longform_uploader._validate_longform_upload_package(work_dir, "ffmpeg")
+    except ValueError as exc:
+        assert "duration" in str(exc)
+    else:
+        raise AssertionError("six-minute minimum should be enforced")

@@ -9,7 +9,7 @@ def _longform_script(**overrides):
             "chapter_title": "사라진 도시의 첫 단서",
             "narration": "첫 기록은 위성사진의 이상한 직선에서 시작됩니다.",
             "visuals": ["ancient desert ruin satellite image", "stone wall aerial"],
-            "duration_sec": 35,
+            "duration_sec": 50,
         },
         {
             "n": 2,
@@ -17,7 +17,7 @@ def _longform_script(**overrides):
             "chapter_title": "왜 이상하게 보였나",
             "narration": "주변 지형과 달리 이 선은 일정한 각도로 이어졌습니다.",
             "visuals": ["desert plateau aerial", "archaeological survey"],
-            "duration_sec": 45,
+            "duration_sec": 55,
         },
         {
             "n": 3,
@@ -25,7 +25,7 @@ def _longform_script(**overrides):
             "chapter_title": "남은 흔적",
             "narration": "조사 기록에는 흙벽과 물길의 흔적이 함께 남았습니다.",
             "visuals": ["ancient canal remains", "earthen wall close up"],
-            "duration_sec": 50,
+            "duration_sec": 55,
         },
         {
             "n": 4,
@@ -33,7 +33,7 @@ def _longform_script(**overrides):
             "chapter_title": "가능한 설명",
             "narration": "가장 조심스러운 해석은 방어와 물 관리가 결합된 구조입니다.",
             "visuals": ["ancient irrigation diagram", "desert fortress ruins"],
-            "duration_sec": 55,
+            "duration_sec": 60,
         },
         {
             "n": 5,
@@ -41,7 +41,7 @@ def _longform_script(**overrides):
             "chapter_title": "아직 풀리지 않은 부분",
             "narration": "하지만 모든 선이 같은 시기에 만들어졌다는 증거는 부족합니다.",
             "visuals": ["archaeologist field notes", "old map texture"],
-            "duration_sec": 45,
+            "duration_sec": 50,
         },
         {
             "n": 6,
@@ -79,7 +79,18 @@ def test_validate_longform_script_accepts_documentary_duration():
     result = validate_longform_script(_longform_script())
 
     assert result["format"] == "longform"
-    assert result["total_duration_sec"] == 320
+    assert result["total_duration_sec"] == 360
+
+
+def test_validate_longform_script_rejects_four_minute_video():
+    from app.models import validate_longform_script
+
+    script = _longform_script()
+    for scene in script["scenes"]:
+        scene["duration_sec"] = 240 / len(script["scenes"])
+
+    with pytest.raises(ValueError, match="6~10분"):
+        validate_longform_script(script)
 
 
 def test_validate_longform_script_rejects_short_video():

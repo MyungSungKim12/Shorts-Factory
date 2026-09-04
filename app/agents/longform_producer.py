@@ -1,4 +1,4 @@
-"""수동 검토용 5~10분 롱폼 렌더러."""
+"""수동 검토용 6~10분 롱폼 렌더러."""
 from __future__ import annotations
 
 import hashlib
@@ -279,6 +279,8 @@ def _encode_longform_card(
             vf,
             "-t",
             f"{duration:.3f}",
+            "-af",
+            "apad",
             "-c:v",
             "libx264",
             "-preset",
@@ -373,6 +375,8 @@ def _encode_longform_media(
             vf,
             "-t",
             f"{duration:.3f}",
+            "-af",
+            "apad",
             "-c:v",
             "libx264",
             "-preset",

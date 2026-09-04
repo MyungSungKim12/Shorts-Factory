@@ -16,7 +16,7 @@ def _script():
                 "chapter_title": "사라진 도시의 첫 단서",
                 "narration": "첫 기록은 위성사진의 이상한 직선에서 시작됩니다.",
                 "visuals": ["ancient desert ruin satellite image"],
-                "duration_sec": 40,
+                "duration_sec": 50,
             },
             {
                 "n": 2,
@@ -24,7 +24,7 @@ def _script():
                 "chapter_title": "왜 이상하게 보였나",
                 "narration": "주변 지형과 달리 이 선은 일정한 각도로 이어졌습니다.",
                 "visuals": ["desert plateau aerial"],
-                "duration_sec": 45,
+                "duration_sec": 55,
             },
             {
                 "n": 3,
@@ -32,7 +32,7 @@ def _script():
                 "chapter_title": "남은 흔적",
                 "narration": "조사 기록에는 흙벽과 물길의 흔적이 함께 남았습니다.",
                 "visuals": ["ancient canal remains"],
-                "duration_sec": 50,
+                "duration_sec": 55,
             },
             {
                 "n": 4,
@@ -40,7 +40,7 @@ def _script():
                 "chapter_title": "가능한 설명",
                 "narration": "가장 조심스러운 해석은 방어와 물 관리가 결합된 구조입니다.",
                 "visuals": ["ancient irrigation diagram"],
-                "duration_sec": 55,
+                "duration_sec": 60,
             },
             {
                 "n": 5,
@@ -48,7 +48,7 @@ def _script():
                 "chapter_title": "아직 풀리지 않은 부분",
                 "narration": "하지만 모든 선이 같은 시기에 만들어졌다는 증거는 부족합니다.",
                 "visuals": ["archaeologist field notes"],
-                "duration_sec": 45,
+                "duration_sec": 50,
             },
             {
                 "n": 6,
@@ -56,7 +56,7 @@ def _script():
                 "chapter_title": "기록이 말하는 것",
                 "narration": "이 유적은 사라진 도시가 환경을 어떻게 읽었는지 보여줍니다.",
                 "visuals": ["ruined city sunset"],
-                "duration_sec": 45,
+                "duration_sec": 50,
             },
             {
                 "n": 7,
@@ -342,3 +342,33 @@ def test_longform_still_filter_keeps_images_static():
     assert "scale=1920:1080" in result
     assert "crop=1920:1080" in result
     assert "fps=30" in result
+
+
+def test_longform_card_pads_audio_to_scene_duration(tmp_path, monkeypatch):
+    from app.agents import longform_producer
+
+    commands = []
+    image = tmp_path / "image.jpg"
+    narration = tmp_path / "narration.wav"
+    output = tmp_path / "scene.mp4"
+    image.write_bytes(b"jpg")
+    narration.write_bytes(b"wav")
+
+    def fake_run(command, cwd=None, timeout=None):
+        commands.append(command)
+        Path(command[-1]).write_bytes(b"mp4")
+
+    monkeypatch.setattr(longform_producer, "_run_ffmpeg", fake_run)
+
+    longform_producer._encode_longform_card(
+        image,
+        narration,
+        output,
+        60.0,
+        "ffmpeg",
+        motion_index=1,
+    )
+
+    command = commands[0]
+    assert "-af" in command
+    assert "apad" in command

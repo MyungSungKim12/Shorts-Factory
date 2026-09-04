@@ -220,3 +220,82 @@ def test_materialize_media_board_downloads_best_asset(tmp_path, monkeypatch):
     assert asset["local_path"].endswith("longform-demo/media/scene-01-01.jpg")
     assert asset["download_bytes"] > 1024
     assert Path(asset["local_path"]).is_file()
+
+
+def test_preflight_prefers_unused_source_when_same_query_repeats(tmp_path, monkeypatch):
+    from app.services.longform_media_preflight import prepare_longform_media_board
+
+    run_dir = tmp_path / "longform" / "longform-demo"
+    _write_script(run_dir)
+    script = json.loads((run_dir / "script.json").read_text(encoding="utf-8"))
+    script["scenes"].append(
+        {
+            "n": 3,
+            "role": "evidence",
+            "chapter_title": "반복 장면",
+            "narration": "같은 대상도 다른 각도의 자료를 먼저 확인해야 합니다.",
+            "duration_sec": 25,
+            "visual_query": "exact: Richat Structure",
+        }
+    )
+    (run_dir / "script.json").write_text(
+        json.dumps(script, ensure_ascii=False), encoding="utf-8"
+    )
+
+    def fake_wikimedia(query):
+        if query != "Richat Structure":
+            return []
+        return [
+            MediaCandidate(
+                provider="wikimedia_image",
+                media_id="File:Richat_A.jpg",
+                source_url="https://commons.wikimedia.org/wiki/File:Richat_A.jpg",
+                download_url="https://upload.wikimedia.org/richat-a.jpg",
+                width=1600,
+                height=1000,
+                media_type="image",
+                keyword=query,
+                license="CC BY-SA 4.0",
+                description="Richat Structure",
+            ),
+            MediaCandidate(
+                provider="wikimedia_image",
+                media_id="File:Richat_B.jpg",
+                source_url="https://commons.wikimedia.org/wiki/File:Richat_B.jpg",
+                download_url="https://upload.wikimedia.org/richat-b.jpg",
+                width=1600,
+                height=1000,
+                media_type="image",
+                keyword=query,
+                license="CC BY-SA 4.0",
+                description="Richat Structure",
+            ),
+        ]
+
+    monkeypatch.setattr(
+        "app.services.longform_media_preflight._wikimedia_image_candidates",
+        fake_wikimedia,
+    )
+    monkeypatch.setattr(
+        "app.services.longform_media_preflight._nasa_image_candidates",
+        lambda query: [],
+    )
+    monkeypatch.setattr(
+        "app.services.longform_media_preflight._pexels_video_candidates",
+        lambda query: [],
+    )
+    monkeypatch.setattr(
+        "app.services.longform_media_preflight._pexels_photo_candidates",
+        lambda query: [],
+    )
+    monkeypatch.setattr(
+        "app.services.longform_media_preflight._pixabay_video_candidates",
+        lambda query: [],
+    )
+
+    board = prepare_longform_media_board(tmp_path, "longform-demo")
+
+    first = board["scenes"][0]["assets"][0]["source_url"]
+    repeated = board["scenes"][2]["assets"][0]["source_url"]
+    assert first.endswith("Richat_A.jpg")
+    assert repeated.endswith("Richat_B.jpg")

@@ -393,7 +393,7 @@ class LongformScene(BaseModel):
 
 
 class LongformScriptContract(BaseModel):
-    """수동 검토용 5~10분 롱폼 대본 계약."""
+    """수동 검토용 6~10분 롱폼 대본 계약."""
 
     format: Literal["longform"] = "longform"
     title: str = Field(min_length=5, max_length=100)
@@ -404,7 +404,7 @@ class LongformScriptContract(BaseModel):
     scenes: list[LongformScene] = Field(min_length=6, max_length=16)
     visual_identity: VisualIdentity | None = None
     cta: str = ""
-    total_duration_sec: float = Field(default=0, ge=240, le=600)
+    total_duration_sec: float = Field(default=0, ge=360, le=600)
 
     @field_validator("title", mode="before")
     @classmethod
@@ -427,8 +427,8 @@ class LongformScriptContract(BaseModel):
             missing = ", ".join(sorted(required - roles))
             raise ValueError(f"롱폼 필수 챕터 누락: {missing}")
         total = round(sum(scene.duration_sec for scene in self.scenes), 1)
-        if not 240 <= total <= 600:
-            raise ValueError(f"롱폼 duration 합계 {total:.1f}초 — 4~10분 범위 벗어남")
+        if not 360 <= total <= 600:
+            raise ValueError(f"롱폼 duration 합계 {total:.1f}초 — 6~10분 범위 벗어남")
         self.total_duration_sec = total
         return self
 

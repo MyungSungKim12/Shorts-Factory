@@ -82,7 +82,7 @@ AI 오프닝은 검증된 실제 이미지를 첫 프레임으로 사용하고 �
 | `agents/02_script-writer.md` | 대본 작가 | 숏츠 대본, 제목/태그(SEO) |
 | `agents/03_video-producer.md` | 영상 프로듀서 | TTS·자막·합성 스크립트 실행 |
 | `agents/04_uploader.md` | 업로더 | 업로드, 메타데이터, 예약 발행 |
-| `agents/06_longform-producer.md` | 롱폼 프로듀서 | 수동 검토용 5~10분 롱폼 파일 제작 |
+| `agents/06_longform-producer.md` | 롱폼 프로듀서 | 수동 검토용 6~10분 롱폼 파일 제작 |
 | `agents/05_analyst.md` | 분석가 | 성과 수집, 개선 리포트 |
 
 각 md는 **역할 정의 + 입출력 계약 + 실제 런타임 위치**를 설명한다. 실제 실행은 `app/agents/`의 Python 모듈이 담당한다.

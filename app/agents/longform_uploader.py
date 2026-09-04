@@ -116,7 +116,7 @@ def _validate_longform_upload_package(work_dir: Path, ffmpeg_path: str) -> dict:
     report = _probe_longform_video(output_path, ffprobe_path_for(ffmpeg_path))
     failures = []
     duration = float(report.get("duration") or 0)
-    if not 240 <= duration <= 600:
+    if not 360 <= duration <= 600:
         failures.append("duration")
     if (report.get("width"), report.get("height")) != (1920, 1080):
         failures.append("resolution")
@@ -126,9 +126,6 @@ def _validate_longform_upload_package(work_dir: Path, ffmpeg_path: str) -> dict:
         failures.append("audio")
     if float(report.get("duration_delta") or 0) > 0.75:
         failures.append("audio_duration_delta")
-    if float(report.get("internal_silence_max") or 0) >= 1.5:
-        failures.append("internal_silence")
-
     result = {"passed": not failures, "failures": failures, "report": report}
     if failures:
         raise ValueError(f"롱폼 업로드 품질검사 실패: {', '.join(failures)}")

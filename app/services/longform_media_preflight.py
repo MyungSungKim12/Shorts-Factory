@@ -112,7 +112,8 @@ def _select_candidates(query: str, *, exact: bool) -> list[dict]:
             selected.append(
                 _candidate_to_source(candidate, query=provider_query, exact=matches, strong=True)
             )
-            break
+            if len(selected) >= 3:
+                break
 
     for candidate in _nasa_image_candidates(provider_query):
         selected.append(
@@ -137,6 +138,34 @@ def _select_candidates(query: str, *, exact: bool) -> list[dict]:
             break
 
     return selected[:3]
+
+
+def _asset_identity(asset: dict) -> str:
+    return str(
+        asset.get("source_url")
+        or asset.get("download_url")
+        or asset.get("media_id")
+        or asset.get("asset_id")
+        or ""
+    ).strip()
+
+
+def _prefer_unused_assets(assets: list[dict], used_assets: set[str]) -> list[dict]:
+    unused = []
+    repeated = []
+    for asset in assets:
+        identity = _asset_identity(asset)
+        target = repeated if identity and identity in used_assets else unused
+        item = dict(asset)
+        item["duplicate_source"] = bool(identity and identity in used_assets)
+        target.append(item)
+    ordered = [*unused, *repeated]
+    for asset in ordered:
+        identity = _asset_identity(asset)
+        if identity:
+            used_assets.add(identity)
+            break
+    return ordered
 
 
 def _select_reusable_ai(data_dir: Path, query: str) -> list[dict]:
@@ -238,6 +267,7 @@ def prepare_longform_media_board(data_dir: Path, run_id: str) -> dict:
 
     script = json.loads(script_file.read_text(encoding="utf-8"))
     board_scenes = []
+    used_assets: set[str] = set()
     for scene in script.get("scenes") or []:
         query = _scene_query(scene, script)
         exact = query.lower().startswith("exact:")
@@ -245,6 +275,7 @@ def prepare_longform_media_board(data_dir: Path, run_id: str) -> dict:
             *_select_reusable_ai(data_dir, query),
             *_select_candidates(query, exact=exact),
         ]
+        assets = _prefer_unused_assets(assets, used_assets)
         for asset in assets:
             asset["duration_sec"] = float(scene.get("duration_sec") or 0)
         board_scenes.append(
