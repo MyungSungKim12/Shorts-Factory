@@ -371,7 +371,7 @@ class LongformScene(BaseModel):
     chapter_title: str = Field(min_length=2, max_length=60)
     narration: str = Field(min_length=10)
     visuals: list[str] = Field(min_length=1, max_length=4)
-    duration_sec: float = Field(ge=15, le=90)
+    duration_sec: float = Field(ge=12, le=45)
 
     @field_validator("narration")
     @classmethod
@@ -401,7 +401,7 @@ class LongformScriptContract(BaseModel):
     tags: list[str] = Field(default_factory=list)
     hook: str = Field(min_length=5)
     style_id: Literal["documentary", "cinematic", "clean_news"] = "clean_news"
-    scenes: list[LongformScene] = Field(min_length=6, max_length=16)
+    scenes: list[LongformScene] = Field(min_length=20, max_length=30)
     visual_identity: VisualIdentity | None = None
     cta: str = ""
     total_duration_sec: float = Field(default=0, ge=360, le=600)

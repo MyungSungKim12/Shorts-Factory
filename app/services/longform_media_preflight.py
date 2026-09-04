@@ -168,6 +168,20 @@ def _prefer_unused_assets(assets: list[dict], used_assets: set[str]) -> list[dic
     return ordered
 
 
+def _board_asset_sort_key(asset: dict) -> tuple[int, int]:
+    media_type = str(asset.get("media_type") or "").lower()
+    provider = str(asset.get("provider") or "").lower()
+    is_video = media_type == "video" or provider in {
+        "pexels_video",
+        "pixabay_video",
+        "veo",
+        "vertex_veo",
+        "veo-3.1-fast-generate-001",
+    }
+    tier = str(asset.get("tier") or media_tier_for_source(asset)).upper()
+    return 0 if is_video else 1, TIER_PRIORITY.get(tier, 9)
+
+
 def _select_reusable_ai(data_dir: Path, query: str) -> list[dict]:
     subject = query.removeprefix("exact:").strip()
     if not subject:
@@ -275,6 +289,7 @@ def prepare_longform_media_board(data_dir: Path, run_id: str) -> dict:
             *_select_reusable_ai(data_dir, query),
             *_select_candidates(query, exact=exact),
         ]
+        assets = sorted(assets, key=_board_asset_sort_key)
         assets = _prefer_unused_assets(assets, used_assets)
         for asset in assets:
             asset["duration_sec"] = float(scene.get("duration_sec") or 0)

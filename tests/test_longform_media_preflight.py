@@ -299,3 +299,63 @@ def test_preflight_prefers_unused_source_when_same_query_repeats(tmp_path, monke
     repeated = board["scenes"][2]["assets"][0]["source_url"]
     assert first.endswith("Richat_A.jpg")
     assert repeated.endswith("Richat_B.jpg")
+
+
+def test_preflight_orders_video_before_static_image_for_longform_scene(
+    tmp_path, monkeypatch
+):
+    from app.services.longform_media_preflight import prepare_longform_media_board
+
+    run_dir = tmp_path / "longform" / "longform-demo"
+    _write_script(run_dir)
+
+    monkeypatch.setattr(
+        "app.services.longform_media_preflight._wikimedia_image_candidates",
+        lambda query: [
+            MediaCandidate(
+                provider="wikimedia_image",
+                media_id="File:Richat.jpg",
+                source_url="https://commons.wikimedia.org/wiki/File:Richat.jpg",
+                download_url="https://upload.wikimedia.org/richat.jpg",
+                width=1600,
+                height=1000,
+                media_type="image",
+                keyword=query,
+                license="CC BY-SA 4.0",
+                description="Richat Structure",
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        "app.services.longform_media_preflight._nasa_image_candidates",
+        lambda query: [],
+    )
+    monkeypatch.setattr(
+        "app.services.longform_media_preflight._pexels_video_candidates",
+        lambda query: [
+            MediaCandidate(
+                provider="pexels_video",
+                media_id="pexels-1",
+                source_url="https://www.pexels.com/video/1",
+                download_url="https://videos.pexels.com/1.mp4",
+                width=1920,
+                height=1080,
+                media_type="video",
+                keyword=query,
+                license="Pexels",
+                description="Richat Structure desert aerial",
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        "app.services.longform_media_preflight._pexels_photo_candidates",
+        lambda query: [],
+    )
+    monkeypatch.setattr(
+        "app.services.longform_media_preflight._pixabay_video_candidates",
+        lambda query: [],
+    )
+
+    board = prepare_longform_media_board(tmp_path, "longform-demo")
+
+    assert board["scenes"][0]["assets"][0]["media_type"] == "video"

@@ -183,7 +183,7 @@ python scripts\generate_longform.py --run-id longform-demo --preview-styles
 python scripts\generate_longform.py --run-id longform-demo
 ```
 
-결과는 `data/longform/{run_id}/output.mp4`와 `produce_log.json`에 저장된다. 롱폼은 쇼츠 자동 공장과 분리되어 있으며, 사람이 확인한 뒤 아래 명령으로 별도 업로드한다.
+결과는 `data/longform/{run_id}/output.mp4`와 `produce_log.json`에 저장된다. 6분 롱폼은 최소 20개 화면 장면으로 만들고, 미디어 보드는 영상 소스 15개 이상을 우선한다. 롱폼은 쇼츠 자동 공장과 분리되어 있으며, 사람이 확인한 뒤 아래 명령으로 별도 업로드한다.
 
 ```powershell
 python scripts\upload_longform.py --run-id longform-demo

@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 def _script():
-    return {
+    value = {
         "format": "longform",
         "title": "사막 아래 사라진 도시의 흔적",
         "description": "사막 유적의 실제 기록을 따라가는 미스터리 다큐멘터리입니다.",
@@ -69,6 +69,26 @@ def _script():
         ],
         "cta": "이런 지구의 기록이 더 궁금하다면 구독과 좋아요 부탁드립니다.",
     }
+    templates = value["scenes"][:-1]
+    close = value["scenes"][-1]
+    roles = [
+        "hook", "context", "evidence", "mechanism", "evidence",
+        "counterpoint", "mechanism", "payoff", "evidence", "context",
+        "mechanism", "counterpoint", "evidence", "payoff", "mechanism",
+        "context", "evidence", "counterpoint", "payoff", "close",
+    ]
+    value["scenes"] = []
+    for index, role in enumerate(roles, start=1):
+        template = close if role == "close" else templates[(index - 1) % len(templates)]
+        scene = dict(template)
+        scene.update(
+            n=index,
+            role=role,
+            chapter_title=f"{template['chapter_title']} {index}",
+            duration_sec=18,
+        )
+        value["scenes"].append(scene)
+    return value
 
 
 def test_longform_producer_writes_output_and_log_without_touching_shorts_work(

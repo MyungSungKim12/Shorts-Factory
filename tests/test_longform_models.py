@@ -60,6 +60,26 @@ def _longform_script(**overrides):
             "duration_sec": 40,
         },
     ]
+    scene_templates = scenes[:-1]
+    close = scenes[-1]
+    roles = [
+        "hook", "context", "evidence", "mechanism", "evidence",
+        "counterpoint", "mechanism", "payoff", "evidence", "context",
+        "mechanism", "counterpoint", "evidence", "payoff", "mechanism",
+        "context", "evidence", "counterpoint", "payoff", "close",
+    ]
+    scenes = []
+    for index, role in enumerate(roles, start=1):
+        template = close if role == "close" else scene_templates[(index - 1) % len(scene_templates)]
+        scene = dict(template)
+        scene.update(
+            n=index,
+            role=role,
+            chapter_title=f"{template['chapter_title']} {index}",
+            duration_sec=18,
+        )
+        scenes.append(scene)
+
     value = {
         "format": "longform",
         "title": "사막 아래 사라진 도시의 흔적",
@@ -93,12 +113,22 @@ def test_validate_longform_script_rejects_four_minute_video():
         validate_longform_script(script)
 
 
+def test_validate_longform_script_rejects_less_than_twenty_scenes():
+    from app.models import validate_longform_script
+
+    script = _longform_script()
+    script["scenes"] = script["scenes"][:19]
+
+    with pytest.raises(ValueError):
+        validate_longform_script(script)
+
+
 def test_validate_longform_script_rejects_short_video():
     from app.models import validate_longform_script
 
     script = _longform_script()
     for scene in script["scenes"]:
-        scene["duration_sec"] = 20
+        scene["duration_sec"] = 12
 
     with pytest.raises(ValueError, match="롱폼"):
         validate_longform_script(script)

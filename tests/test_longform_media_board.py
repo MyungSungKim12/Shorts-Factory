@@ -64,31 +64,62 @@ def test_generic_stock_cannot_pass_core_scene_alone():
 
 
 def test_media_gate_passes_when_core_scenes_have_exact_or_ai_and_coverage_is_high():
+    scenes = []
+    roles = [
+        "hook", "context", "evidence", "mechanism", "evidence",
+        "counterpoint", "mechanism", "payoff", "evidence", "context",
+        "mechanism", "counterpoint", "evidence", "payoff", "mechanism",
+        "context", "evidence", "counterpoint", "payoff", "close",
+    ]
+    for index, role in enumerate(roles, start=1):
+        asset = (
+            {"tier": "C", "provider": "veo", "media_type": "video"}
+            if role in {"hook", "evidence", "mechanism", "payoff"}
+            else {"tier": "B", "provider": "pexels_video", "media_type": "video"}
+        )
+        scenes.append(
+            {
+                "n": index,
+                "role": role,
+                "duration_sec": 18,
+                "assets": [asset],
+            }
+        )
     board = {
         "run_id": "longform-demo",
-        "scenes": [
-            {
-                "n": 1,
-                "role": "hook",
-                "duration_sec": 20,
-                "assets": [{"tier": "A", "provider": "wikimedia_image"}],
-            },
-            {
-                "n": 2,
-                "role": "evidence",
-                "duration_sec": 20,
-                "assets": [{"tier": "C", "provider": "veo"}],
-            },
-            {
-                "n": 3,
-                "role": "context",
-                "duration_sec": 10,
-                "assets": [{"tier": "B", "provider": "nasa_image"}],
-            },
-        ],
+        "scenes": scenes,
     }
 
     result = longform_media_gate(board)
 
     assert result["passed"] is True
     assert result["quality_runtime_ratio"] == 1.0
+    assert result["video_scene_count"] == 20
+
+
+def test_media_gate_rejects_longform_with_too_few_video_scenes():
+    scenes = []
+    roles = [
+        "hook", "context", "evidence", "mechanism", "evidence",
+        "counterpoint", "mechanism", "payoff", "evidence", "context",
+        "mechanism", "counterpoint", "evidence", "payoff", "mechanism",
+        "context", "evidence", "counterpoint", "payoff", "close",
+    ]
+    for index, role in enumerate(roles, start=1):
+        media_type = "video" if index <= 14 else "image"
+        provider = "pexels_video" if media_type == "video" else "wikimedia_image"
+        tier = "C" if role in {"hook", "evidence", "mechanism", "payoff"} else "B"
+        scenes.append(
+            {
+                "n": index,
+                "role": role,
+                "duration_sec": 18,
+                "assets": [{"tier": tier, "provider": provider, "media_type": media_type}],
+            }
+        )
+    board = {"run_id": "longform-demo", "scenes": scenes}
+
+    result = longform_media_gate(board)
+
+    assert result["passed"] is False
+    assert "video scenes below 15" in result["reasons"]
