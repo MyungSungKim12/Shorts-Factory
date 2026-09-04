@@ -7,8 +7,10 @@
 ## 입출력 계약
 
 - 입력: `data/longform/{run_id}/script.json`
-- 출력: `data/longform/{run_id}/output.mp4` + `produce_log.json`
+- 사전 검수 출력: `data/longform/{run_id}/media_board.json` + `media_contact_sheet.png`
+- 최종 출력: `data/longform/{run_id}/output.mp4` + `produce_log.json`
 - 실제 계약 구현: `app.models.validate_longform_script`
+- 미디어 사전 검수 구현: `app.services.longform_media_preflight.prepare_longform_media_board`
 - 실제 제작 구현: `app.agents.longform_producer.run_longform_producer`
 
 ## 제작 원칙
@@ -20,6 +22,14 @@
 5. 숫자·단위·연대는 출처가 있을 때만 쓰고, 불확실하면 “정확한 연대는 불확실하다”처럼 명확히 말한다.
 6. 기존 AI 자산은 같은 실제 대상이면 먼저 재사용한다. 새로 생성된 AI 자산도 영구 라이브러리에 남겨 쇼츠에서 재사용 가능하게 한다.
 7. 스타일은 제작 전에 PNG 미리보기로 확인하고 `documentary`, `cinematic`, `clean_news` 중 하나를 선택한다.
+8. 롱폼은 대본 중심이 아니라 **미디어 우선(asset-first)** 으로 제작한다. 핵심 장면에 실제 대상과 맞는 A등급/Wikimedia·NASA·공식 자료 또는 C등급/검증 기준 이미지 기반 AI 자산이 없으면, 소재 각도를 수정하거나 검수 실패로 남긴다.
+9. 정지 이미지를 4초 이상 보여줄 때는 반드시 줌·패닝·크롭 이동 중 하나 이상의 움직임을 적용해 영상처럼 보이게 한다.
+10. 무료 스톡은 분위기·전환용으로만 사용하고, 특정 실제 장소·구조·기록의 증거 화면처럼 제시하지 않는다.
+11. 권장 실행 순서:
+    - `python scripts/generate_longform.py --run-id {run_id} --prepare-media`
+    - `python scripts/generate_longform.py --run-id {run_id} --materialize-media`
+    - `python scripts/generate_longform.py --run-id {run_id} --preview-30s`
+    - 확인 후 `python scripts/generate_longform.py --run-id {run_id}`
 
 ## 스타일 기본값
 

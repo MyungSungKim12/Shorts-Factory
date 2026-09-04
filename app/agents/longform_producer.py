@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import tempfile
 from datetime import datetime
@@ -18,10 +19,9 @@ from app.agents.story_producer import (
     _duration,
     _prepare_narration,
     _run_ffmpeg,
-    _subtitle_style,
     _title_font,
+    _tts_ssml,
     _tts_text,
-    story_playback_tempo,
 )
 
 
@@ -265,24 +265,7 @@ def _encode_longform_card(
     *,
     motion_index: int,
 ) -> None:
-    frames = max(1, round(duration * 30))
-    direction = motion_index % 3
-    if direction == 1:
-        x_expr = "iw/2-(iw/zoom/2)"
-        y_expr = "(ih-ih/zoom)*(on/max(1,d-1))"
-    elif direction == 2:
-        x_expr = "(iw-iw/zoom)*(on/max(1,d-1))"
-        y_expr = "ih/2-(ih/zoom/2)"
-    else:
-        x_expr = "iw/2-(iw/zoom/2)"
-        y_expr = "ih/2-(ih/zoom/2)"
-    vf = (
-        "scale=2048:1152:force_original_aspect_ratio=increase,"
-        "crop=2048:1152,"
-        "zoompan=z='min(zoom+0.00025,1.04)':"
-        f"x='{x_expr}':y='{y_expr}':d={frames}:s=1920x1080:fps=30,"
-        "setsar=1,format=yuv420p"
-    )
+    vf = _longform_still_filter()
     _run_ffmpeg(
         [
             ffmpeg_path,
@@ -292,6 +275,100 @@ def _encode_longform_card(
             str(image),
             "-i",
             str(narration),
+            "-vf",
+            vf,
+            "-t",
+            f"{duration:.3f}",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "24",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "160k",
+            "-ar",
+            "44100",
+            "-movflags",
+            "+faststart",
+            "-y",
+            str(output),
+        ],
+        timeout=900,
+    )
+
+
+def _longform_still_filter() -> str:
+    """Build FFmpeg filter that keeps longform still images visually stable."""
+    return (
+        "scale=1920:1080:force_original_aspect_ratio=increase,"
+        "crop=1920:1080,"
+        "fps=30,setsar=1,format=yuv420p"
+    )
+
+
+def _longform_playback_tempo() -> float:
+    """Return the pitch-preserving longform narration tempo."""
+    try:
+        tempo = float(os.getenv("LONGFORM_TTS_SPEED", "1.0"))
+    except ValueError:
+        return 1.0
+    return tempo if 0.8 <= tempo <= 1.25 else 1.0
+
+
+def _media_asset_for_scene(media_board: dict, scene_number: int) -> dict | None:
+    """Return the first materialized asset for a scene from media_board.json."""
+    for board_scene in media_board.get("scenes") or []:
+        if int(board_scene.get("n") or 0) != int(scene_number):
+            continue
+        assets = board_scene.get("assets") or []
+        for asset in assets:
+            local_path = str(asset.get("local_path") or asset.get("path") or "").strip()
+            if local_path and Path(local_path).is_file():
+                return asset
+    return None
+
+
+def _encode_longform_media(
+    media: Path,
+    narration: Path,
+    output: Path,
+    duration: float,
+    ffmpeg_path: str,
+    *,
+    motion_index: int,
+) -> None:
+    """Encode a materialized longform media asset with narration audio."""
+    is_image = media.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
+    if is_image:
+        _encode_longform_card(
+            media,
+            narration,
+            output,
+            duration,
+            ffmpeg_path,
+            motion_index=motion_index,
+        )
+        return
+    vf = (
+        "scale=1920:1080:force_original_aspect_ratio=increase,"
+        "crop=1920:1080,setsar=1,format=yuv420p"
+    )
+    _run_ffmpeg(
+        [
+            ffmpeg_path,
+            "-stream_loop",
+            "-1",
+            "-i",
+            str(media),
+            "-i",
+            str(narration),
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0",
             "-vf",
             vf,
             "-t",
@@ -327,8 +404,7 @@ def _finish_longform(
     import os
 
     font = os.getenv("SUBTITLE_FONT", "Malgun Gothic")
-    style = _subtitle_style(font).replace("FontSize=16", "FontSize=24")
-    style = style.replace("MarginV=90", "MarginV=60")
+    style = _longform_subtitle_style(font, "clean_news")
     _run_ffmpeg(
         [
             ffmpeg_path,
@@ -353,6 +429,42 @@ def _finish_longform(
         ],
         cwd=tmp_path,
         timeout=1800,
+    )
+
+
+def _longform_subtitle_style(font: str, style_id: str = "clean_news") -> str:
+    """Return ASS style for readable longform subtitles, not Shorts captions."""
+    presets = {
+        "clean_news": {
+            "font_size": 16,
+            "outline": 1,
+            "shadow": 0,
+            "margin_v": 42,
+            "back": "&HCC000000",
+        },
+        "documentary": {
+            "font_size": 17,
+            "outline": 1,
+            "shadow": 0,
+            "margin_v": 82,
+            "back": "&HCC000000",
+        },
+        "cinematic": {
+            "font_size": 17,
+            "outline": 1,
+            "shadow": 1,
+            "margin_v": 78,
+            "back": "&HAA000000",
+        },
+    }
+    preset = presets.get(style_id, presets["clean_news"])
+    return (
+        f"FontName={font},FontSize={preset['font_size']},Bold=1,"
+        "PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,"
+        f"BackColour={preset['back']},BorderStyle=4,"
+        f"Outline={preset['outline']},Shadow={preset['shadow']},"
+        f"Alignment=2,MarginL=220,MarginR=220,MarginV={preset['margin_v']},"
+        "WrapStyle=2"
     )
 
 
@@ -428,8 +540,16 @@ def _reusable_ai_assets(script: dict, data_dir: Path, run_id: str) -> list[dict]
     ]
 
 
-def run_longform_producer(data_dir: Path, run_id: str, ffmpeg_path: str) -> dict:
-    """Render `data/longform/{run_id}/script.json` into a reviewable MP4."""
+def _render_longform(
+    data_dir: Path,
+    run_id: str,
+    ffmpeg_path: str,
+    *,
+    output_name: str,
+    log_name: str,
+    max_total_duration: float | None = None,
+) -> dict:
+    """Render a full longform video or a bounded preview."""
     data_dir = Path(data_dir)
     work_dir = data_dir / "longform" / run_id
     script_file = work_dir / "script.json"
@@ -438,21 +558,35 @@ def run_longform_producer(data_dir: Path, run_id: str, ffmpeg_path: str) -> dict
     script = validate_longform_script(
         json.loads(script_file.read_text(encoding="utf-8"))
     )
+    media_board_file = work_dir / "media_board.json"
+    media_board = (
+        json.loads(media_board_file.read_text(encoding="utf-8"))
+        if media_board_file.is_file()
+        else {}
+    )
 
     with tempfile.TemporaryDirectory(prefix="shorts-factory-longform-") as tmpdir:
         tmp_path = Path(tmpdir)
         mark_temp_owner(tmp_path)
         tts_results = []
         scene_videos = []
+        media_sources = []
+        rendered_scenes = []
         scene_starts = {}
         audio_durations = {}
         cursor = 0.0
-        tempo = story_playback_tempo()
+        tempo = _longform_playback_tempo()
         for index, scene in enumerate(script["scenes"], start=1):
+            if max_total_duration is not None and cursor >= max_total_duration:
+                break
             raw = tmp_path / f"narration-{index:02d}.mp3"
             wav = tmp_path / f"narration-{index:02d}.wav"
             result, duration = _prepare_narration(
-                _tts_text(scene["narration"]), raw, wav, ffmpeg_path
+                _tts_text(scene["narration"]),
+                raw,
+                wav,
+                ffmpeg_path,
+                ssml=_tts_ssml(scene["narration"]),
             )
             if tempo != 1.0:
                 from app.agents.story_producer import _retime_audio
@@ -461,36 +595,67 @@ def run_longform_producer(data_dir: Path, run_id: str, ffmpeg_path: str) -> dict
                 duration = _duration(wav, ffmpeg_path)
             tts_results.append(result)
             scene_duration = max(float(scene["duration_sec"]), duration + 0.2)
-            audio_durations[scene["n"]] = duration
+            if max_total_duration is not None:
+                remaining = max_total_duration - cursor
+                if remaining <= 0:
+                    break
+                scene_duration = min(scene_duration, remaining)
+            audio_durations[scene["n"]] = min(duration, scene_duration)
             scene_starts[scene["n"]] = cursor
             cursor += scene_duration
+            rendered_scene = dict(scene)
+            rendered_scene["duration_sec"] = scene_duration
+            rendered_scenes.append(rendered_scene)
 
-            card = tmp_path / f"card-{index:02d}.jpg"
-            _create_scene_card(
-                card,
-                title=script["title"],
-                chapter_title=scene["chapter_title"],
-                role=scene["role"],
-                index=index,
-                total=len(script["scenes"]),
-                style_id=str(script.get("style_id") or "clean_news"),
-            )
             scene_video = tmp_path / f"scene-{index:02d}.mp4"
-            _encode_longform_card(
-                card,
-                wav,
-                scene_video,
-                scene_duration,
-                ffmpeg_path,
-                motion_index=index,
-            )
+            asset = _media_asset_for_scene(media_board, scene["n"]) if media_board else None
+            if asset is not None:
+                media_path = Path(str(asset.get("local_path") or asset.get("path")))
+                _encode_longform_media(
+                    media_path,
+                    wav,
+                    scene_video,
+                    scene_duration,
+                    ffmpeg_path,
+                    motion_index=index,
+                )
+                media_sources.append(
+                    {
+                        "scene": scene["n"],
+                        "local_path": media_path.as_posix(),
+                        "tier": asset.get("tier"),
+                        "provider": asset.get("provider"),
+                        "source_url": asset.get("source_url"),
+                    }
+                )
+            else:
+                card = tmp_path / f"card-{index:02d}.jpg"
+                _create_scene_card(
+                    card,
+                    title=script["title"],
+                    chapter_title=scene["chapter_title"],
+                    role=scene["role"],
+                    index=index,
+                    total=len(script["scenes"]),
+                    style_id=str(script.get("style_id") or "clean_news"),
+                )
+                _encode_longform_card(
+                    card,
+                    wav,
+                    scene_video,
+                    scene_duration,
+                    ffmpeg_path,
+                    motion_index=index,
+                )
             scene_videos.append(scene_video)
 
         concat_video = tmp_path / "longform-concat.mp4"
         _concat_longform_files(scene_videos, concat_video, ffmpeg_path, tmp_path)
         srt_path = tmp_path / "longform.srt"
-        _write_longform_srt(script, scene_starts, audio_durations, srt_path)
-        output_mp4 = work_dir / LONGFORM_OUTPUT
+        render_script = dict(script)
+        render_script["scenes"] = rendered_scenes
+        _write_longform_srt(render_script, scene_starts, audio_durations, srt_path)
+        output_mp4 = work_dir / output_name
         _finish_longform(concat_video, output_mp4, srt_path, ffmpeg_path, tmp_path)
         actual_duration = _duration(output_mp4, ffmpeg_path)
 
@@ -500,12 +665,13 @@ def run_longform_producer(data_dir: Path, run_id: str, ffmpeg_path: str) -> dict
         "timestamp": datetime.now().isoformat(),
         "format": "longform",
         "output_file": str(output_mp4.resolve()),
+        "preview": max_total_duration is not None,
         "planned_duration": script["total_duration_sec"],
         "actual_duration": round(actual_duration, 1),
         "script_sha256": hashlib.sha256(script_file.read_bytes()).hexdigest(),
         "click_package": _longform_click_package(script),
         "chapter_titles": [
-            scene["chapter_title"] for scene in script.get("scenes", [])
+            scene["chapter_title"] for scene in rendered_scenes
         ],
         "tts": {
             "provider": tts_results[0].provider if tts_results else "",
@@ -516,8 +682,34 @@ def run_longform_producer(data_dir: Path, run_id: str, ffmpeg_path: str) -> dict
         "audio_durations": audio_durations,
         "ai_assets": ai_assets,
         "ai_reuse_policy": "ready exact-subject AI assets are reusable for later Shorts",
+        "media_board_used": bool(media_board),
+        "media_quality_gate": media_board.get("gate", {}) if media_board else {},
+        "media_sources": media_sources,
     }
-    (work_dir / "produce_log.json").write_text(
+    (work_dir / log_name).write_text(
         json.dumps(produce_log, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     return produce_log
+
+
+def run_longform_producer(data_dir: Path, run_id: str, ffmpeg_path: str) -> dict:
+    """Render `data/longform/{run_id}/script.json` into a reviewable MP4."""
+    return _render_longform(
+        data_dir,
+        run_id,
+        ffmpeg_path,
+        output_name=LONGFORM_OUTPUT,
+        log_name="produce_log.json",
+    )
+
+
+def run_longform_preview(data_dir: Path, run_id: str, ffmpeg_path: str) -> dict:
+    """Render the opening 30 seconds into `preview_30s.mp4` for review."""
+    return _render_longform(
+        data_dir,
+        run_id,
+        ffmpeg_path,
+        output_name="preview_30s.mp4",
+        log_name="preview_log.json",
+        max_total_duration=30.0,
+    )

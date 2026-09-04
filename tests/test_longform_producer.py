@@ -170,6 +170,117 @@ def test_longform_producer_reuses_permanent_ai_asset(tmp_path, monkeypatch):
     ][0]["reused"] is True
 
 
+def test_longform_producer_records_media_board_usage(tmp_path, monkeypatch):
+    from app.agents import longform_producer
+
+    run_id = "longform-media-board"
+    work_dir = tmp_path / "longform" / run_id
+    work_dir.mkdir(parents=True)
+    (work_dir / "script.json").write_text(
+        json.dumps(_script(), ensure_ascii=False), encoding="utf-8"
+    )
+    (work_dir / "media_board.json").write_text(
+        json.dumps(
+            {
+                "run_id": run_id,
+                "gate": {
+                    "passed": True,
+                    "quality_runtime_ratio": 0.84,
+                    "reasons": [],
+                },
+                "scenes": [
+                    {
+                        "n": 1,
+                        "role": "hook",
+                        "assets": [{"tier": "A", "provider": "wikimedia_image"}],
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_prepare(text, raw, wav, ffmpeg_path, ssml=None):
+        raw.write_bytes(b"mp3")
+        wav.write_bytes(b"wav")
+        return type("R", (), {"provider": "google", "voice": "Kore", "speaking_rate": 1.0})(), 9.0
+
+    monkeypatch.setenv("TTS_SPEED", "1.0")
+    monkeypatch.setattr(longform_producer, "_prepare_narration", fake_prepare)
+    monkeypatch.setattr(longform_producer, "_duration", lambda path, ffmpeg: 9.0)
+    monkeypatch.setattr(
+        longform_producer,
+        "_run_ffmpeg",
+        lambda command, cwd=None, timeout=None: Path(command[-1]).write_bytes(b"media"),
+    )
+
+    result = longform_producer.run_longform_producer(tmp_path, run_id, "ffmpeg")
+
+    assert result["media_board_used"] is True
+    assert result["media_quality_gate"]["passed"] is True
+    assert result["media_quality_gate"]["quality_runtime_ratio"] == 0.84
+
+
+def test_longform_producer_uses_materialized_media_from_board(tmp_path, monkeypatch):
+    from app.agents import longform_producer
+
+    run_id = "longform-materialized"
+    work_dir = tmp_path / "longform" / run_id
+    work_dir.mkdir(parents=True)
+    script = _script()
+    (work_dir / "script.json").write_text(
+        json.dumps(script, ensure_ascii=False), encoding="utf-8"
+    )
+    media = work_dir / "media" / "scene-01-01.jpg"
+    media.parent.mkdir()
+    media.write_bytes(b"\xff\xd8" + b"x" * 2048)
+    (work_dir / "media_board.json").write_text(
+        json.dumps(
+            {
+                "run_id": run_id,
+                "gate": {"passed": True, "quality_runtime_ratio": 1.0, "reasons": []},
+                "scenes": [
+                    {
+                        "n": 1,
+                        "role": "hook",
+                        "assets": [
+                            {
+                                "tier": "A",
+                                "provider": "wikimedia_image",
+                                "local_path": media.as_posix(),
+                                "source_url": "https://commons.wikimedia.org/wiki/File:Richat.jpg",
+                            }
+                        ],
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    commands = []
+
+    def fake_prepare(text, raw, wav, ffmpeg_path, ssml=None):
+        raw.write_bytes(b"mp3")
+        wav.write_bytes(b"wav")
+        return type("R", (), {"provider": "google", "voice": "Kore", "speaking_rate": 1.0})(), 9.0
+
+    def fake_run(command, cwd=None, timeout=None):
+        commands.append(command)
+        Path(command[-1]).write_bytes(b"media")
+
+    monkeypatch.setenv("TTS_SPEED", "1.0")
+    monkeypatch.setattr(longform_producer, "_prepare_narration", fake_prepare)
+    monkeypatch.setattr(longform_producer, "_duration", lambda path, ffmpeg: 9.0)
+    monkeypatch.setattr(longform_producer, "_run_ffmpeg", fake_run)
+
+    result = longform_producer.run_longform_producer(tmp_path, run_id, "ffmpeg")
+
+    assert result["media_sources"][0]["local_path"] == media.as_posix()
+    assert any(str(media) in command for command in commands for command in command)
+
+
 def test_longform_style_previews_create_selectable_pngs(tmp_path):
     from app.agents.longform_producer import generate_longform_style_previews
 
@@ -188,3 +299,46 @@ def test_longform_style_previews_create_selectable_pngs(tmp_path):
     for item in result["styles"]:
         assert Path(item["preview_file"]).is_file()
         assert item["subtitle_font_size"] >= 24
+
+
+def test_clean_news_subtitle_style_is_not_shorts_caption_style():
+    from app.agents.longform_producer import _longform_subtitle_style
+
+    style = _longform_subtitle_style("Malgun Gothic", "clean_news")
+
+    assert "FontSize=16" in style
+    assert "Outline=1" in style
+    assert "Outline=3" not in style
+    assert "Shadow=0" in style
+    assert "BorderStyle=4" in style
+    assert "BackColour=&HCC000000" in style
+    assert "MarginV=42" in style
+
+
+def test_longform_playback_tempo_defaults_to_clear_documentary_speed(monkeypatch):
+    from app.agents.longform_producer import _longform_playback_tempo
+
+    monkeypatch.setenv("TTS_SPEED", "1.2")
+    monkeypatch.delenv("LONGFORM_TTS_SPEED", raising=False)
+
+    assert _longform_playback_tempo() == 1.0
+
+
+def test_longform_playback_tempo_uses_dedicated_setting(monkeypatch):
+    from app.agents.longform_producer import _longform_playback_tempo
+
+    monkeypatch.setenv("TTS_SPEED", "1.2")
+    monkeypatch.setenv("LONGFORM_TTS_SPEED", "1.1")
+
+    assert _longform_playback_tempo() == 1.1
+
+
+def test_longform_still_filter_keeps_images_static():
+    from app.agents.longform_producer import _longform_still_filter
+
+    result = _longform_still_filter()
+
+    assert "zoompan" not in result
+    assert "scale=1920:1080" in result
+    assert "crop=1920:1080" in result
+    assert "fps=30" in result

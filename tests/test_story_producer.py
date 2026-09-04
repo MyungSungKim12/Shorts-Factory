@@ -238,6 +238,22 @@ def test_tts_text_removes_thousands_separators_before_reading_metric_units():
     ) == "깊이는 12262미터이고, 목표는 12000미터였습니다."
 
 
+def test_tts_text_turns_hard_separators_into_natural_reading_commas():
+    assert story_producer._tts_text(
+        "1위: 블러드 폴스 - 붉은 빙하의 기록"
+    ) == "1위, 블러드 폴스, 붉은 빙하의 기록"
+
+
+def test_tts_ssml_adds_short_breaths_without_inserting_spoken_words():
+    ssml = story_producer._tts_ssml("사하라의 눈, 리차트 구조의 비밀입니다.")
+
+    assert ssml == (
+        '<speak>사하라의 눈,<break time="120ms"/> '
+        '리차트 구조의 비밀입니다.<break time="220ms"/></speak>'
+    )
+    assert "잠깐" not in ssml
+
+
 def test_story_cta_keeps_topic_aware_copy_with_both_actions():
     value, fallback = story_producer.normalize_story_cta(
         "이런 자연의 비밀이 더 궁금하다면 구독과 좋아요 부탁드립니다."

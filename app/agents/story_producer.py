@@ -651,7 +651,18 @@ def _tts_text(text: str) -> str:
     text = _GROUPED_NUMBER.sub(lambda match: match.group(0).replace(",", ""), text)
     for pattern, replacement in _UNIT_RULES:
         text = pattern.sub(replacement, text)
+    text = re.sub(r"\s*[:：]\s*", ", ", text)
+    text = re.sub(r"\s+[—–-]\s+", ", ", text)
+    text = re.sub(r",\s*,+", ",", text)
     return text
+
+
+def _tts_ssml(text: str) -> str:
+    """읽기용 텍스트에 짧은 숨표를 넣되 실제 발화 단어는 추가하지 않는다."""
+    escaped = html.escape(_tts_text(text))
+    escaped = re.sub(r"([,，;；])\s*", r'\1<break time="120ms"/> ', escaped)
+    escaped = re.sub(r"([.?!。])\s*", r'\1<break time="220ms"/> ', escaped)
+    return f"<speak>{escaped.strip()}</speak>"
 
 
 def _create_fallback_image(path: Path, scene_n: int) -> None:
@@ -1207,6 +1218,7 @@ async def run_story_producer(
                 narration_raw,
                 narration,
                 ffmpeg_path,
+                ssml=_tts_ssml(narration_text),
             )
             tts_results.append(result)
             scene_tts_results[scene["n"]] = result
@@ -1229,6 +1241,7 @@ async def run_story_producer(
                 cta_raw,
                 cta_narration,
                 ffmpeg_path,
+                ssml=_tts_ssml(cta_text),
             )
             tts_results.append(cta_result)
 

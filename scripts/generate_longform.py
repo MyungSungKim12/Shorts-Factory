@@ -14,7 +14,12 @@ from dotenv import load_dotenv
 
 from app.agents.longform_producer import (
     generate_longform_style_previews,
+    run_longform_preview,
     run_longform_producer,
+)
+from app.services.longform_media_preflight import (
+    materialize_longform_media_board,
+    prepare_longform_media_board,
 )
 
 
@@ -26,6 +31,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--ffmpeg-path", default=None)
     parser.add_argument("--preview-styles", action="store_true")
+    parser.add_argument("--preview-30s", action="store_true")
+    parser.add_argument("--prepare-media", action="store_true")
+    parser.add_argument("--materialize-media", action="store_true")
     parser.add_argument("--title", default="사막 아래 사라진 도시의 흔적")
     parser.add_argument("--chapter-title", default="첫 번째 단서")
     parser.add_argument(
@@ -50,8 +58,24 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(manifest["styles"][0]["preview_file"])
         return 0
+    if args.prepare_media:
+        board = prepare_longform_media_board(data_dir, args.run_id)
+        print(data_dir / "longform" / args.run_id / "media_board.json")
+        print(data_dir / "longform" / args.run_id / "media_contact_sheet.png")
+        print("PASS" if board.get("gate", {}).get("passed") else "REVIEW")
+        return 0
+    if args.materialize_media:
+        board = materialize_longform_media_board(data_dir, args.run_id)
+        print(data_dir / "longform" / args.run_id / "media_board.json")
+        print("PASS" if board.get("gate", {}).get("passed") else "REVIEW")
+        return 0
 
     ffmpeg_path = args.ffmpeg_path or os.getenv("FFMPEG_PATH", "ffmpeg")
+    if args.preview_30s:
+        result = run_longform_preview(data_dir, args.run_id, ffmpeg_path)
+        print(result["output_file"])
+        return 0
+
     result = run_longform_producer(data_dir, args.run_id, ffmpeg_path)
     print(result["output_file"])
     return 0
@@ -59,4 +83,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

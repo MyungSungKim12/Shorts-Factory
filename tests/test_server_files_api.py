@@ -61,8 +61,13 @@ def test_server_files_can_filter_longform_outputs(configured_api):
     longform = configured_api / "longform" / "longform-demo"
     longform.mkdir(parents=True)
     (longform / "output.mp4").write_bytes(b"longform-video")
+    (longform / "preview_30s.mp4").write_bytes(b"longform-preview")
+    (longform / "media_contact_sheet.png").write_bytes(b"png")
     (longform / "script.json").write_text(
         json.dumps({"format": "longform"}), encoding="utf-8"
+    )
+    (longform / "media_board.json").write_text(
+        json.dumps({"workflow": "asset_first_longform"}), encoding="utf-8"
     )
 
     response = client.get("/api/server-files?category=longform", headers=TOKEN)
@@ -71,8 +76,11 @@ def test_server_files_can_filter_longform_outputs(configured_api):
     payload = response.json()
     paths = [item["relative_path"] for item in payload["files"]]
     assert "longform/longform-demo/output.mp4" in paths
+    assert "longform/longform-demo/preview_30s.mp4" in paths
+    assert "longform/longform-demo/media_contact_sheet.png" in paths
     assert "longform/longform-demo/script.json" in paths
-    assert payload["summary"]["categories"]["longform"]["files"] == 2
+    assert "longform/longform-demo/media_board.json" in paths
+    assert payload["summary"]["categories"]["longform"]["files"] == 5
 
 
 def test_server_file_download_requires_token_and_rejects_forged_paths(configured_api):

@@ -183,7 +183,13 @@ python scripts\generate_longform.py --run-id longform-demo --preview-styles
 python scripts\generate_longform.py --run-id longform-demo
 ```
 
-결과는 `data/longform/{run_id}/output.mp4`와 `produce_log.json`에 저장된다. 롱폼은 자동 업로드하지 않으며, 사람이 확인한 뒤 별도 업로드한다.
+결과는 `data/longform/{run_id}/output.mp4`와 `produce_log.json`에 저장된다. 롱폼은 쇼츠 자동 공장과 분리되어 있으며, 사람이 확인한 뒤 아래 명령으로 별도 업로드한다.
+
+```powershell
+python scripts\upload_longform.py --run-id longform-demo
+```
+
+업로드 결과는 `data/longform/{run_id}/upload_log.json`에 저장되며, 같은 `run_id`는 중복 업로드하지 않는다.
 
 롱폼에서 사용한 AI 자산은 `data/media/ai_openings/` 영구 라이브러리에 남아 같은 실제 대상의 쇼츠 제작 시 재사용할 수 있다.
 
