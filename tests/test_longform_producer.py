@@ -392,3 +392,33 @@ def test_longform_card_pads_audio_to_scene_duration(tmp_path, monkeypatch):
     command = commands[0]
     assert "-af" in command
     assert "apad" in command
+
+
+def test_finish_longform_caps_output_to_planned_duration(tmp_path, monkeypatch):
+    from app.agents import longform_producer
+
+    commands = []
+    concat_video = tmp_path / "concat.mp4"
+    subtitles = tmp_path / "longform.srt"
+    output = tmp_path / "output.mp4"
+    concat_video.write_bytes(b"mp4")
+    subtitles.write_text("", encoding="utf-8")
+
+    def fake_run(command, cwd=None, timeout=None):
+        commands.append(command)
+        output.write_bytes(b"mp4")
+
+    monkeypatch.setattr(longform_producer, "_run_ffmpeg", fake_run)
+
+    longform_producer._finish_longform(
+        concat_video,
+        output,
+        subtitles,
+        "ffmpeg",
+        tmp_path,
+        planned_duration=360.0,
+    )
+
+    command = commands[0]
+    assert "-t" in command
+    assert command[command.index("-t") + 1] == "360.000"

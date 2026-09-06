@@ -404,6 +404,8 @@ def _finish_longform(
     srt_path: Path,
     ffmpeg_path: str,
     tmp_path: Path,
+    *,
+    planned_duration: float,
 ) -> None:
     import os
 
@@ -414,6 +416,8 @@ def _finish_longform(
             ffmpeg_path,
             "-i",
             str(concat_video),
+            "-t",
+            f"{planned_duration:.3f}",
             "-vf",
             f"subtitles=longform.srt:force_style='{style}'",
             "-c:v",
@@ -660,7 +664,14 @@ def _render_longform(
         render_script["scenes"] = rendered_scenes
         _write_longform_srt(render_script, scene_starts, audio_durations, srt_path)
         output_mp4 = work_dir / output_name
-        _finish_longform(concat_video, output_mp4, srt_path, ffmpeg_path, tmp_path)
+        _finish_longform(
+            concat_video,
+            output_mp4,
+            srt_path,
+            ffmpeg_path,
+            tmp_path,
+            planned_duration=cursor,
+        )
         actual_duration = _duration(output_mp4, ffmpeg_path)
 
     ai_assets = _reusable_ai_assets(script, data_dir, run_id)
