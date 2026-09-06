@@ -217,3 +217,46 @@ def test_validate_longform_upload_package_rejects_less_than_six_minutes(
         assert "duration" in str(exc)
     else:
         raise AssertionError("six-minute minimum should be enforced")
+
+
+def test_probe_longform_video_allows_longform_scaled_audio_probe_timeout(monkeypatch):
+    from app.agents import longform_uploader
+
+    calls = []
+
+    class Result:
+        def __init__(self, stdout="", stderr=""):
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def fake_run_checked(command, *, timeout, text=False):
+        calls.append({"command": command, "timeout": timeout, "text": text})
+        if "ffprobe" in command[0]:
+            return Result(
+                stdout=json.dumps(
+                    {
+                        "format": {"duration": "360.0"},
+                        "streams": [
+                            {
+                                "codec_type": "video",
+                                "codec_name": "h264",
+                                "width": 1920,
+                                "height": 1080,
+                            },
+                            {
+                                "codec_type": "audio",
+                                "codec_name": "aac",
+                                "duration": "360.0",
+                            },
+                        ],
+                    }
+                )
+            )
+        return Result(stderr="")
+
+    monkeypatch.setattr(longform_uploader, "run_checked", fake_run_checked)
+
+    longform_uploader._probe_longform_video(Path("output.mp4"), "ffprobe")
+
+    assert calls[0]["timeout"] == 180
+    assert calls[1]["timeout"] >= 1080

@@ -28,6 +28,17 @@ def _atomic_json(path: Path, value: dict) -> None:
     temporary.replace(path)
 
 
+def _audio_probe_timeout(duration: float) -> int:
+    """Return a silence-probe timeout scaled for 6~10 minute longform videos."""
+    configured = os.getenv("LONGFORM_AUDIO_PROBE_TIMEOUT_SEC")
+    if configured:
+        try:
+            return max(180, int(configured))
+        except ValueError:
+            pass
+    return max(300, min(2400, int(max(duration, 1.0) * 3)))
+
+
 def _probe_longform_video(path: Path, ffprobe_path: str) -> dict:
     ffprobe = run_checked(
         [
@@ -68,7 +79,7 @@ def _probe_longform_video(path: Path, ffprobe_path: str) -> dict:
             "null",
             os.devnull,
         ],
-        timeout=180,
+        timeout=_audio_probe_timeout(duration),
         text=True,
     )
     silence_starts = [
