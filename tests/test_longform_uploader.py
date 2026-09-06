@@ -259,4 +259,5 @@ def test_probe_longform_video_allows_longform_scaled_audio_probe_timeout(monkeyp
     longform_uploader._probe_longform_video(Path("output.mp4"), "ffprobe")
 
     assert calls[0]["timeout"] == 180
+    assert "-vn" in calls[1]["command"]
     assert calls[1]["timeout"] >= 1080

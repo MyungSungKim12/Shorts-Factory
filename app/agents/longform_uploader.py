@@ -73,6 +73,7 @@ def _probe_longform_video(path: Path, ffprobe_path: str) -> dict:
             "-hide_banner",
             "-i",
             str(path),
+            "-vn",
             "-af",
             "silencedetect=noise=-45dB:d=1.5",
             "-f",
