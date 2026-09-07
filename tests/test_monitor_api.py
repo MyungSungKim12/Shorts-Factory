@@ -225,6 +225,16 @@ def test_performance_summary_returns_dashboard_ready_snapshot(tmp_path, monkeypa
                 "source_status": "public_only",
             },
         ],
+        "longform_candidates": [
+            {
+                "source_video_id": "top-video",
+                "run_id": "20260805-2",
+                "title": "유럽 지하, 2만 명 살던 도시",
+                "topic": "유럽 지하 도시",
+                "views": 3365,
+                "expansion_brief": "롱폼에서는 발견 기록과 내부 구조를 확장",
+            }
+        ],
         "warnings": ["일부 영상은 공개 통계만 수집되어 시청 유지 지표가 비어 있습니다."],
         "collection": {"status": "success", "videos_seen": 12, "errors": []},
     }
@@ -244,6 +254,7 @@ def test_performance_summary_returns_dashboard_ready_snapshot(tmp_path, monkeypa
     assert payload["summary"]["median_views"] == 1063
     assert payload["top_categories"][0]["category"] == "hidden_world"
     assert payload["top_videos"][0]["url"] == "https://youtube.com/shorts/top-video"
+    assert payload["longform_candidates"][0]["source_video_id"] == "top-video"
     assert payload["watch_items"] == [
         {
             "run_id": "20260818-4",
@@ -266,6 +277,7 @@ def test_performance_summary_missing_report_is_empty(tmp_path, monkeypatch):
         "summary": {},
         "top_categories": [],
         "top_videos": [],
+        "longform_candidates": [],
         "watch_items": [],
         "warnings": [],
         "collection": {},

@@ -105,6 +105,7 @@ def build_research_feedback(
     """Return compact feedback that helps the researcher exploit winners and avoid repeats."""
     fallback = {
         "winning_patterns": [],
+        "longform_candidates": [],
         "avoid_subjects": [],
         "evergreen_buckets": EVERGREEN_BUCKETS,
     }
@@ -132,6 +133,7 @@ def build_research_feedback(
         if not _table_exists(db, "video_performance_snapshots"):
             return {
                 "winning_patterns": [],
+                "longform_candidates": [],
                 "avoid_subjects": avoid_subjects,
                 "evergreen_buckets": EVERGREEN_BUCKETS,
             }
@@ -154,6 +156,7 @@ def build_research_feedback(
               ) m ON m.video_id = s.video_id AND m.snapshot_at = s.snapshot_at
             )
             SELECT
+              v.video_id,
               v.title,
               {topic_column},
               {category_expr} AS category,
@@ -174,11 +177,12 @@ def build_research_feedback(
         db.close()
 
     winners = []
-    for title, topic, category, views, likes, shares, subs, avp in rows:
+    for video_id, title, topic, category, views, likes, shares, subs, avp in rows:
         score = int(views or 0) + int(likes or 0) * 20 + int(shares or 0) * 80 + int(subs or 0) * 150
         if float(avp or 0) >= 80:
             score += 300
         winners.append({
+            "video_id": str(video_id or ""),
             "title": str(title or ""),
             "topic": str(topic or ""),
             "category": str(category or ""),
@@ -194,8 +198,28 @@ def build_research_feedback(
     for item in winners:
         item.pop("_score", None)
 
+    longform_candidates = [
+        {
+            "source_video_id": item.get("video_id", ""),
+            "title": item.get("title", ""),
+            "topic": item.get("topic", ""),
+            "category": item.get("category", ""),
+            "views": item.get("views", 0),
+            "likes": item.get("likes", 0),
+            "avg_view_percentage": item.get("avg_view_percentage", 0),
+            "pattern_tags": item.get("pattern_tags", []),
+            "expansion_brief": (
+                "롱폼에서는 조회가 검증된 훅을 반복하지 말고, 발견 기록·장소 구조·"
+                "검증 출처·반론·남은 질문을 6~10분 챕터로 확장한다."
+            ),
+        }
+        for item in winners[:4]
+        if int(item.get("views") or 0) >= 1000
+    ]
+
     return {
         "winning_patterns": winners[:max_winners],
+        "longform_candidates": longform_candidates,
         "avoid_subjects": avoid_subjects,
         "evergreen_buckets": EVERGREEN_BUCKETS,
     }

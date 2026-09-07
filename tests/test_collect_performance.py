@@ -97,6 +97,8 @@ def test_collector_persists_features_metrics_retention_and_report(tmp_path):
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["collection"]["status"] == "success"
     assert report["summary"]["mature_videos"] == 1
+    assert report["longform_candidates"][0]["source_video_id"] == "v1"
+    assert "롱폼" in report["longform_candidates"][0]["expansion_brief"]
 
 
 def test_public_stats_are_saved_when_analytics_is_unavailable(tmp_path):

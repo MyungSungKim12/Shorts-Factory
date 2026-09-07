@@ -282,6 +282,7 @@ def performance_summary():
             "summary": {},
             "top_categories": [],
             "top_videos": [],
+            "longform_candidates": [],
             "watch_items": [],
             "warnings": [],
             "collection": {},
@@ -301,6 +302,11 @@ def performance_summary():
         "summary": report.get("summary") if isinstance(report.get("summary"), dict) else {},
         "top_categories": categories[:5],
         "top_videos": [_performance_video(row) for row in videos[:5]],
+        "longform_candidates": (
+            report.get("longform_candidates")
+            if isinstance(report.get("longform_candidates"), list)
+            else []
+        ),
         "watch_items": _performance_watch_items(videos),
         "warnings": report.get("warnings") if isinstance(report.get("warnings"), list) else [],
         "collection": report.get("collection") if isinstance(report.get("collection"), dict) else {},

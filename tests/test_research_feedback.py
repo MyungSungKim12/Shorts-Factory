@@ -61,6 +61,8 @@ def test_build_research_feedback_extracts_winning_patterns_and_avoid_subjects(tm
     assert feedback["winning_patterns"][0]["title"] == "유럽 지하, 2만 명 살던 도시가 버려진 미스터리"
     assert "지하" in feedback["winning_patterns"][0]["pattern_tags"]
     assert "숫자" in feedback["winning_patterns"][0]["pattern_tags"]
+    assert feedback["longform_candidates"][0]["source_video_id"] == "v1"
+    assert "롱폼" in feedback["longform_candidates"][0]["expansion_brief"]
     assert "유럽 지하에 숨겨진 고대 지하 도시의 비밀" in feedback["avoid_subjects"]
     assert any("지하" in bucket for bucket in feedback["evergreen_buckets"])
 

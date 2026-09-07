@@ -119,6 +119,12 @@ def test_research_prompt_requires_selected_domain_and_semantic_deduplication():
                 }],
                 "avoid_subjects": ["유럽 지하에 숨겨진 고대 지하 도시의 비밀"],
                 "evergreen_buckets": ["지하 도시·동굴·터널", "폐쇄·금지 시설"],
+                "longform_candidates": [{
+                    "title": "유럽 지하, 2만 명 살던 도시가 버려진 미스터리",
+                    "topic": "유럽 지하 도시",
+                    "views": 3409,
+                    "expansion_brief": "롱폼에서는 발견 기록과 내부 구조를 챕터로 확장",
+                }],
             },
             "focus_domain": {
                 "name": "대기·기상",
@@ -136,6 +142,8 @@ def test_research_prompt_requires_selected_domain_and_semantic_deduplication():
     assert "유럽 지하, 2만 명 살던 도시가 버려진 미스터리" in prompt
     assert "같은 장소·대상·사건 재포장 금지" in prompt
     assert "소재가 부족하면" in prompt
+    assert "롱폼 후보" in prompt
+    assert "발견 기록과 내부 구조" in prompt
 
 
 def test_research_prompt_penalizes_recent_space_and_ocean_overuse():

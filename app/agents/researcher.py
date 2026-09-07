@@ -350,11 +350,24 @@ def _story_researcher_prompt(context: dict, grounded: bool = True) -> str:
     avoid_lines = [f"- {subject}" for subject in avoid_subjects[:40]]
     buckets = feedback.get("evergreen_buckets") or []
     bucket_lines = [f"- {bucket}" for bucket in buckets]
+    longform_candidates = feedback.get("longform_candidates") or []
+    longform_lines = []
+    for item in longform_candidates[:4]:
+        tags = ", ".join(item.get("pattern_tags") or [])
+        longform_lines.append(
+            f"- 조회 {item.get('views', 0)}회: {item.get('title')} "
+            f"→ {item.get('expansion_brief', '롱폼에서는 출처·구조·반론·남은 질문으로 확장')} "
+            f"(패턴: {tags or '검증된 훅'})"
+        )
     performance_block = (
         "[성과 기반 추천 방식]\n"
+        "- 하루 4개 쇼츠는 정답 영상이 아니라 소재 실험판이다. 회차별로 서로 다른 소재 축을 테스트하고, 성과가 확인된 축만 롱폼 후보로 승격한다.\n"
         "- 최근 성과가 좋았던 축은 '지하/숨겨진 장소/고대 공학/숫자/버려진 구조/빙하·화산·호수'처럼 눈에 보이는 실물 미스터리다.\n"
         "- 아래 상위 소재를 그대로 반복하지 말고, 왜 잘됐는지 패턴만 빌려 새 장소·새 사건·새 관측값으로 바꿔라.\n"
         + ("\n".join(winner_lines) if winner_lines else "- 성과 데이터가 부족하면 지하·고대 구조·폐쇄 시설·극한 지형을 우선한다.")
+        + "\n\n[롱폼 후보 승격]\n"
+        "- 조회수·시청 유지가 좋은 쇼츠는 롱폼 후보로만 기록한다. 자동 쇼츠에서는 같은 소재를 반복하지 말고, 비슷한 호기심 구조를 가진 다른 실제 대상을 찾는다.\n"
+        + ("\n".join(longform_lines) if longform_lines else "- 아직 롱폼 후보가 부족하면 쇼츠는 지하·구조물·실제 장소형 소재 실험에 집중한다.")
         + "\n\n[강한 중복 회피]\n"
         "- 같은 장소·대상·사건 재포장 금지. 제목만 바꾸거나 숫자만 바꾼 변주는 중복으로 탈락시킨다.\n"
         "- 아래 과거 소재와 핵심 명사 2개 이상이 겹치면 다른 국가·다른 시대·다른 구조·다른 관측값으로 이동한다.\n"

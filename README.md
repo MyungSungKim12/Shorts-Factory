@@ -167,7 +167,7 @@ python scripts\generate_sample.py --sample-id story-v1
 
 ## 롱폼 제작
 
-쇼츠 자동 공장은 그대로 유지하고, 롱폼은 별도 수동 검토 라인으로 만든다.
+쇼츠 자동 공장은 하루 4개 소재 실험판으로 유지하고, 롱폼은 별도 수동 검토 라인으로 만든다. 성과 수집 결과의 `longform_candidates`는 조회수·시청 유지가 좋았던 쇼츠를 롱폼 후보로 승격하기 위한 목록이다. 롱폼은 쇼츠 제목을 복제하지 않고 같은 소재의 발견 기록, 장소 구조, 출처, 반론, 남은 질문을 6~10분으로 확장한다.
 
 1. 먼저 스타일 미리보기를 만든다.
 
@@ -210,4 +210,4 @@ venv\Scripts\python.exe scripts\auth_youtube_analytics.py
 venv\Scripts\python.exe scripts\collect_performance.py
 ```
 
-분석 인증은 `credentials/analytics_token.json`을 사용하며 업로드 인증인 `credentials/token.json`을 변경하지 않는다. 수집 결과는 `data/reports/performance_latest.json`과 `data/videos.sqlite`의 영구 분석 테이블에 저장된다. 분석 API가 실패해도 자동 제작·업로드 프로세스에는 영향을 주지 않는다.
+분석 인증은 `credentials/analytics_token.json`을 사용하며 업로드 인증인 `credentials/token.json`을 변경하지 않는다. 수집 결과는 `data/reports/performance_latest.json`과 `data/videos.sqlite`의 영구 분석 테이블에 저장된다. 리포트에는 상위 쇼츠 기반 `longform_candidates`가 포함되며, 분석 API가 실패해도 자동 제작·업로드 프로세스에는 영향을 주지 않는다.

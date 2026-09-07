@@ -443,6 +443,38 @@ def _duration_bucket(value: Any) -> str:
     return "80s_plus"
 
 
+def _longform_expansion_brief(row: dict) -> str:
+    title = str(row.get("title") or row.get("topic") or "상위 쇼츠")
+    return (
+        f"롱폼에서는 '{title}'의 첫 훅을 반복하지 말고, 발견 기록·실제 장소 구조·"
+        "검증 출처·반론·남은 질문을 6~10분 챕터로 확장한다."
+    )
+
+
+def _longform_candidates(rows: list[dict], limit: int = 5) -> list[dict]:
+    candidates = []
+    for row in rows:
+        views = int(row.get("views") or 0)
+        if views < 1000:
+            continue
+        candidates.append(
+            {
+                "source_video_id": str(row.get("video_id") or ""),
+                "run_id": str(row.get("run_id") or ""),
+                "title": str(row.get("title") or ""),
+                "topic": str(row.get("topic") or ""),
+                "category": str(row.get("category") or ""),
+                "views": views,
+                "engaged_view_rate": row.get("engaged_view_rate"),
+                "average_view_percentage": row.get("average_view_percentage"),
+                "expansion_brief": _longform_expansion_brief(row),
+            }
+        )
+        if len(candidates) >= limit:
+            break
+    return candidates
+
+
 def _add_report_dimensions(rows: list[dict]) -> None:
     for row in rows:
         row["title_pattern"] = _title_pattern(row.get("title"))
@@ -487,5 +519,6 @@ def build_performance_report(data_dir: Path, generated_at: datetime) -> dict:
             "ai_opening": _group_summary(mature, "ai_opening"),
         },
         "videos": mature,
+        "longform_candidates": _longform_candidates(mature),
         "warnings": warnings,
     }
