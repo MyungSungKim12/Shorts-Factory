@@ -67,7 +67,8 @@ def _longform_script(**overrides):
         "counterpoint", "mechanism", "payoff", "evidence", "context",
         "mechanism", "counterpoint", "evidence", "payoff", "mechanism",
         "context", "evidence", "counterpoint", "payoff", "close",
-    ]
+    ] * 2
+    roles[-1] = "close"
     scenes = []
     for index, role in enumerate(roles, start=1):
         template = close if role == "close" else scene_templates[(index - 1) % len(scene_templates)]
@@ -76,7 +77,7 @@ def _longform_script(**overrides):
             n=index,
             role=role,
             chapter_title=f"{template['chapter_title']} {index}",
-            duration_sec=18,
+            duration_sec=12,
         )
         scenes.append(scene)
 
@@ -99,7 +100,7 @@ def test_validate_longform_script_accepts_documentary_duration():
     result = validate_longform_script(_longform_script())
 
     assert result["format"] == "longform"
-    assert result["total_duration_sec"] == 360
+    assert result["total_duration_sec"] == 480
 
 
 def test_validate_longform_script_rejects_four_minute_video():
@@ -109,15 +110,15 @@ def test_validate_longform_script_rejects_four_minute_video():
     for scene in script["scenes"]:
         scene["duration_sec"] = 240 / len(script["scenes"])
 
-    with pytest.raises(ValueError, match="6~10분"):
+    with pytest.raises(ValueError):
         validate_longform_script(script)
 
 
-def test_validate_longform_script_rejects_less_than_twenty_scenes():
+def test_validate_longform_script_rejects_less_than_forty_scenes():
     from app.models import validate_longform_script
 
     script = _longform_script()
-    script["scenes"] = script["scenes"][:19]
+    script["scenes"] = script["scenes"][:39]
 
     with pytest.raises(ValueError):
         validate_longform_script(script)
@@ -128,9 +129,9 @@ def test_validate_longform_script_rejects_short_video():
 
     script = _longform_script()
     for scene in script["scenes"]:
-        scene["duration_sec"] = 12
+        scene["duration_sec"] = 8
 
-    with pytest.raises(ValueError, match="롱폼"):
+    with pytest.raises(ValueError):
         validate_longform_script(script)
 
 

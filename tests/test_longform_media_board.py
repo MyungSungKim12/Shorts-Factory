@@ -70,7 +70,8 @@ def test_media_gate_passes_when_core_scenes_have_exact_or_ai_and_coverage_is_hig
         "counterpoint", "mechanism", "payoff", "evidence", "context",
         "mechanism", "counterpoint", "evidence", "payoff", "mechanism",
         "context", "evidence", "counterpoint", "payoff", "close",
-    ]
+    ] * 2
+    roles[-1] = "close"
     for index, role in enumerate(roles, start=1):
         asset = (
             {"tier": "C", "provider": "veo", "media_type": "video"}
@@ -94,7 +95,7 @@ def test_media_gate_passes_when_core_scenes_have_exact_or_ai_and_coverage_is_hig
 
     assert result["passed"] is True
     assert result["quality_runtime_ratio"] == 1.0
-    assert result["video_scene_count"] == 20
+    assert result["video_scene_count"] == 40
 
 
 def test_media_gate_rejects_longform_with_too_few_video_scenes():
@@ -104,9 +105,10 @@ def test_media_gate_rejects_longform_with_too_few_video_scenes():
         "counterpoint", "mechanism", "payoff", "evidence", "context",
         "mechanism", "counterpoint", "evidence", "payoff", "mechanism",
         "context", "evidence", "counterpoint", "payoff", "close",
-    ]
+    ] * 2
+    roles[-1] = "close"
     for index, role in enumerate(roles, start=1):
-        media_type = "video" if index <= 19 else "image"
+        media_type = "video" if index <= 29 else "image"
         provider = "pexels_video" if media_type == "video" else "wikimedia_image"
         tier = "C" if role in {"hook", "evidence", "mechanism", "payoff"} else "B"
         scenes.append(
@@ -122,5 +124,5 @@ def test_media_gate_rejects_longform_with_too_few_video_scenes():
     result = longform_media_gate(board)
 
     assert result["passed"] is False
-    assert "video scenes below 20" in result["reasons"]
-    assert result["min_video_scenes"] == 20
+    assert "video scenes below 30" in result["reasons"]
+    assert result["min_video_scenes"] == 30

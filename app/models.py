@@ -405,7 +405,7 @@ class LongformScriptContract(BaseModel):
     thumbnail_main: str = Field(default="", max_length=24)
     thumbnail_sub: str = Field(default="", max_length=24)
     style_id: Literal["documentary", "cinematic", "clean_news"] = "clean_news"
-    scenes: list[LongformScene] = Field(min_length=20, max_length=30)
+    scenes: list[LongformScene] = Field(min_length=40, max_length=50)
     visual_identity: VisualIdentity | None = None
     cta: str = ""
     total_duration_sec: float = Field(default=0, ge=360, le=600)

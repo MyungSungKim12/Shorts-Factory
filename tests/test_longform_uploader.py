@@ -69,7 +69,8 @@ def _script():
         "counterpoint", "mechanism", "payoff", "evidence", "context",
         "mechanism", "counterpoint", "evidence", "payoff", "mechanism",
         "context", "evidence", "counterpoint", "payoff", "close",
-    ]
+    ] * 2
+    roles[-1] = "close"
     value["scenes"] = []
     for index, role in enumerate(roles, start=1):
         template = close if role == "close" else templates[(index - 1) % len(templates)]
@@ -78,7 +79,7 @@ def _script():
             n=index,
             role=role,
             chapter_title=f"{template['chapter_title']} {index}",
-            duration_sec=18,
+            duration_sec=12,
         )
         value["scenes"].append(scene)
     return value

@@ -542,17 +542,32 @@ def _strict_video_sources_enabled() -> bool:
     }
 
 
-def _assert_all_scenes_have_video_sources(script: dict, media_board: dict) -> None:
-    """Prevent final longform renders from falling back to still images/cards."""
+def _required_longform_video_sources(script: dict) -> int:
+    scenes = script.get("scenes") or []
+    return 30 if len(scenes) >= 40 else min(30, len(scenes))
+
+
+def _assert_final_media_mix(script: dict, media_board: dict) -> None:
+    """Prevent final longform renders from falling back to cards or weak video counts."""
     if not media_board:
-        raise ValueError("롱폼 최종 렌더링에는 영상 소스가 포함된 media_board.json이 필요합니다.")
+        raise ValueError("롱폼 최종 렌더링에는 media_board.json이 필요합니다.")
+    video_count = 0
+    missing_scenes = []
     for scene in script.get("scenes") or []:
         asset = _media_asset_for_scene(media_board, int(scene["n"]))
-        if not _media_asset_is_video(asset):
-            raise ValueError(
-                f"롱폼 장면 {scene['n']}에 사용할 수 있는 영상 소스가 없습니다. "
-                "정지 이미지/카드 fallback으로 최종 롱폼을 만들지 않습니다."
-            )
+        if asset is None:
+            missing_scenes.append(str(scene["n"]))
+            continue
+        if _media_asset_is_video(asset):
+            video_count += 1
+    if missing_scenes:
+        raise ValueError(
+            "롱폼 최종 렌더링에 사용할 수 있는 미디어가 없는 장면: "
+            + ", ".join(missing_scenes[:10])
+        )
+    required = _required_longform_video_sources(script)
+    if video_count < required:
+        raise ValueError(f"롱폼 영상 소스 {video_count}개 — 최소 {required}개 필요")
 
 
 def _thumbnail_background_from_board(media_board: dict) -> Path | None:
@@ -870,7 +885,7 @@ def _render_longform(
     if max_total_duration is not None:
         _assert_preview_has_video_sources(script, media_board)
     elif _strict_video_sources_enabled():
-        _assert_all_scenes_have_video_sources(script, media_board)
+        _assert_final_media_mix(script, media_board)
 
     with tempfile.TemporaryDirectory(prefix="shorts-factory-longform-") as tmpdir:
         tmp_path = Path(tmpdir)

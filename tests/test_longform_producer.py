@@ -76,7 +76,8 @@ def _script():
         "counterpoint", "mechanism", "payoff", "evidence", "context",
         "mechanism", "counterpoint", "evidence", "payoff", "mechanism",
         "context", "evidence", "counterpoint", "payoff", "close",
-    ]
+    ] * 2
+    roles[-1] = "close"
     value["scenes"] = []
     for index, role in enumerate(roles, start=1):
         template = close if role == "close" else templates[(index - 1) % len(templates)]
@@ -85,7 +86,7 @@ def _script():
             n=index,
             role=role,
             chapter_title=f"{template['chapter_title']} {index}",
-            duration_sec=18,
+            duration_sec=12,
         )
         value["scenes"].append(scene)
     return value
@@ -389,7 +390,7 @@ def test_longform_final_render_rejects_missing_video_source(tmp_path):
     try:
         longform_producer.run_longform_producer(tmp_path, run_id, "ffmpeg")
     except ValueError as exc:
-        assert "정지 이미지/카드 fallback" in str(exc)
+        assert "미디어가 없는 장면" in str(exc)
     else:
         raise AssertionError("final longform render should require video sources")
 
