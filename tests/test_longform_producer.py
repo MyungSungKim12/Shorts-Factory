@@ -14,7 +14,7 @@ def _script():
                 "n": 1,
                 "role": "hook",
                 "chapter_title": "사라진 도시의 첫 단서",
-                "narration": "첫 기록은 위성사진의 이상한 직선에서 시작됩니다.",
+                "narration": "오늘의 주제는 사막 아래 사라진 도시의 흔적입니다. 첫 기록은 위성사진의 이상한 직선에서 시작됩니다.",
                 "visuals": ["ancient desert ruin satellite image"],
                 "duration_sec": 50,
             },

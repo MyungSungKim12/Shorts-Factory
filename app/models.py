@@ -73,6 +73,19 @@ _VAGUE_LONGFORM_UNITS = (
     "오랜 시간",
     "오래전",
 )
+_LONGFORM_INTRO_MARKERS = (
+    "오늘의 주제",
+    "이번 영상",
+    "이번 이야기",
+    "오늘은",
+)
+_KOREAN_TITLE_STOPWORDS = {
+    "아래",
+    "흔적",
+    "비밀",
+    "기록",
+    "이야기",
+}
 
 STORY_TITLE_TARGET_MIN = 22
 STORY_TITLE_TARGET_MAX = 34
@@ -104,6 +117,39 @@ def story_topic_rejection_reason(data: dict) -> str | None:
 def is_rejected_story_topic(data: dict) -> bool:
     """자동 제작에서 조회수 저하가 반복된 소재를 차단한다."""
     return story_topic_rejection_reason(data) is not None
+
+
+def _korean_topic_tokens(value: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[가-힣A-Za-z0-9]{2,}", value or "")
+        if token not in _KOREAN_TITLE_STOPWORDS
+    }
+
+
+def _has_clear_longform_intro(title: str, narration: str) -> bool:
+    if any(marker in narration for marker in _LONGFORM_INTRO_MARKERS):
+        return True
+    title_tokens = _korean_topic_tokens(title)
+    narration_tokens = _korean_topic_tokens(narration)
+    return len(title_tokens & narration_tokens) >= min(2, len(title_tokens))
+
+
+def _mentions_rank_transition(scene: "LongformScene") -> bool:
+    text = scene.narration
+    segment = (scene.segment_title or "").strip()
+    if not segment or segment not in text:
+        return False
+    rank = scene.rank
+    if rank is None:
+        return False
+    markers = (
+        f"{rank}위",
+        f"{rank}번째",
+        f"TOP {rank}",
+        f"톱 {rank}",
+    )
+    return any(marker in text for marker in markers)
 
 
 class RankItem(BaseModel):
@@ -423,6 +469,8 @@ class LongformScriptContract(BaseModel):
             raise ValueError(f"롱폼 씬 번호가 연속적이지 않음: {numbers}")
         if self.scenes[0].role != "hook":
             raise ValueError("롱폼 첫 씬 role은 hook이어야 함")
+        if not _has_clear_longform_intro(self.title, self.scenes[0].narration):
+            raise ValueError("롱폼 첫 장면은 영상의 전체 주제를 명확히 소개해야 함")
         if self.scenes[-1].role != "close":
             raise ValueError("롱폼 마지막 씬 role은 close여야 함")
         roles = {scene.role for scene in self.scenes}
@@ -430,6 +478,24 @@ class LongformScriptContract(BaseModel):
         if not required <= roles:
             missing = ", ".join(sorted(required - roles))
             raise ValueError(f"롱폼 필수 챕터 누락: {missing}")
+        ranked_scenes = [scene for scene in self.scenes if scene.rank is not None]
+        if ranked_scenes:
+            ranks = sorted({int(scene.rank or 0) for scene in ranked_scenes})
+            if len(ranks) < 3:
+                raise ValueError("롱폼 TOP 구성은 최소 3개 소재가 필요함")
+            previous_rank = None
+            for scene in self.scenes:
+                if scene.rank is None:
+                    continue
+                if not (scene.segment_title or "").strip():
+                    raise ValueError("롱폼 TOP 장면은 segment_title이 필요함")
+                current_rank = int(scene.rank)
+                if previous_rank is not None and current_rank != previous_rank:
+                    if not _mentions_rank_transition(scene):
+                        raise ValueError(
+                            f"롱폼 TOP 전환 설명 누락: scene {scene.n}"
+                        )
+                previous_rank = current_rank
         total = round(sum(scene.duration_sec for scene in self.scenes), 1)
         if not 360 <= total <= 600:
             raise ValueError(f"롱폼 duration 합계 {total:.1f}초 — 6~10분 범위 벗어남")

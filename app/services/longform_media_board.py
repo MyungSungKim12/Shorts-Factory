@@ -8,6 +8,8 @@ CORE_SCENE_ROLES = frozenset({"hook", "evidence", "mechanism", "payoff"})
 QUALITY_TIERS = frozenset({"A", "B", "C"})
 MIN_LONGFORM_SCENES = 40
 MIN_VIDEO_SCENES = 30
+MAX_PORTRAIT_VIDEO_SCENES = 12
+MAX_SOURCE_REUSE = 2
 
 
 def media_tier_for_source(source: dict) -> str:
@@ -84,7 +86,32 @@ def scene_media_quality(scene: dict, assets: list[dict]) -> dict:
         "core_scene": role in CORE_SCENE_ROLES,
         "core_has_exact_or_ai": any(tier in {"A", "C"} for tier in tiers),
         "quality_media": any(tier in QUALITY_TIERS for tier in tiers),
+        "selected_source_identity": _source_identity(selected),
+        "selected_portrait_video": selected_is_video and _is_portrait_source(selected),
     }
+
+
+def _source_identity(source: dict) -> str:
+    if not isinstance(source, dict):
+        return ""
+    return str(
+        source.get("source_url")
+        or source.get("download_url")
+        or source.get("local_path")
+        or source.get("path")
+        or source.get("media_id")
+        or source.get("asset_id")
+        or ""
+    ).strip()
+
+
+def _is_portrait_source(source: dict) -> bool:
+    try:
+        width = int(source.get("width") or 0)
+        height = int(source.get("height") or 0)
+    except (TypeError, ValueError):
+        return False
+    return width > 0 and height > 0 and height > width
 
 
 def longform_media_gate(media_board: dict) -> dict:
@@ -101,6 +128,10 @@ def longform_media_gate(media_board: dict) -> dict:
     total_runtime = 0.0
     quality_runtime = 0.0
     video_scene_count = 0
+    portrait_video_scene_count = 0
+    source_counts: dict[str, int] = {}
+    previous_identity = ""
+    previous_scene = 0
     scene_results = []
     for scene in scenes:
         assets = scene.get("assets") if isinstance(scene, dict) else []
@@ -111,6 +142,17 @@ def longform_media_gate(media_board: dict) -> dict:
         total_runtime += quality["runtime_sec"]
         if quality["selected_is_video"]:
             video_scene_count += 1
+        if quality["selected_portrait_video"]:
+            portrait_video_scene_count += 1
+        identity = str(quality.get("selected_source_identity") or "")
+        if identity:
+            source_counts[identity] = source_counts.get(identity, 0) + 1
+            if len(scenes) >= MIN_LONGFORM_SCENES and identity == previous_identity:
+                reasons.append(
+                    f"consecutive duplicate video source: scenes {previous_scene}-{quality['scene']}"
+                )
+            previous_identity = identity
+            previous_scene = quality["scene"]
         if quality["quality_media"]:
             quality_runtime += quality["runtime_sec"]
         if quality["core_scene"] and not quality["core_has_exact_or_ai"]:
@@ -128,12 +170,26 @@ def longform_media_gate(media_board: dict) -> dict:
     min_video_scenes = MIN_VIDEO_SCENES if len(scene_results) >= MIN_LONGFORM_SCENES else min(MIN_VIDEO_SCENES, len(scene_results))
     if len(scene_results) >= MIN_LONGFORM_SCENES and video_scene_count < min_video_scenes:
         reasons.append(f"video scenes below {min_video_scenes}")
+    if (
+        len(scene_results) >= MIN_LONGFORM_SCENES
+        and portrait_video_scene_count > MAX_PORTRAIT_VIDEO_SCENES
+    ):
+        reasons.append(f"portrait video scenes above {MAX_PORTRAIT_VIDEO_SCENES}")
+    if len(scene_results) >= MIN_LONGFORM_SCENES:
+        overused = [
+            identity
+            for identity, count in source_counts.items()
+            if count > MAX_SOURCE_REUSE
+        ]
+        if overused:
+            reasons.append(f"source reused more than {MAX_SOURCE_REUSE} times")
 
     return {
         "passed": not reasons,
         "reasons": reasons,
         "quality_runtime_ratio": ratio,
         "video_scene_count": video_scene_count,
+        "portrait_video_scene_count": portrait_video_scene_count,
         "min_video_scenes": min_video_scenes,
         "scenes": scene_results,
     }

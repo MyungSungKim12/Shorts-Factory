@@ -126,3 +126,59 @@ def test_media_gate_rejects_longform_with_too_few_video_scenes():
     assert result["passed"] is False
     assert "video scenes below 30" in result["reasons"]
     assert result["min_video_scenes"] == 30
+
+
+def test_media_gate_rejects_consecutive_duplicate_sources():
+    scenes = []
+    for index in range(1, 41):
+        source_url = "https://videos.example.com/repeated.mp4" if index in {5, 6} else f"https://videos.example.com/{index}.mp4"
+        scenes.append(
+            {
+                "n": index,
+                "role": "hook" if index == 1 else ("close" if index == 40 else "context"),
+                "duration_sec": 12,
+                "assets": [
+                    {
+                        "tier": "C" if index == 1 else "B",
+                        "provider": "pexels_video",
+                        "media_type": "video",
+                        "source_url": source_url,
+                        "width": 1920,
+                        "height": 1080,
+                    }
+                ],
+            }
+        )
+
+    result = longform_media_gate({"run_id": "longform-demo", "scenes": scenes})
+
+    assert result["passed"] is False
+    assert "consecutive duplicate video source: scenes 5-6" in result["reasons"]
+
+
+def test_media_gate_rejects_too_many_portrait_videos():
+    scenes = []
+    for index in range(1, 41):
+        portrait = index <= 18
+        scenes.append(
+            {
+                "n": index,
+                "role": "hook" if index == 1 else ("close" if index == 40 else "context"),
+                "duration_sec": 12,
+                "assets": [
+                    {
+                        "tier": "C" if index == 1 else "B",
+                        "provider": "pexels_video",
+                        "media_type": "video",
+                        "source_url": f"https://videos.example.com/{index}.mp4",
+                        "width": 1080 if portrait else 1920,
+                        "height": 1920 if portrait else 1080,
+                    }
+                ],
+            }
+        )
+
+    result = longform_media_gate({"run_id": "longform-demo", "scenes": scenes})
+
+    assert result["passed"] is False
+    assert "portrait video scenes above 12" in result["reasons"]

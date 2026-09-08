@@ -197,6 +197,7 @@ def test_validate_longform_upload_package_accepts_landscape_video_probe(
     )
     (work_dir / "produce_log.json").write_text("{}", encoding="utf-8")
     (work_dir / "output.mp4").write_bytes(b"mp4")
+    Image.new("RGB", (1, 1), (255, 0, 0)).save(work_dir / "thumbnail.png", format="PNG")
     monkeypatch.setattr(
         longform_uploader,
         "_probe_longform_video",
@@ -285,6 +286,41 @@ def test_validate_longform_upload_package_rejects_less_than_six_minutes(
         assert "duration" in str(exc)
     else:
         raise AssertionError("six-minute minimum should be enforced")
+
+
+def test_validate_longform_upload_package_rejects_missing_thumbnail(
+    tmp_path, monkeypatch
+):
+    from app.agents import longform_uploader
+
+    work_dir = tmp_path / "longform" / "longform-demo"
+    work_dir.mkdir(parents=True)
+    (work_dir / "script.json").write_text(
+        json.dumps(_script(), ensure_ascii=False), encoding="utf-8"
+    )
+    (work_dir / "produce_log.json").write_text("{}", encoding="utf-8")
+    (work_dir / "output.mp4").write_bytes(b"mp4")
+    monkeypatch.setattr(
+        longform_uploader,
+        "_probe_longform_video",
+        lambda path, ffprobe: {
+            "width": 1920,
+            "height": 1080,
+            "duration": 360.0,
+            "video_codec": "h264",
+            "audio_codec": "aac",
+            "has_audio": True,
+            "duration_delta": 0.1,
+            "internal_silence_max": 0.0,
+        },
+    )
+
+    try:
+        longform_uploader._validate_longform_upload_package(work_dir, "ffmpeg")
+    except ValueError as exc:
+        assert "thumbnail" in str(exc)
+    else:
+        raise AssertionError("missing thumbnail should block longform upload")
 
 
 def test_probe_longform_video_allows_longform_scaled_audio_probe_timeout(monkeypatch):

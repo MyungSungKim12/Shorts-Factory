@@ -141,6 +141,9 @@ def _validate_longform_upload_package(work_dir: Path, ffmpeg_path: str) -> dict:
         failures.append("audio_duration_delta")
     if float(report.get("internal_silence_max") or 0) > 1.5:
         failures.append("internal_silence")
+    thumbnail = _prepare_upload_thumbnail(work_dir / "thumbnail.png")
+    if thumbnail is None:
+        failures.append("thumbnail")
     result = {"passed": not failures, "failures": failures, "report": report}
     if failures:
         raise ValueError(f"롱폼 업로드 품질검사 실패: {', '.join(failures)}")

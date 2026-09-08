@@ -7,7 +7,7 @@ def _longform_script(**overrides):
             "n": 1,
             "role": "hook",
             "chapter_title": "사라진 도시의 첫 단서",
-            "narration": "첫 기록은 위성사진의 이상한 직선에서 시작됩니다.",
+            "narration": "오늘의 주제는 사막 아래 사라진 도시의 흔적입니다. 첫 기록은 위성사진의 이상한 직선에서 시작됩니다.",
             "visuals": ["ancient desert ruin satellite image", "stone wall aerial"],
             "duration_sec": 50,
         },
@@ -155,6 +155,39 @@ def test_validate_longform_script_rejects_vague_units():
         validate_longform_script(script)
 
 
+def test_validate_longform_script_requires_clear_opening_topic():
+    from app.models import validate_longform_script
+
+    script = _longform_script()
+    script["scenes"][0]["narration"] = "첫 기록은 위성사진의 이상한 직선에서 시작됩니다."
+
+    with pytest.raises(ValueError, match="첫 장면"):
+        validate_longform_script(script)
+
+
+def test_validate_longform_script_requires_rank_transition_explanation():
+    from app.models import validate_longform_script
+
+    script = _longform_script()
+    for index, scene in enumerate(script["scenes"], start=1):
+        if 2 <= index <= 10:
+            scene["rank"] = 1
+            scene["segment_title"] = "붉은 빙하"
+        elif 11 <= index <= 20:
+            scene["rank"] = 2
+            scene["segment_title"] = "사막의 고리"
+        elif 21 <= index <= 30:
+            scene["rank"] = 3
+            scene["segment_title"] = "검은 호수"
+        elif 31 <= index <= 39:
+            scene["rank"] = 4
+            scene["segment_title"] = "돌의 숲"
+    script["scenes"][10]["narration"] = "여기서부터 다른 사례로 넘어갑니다."
+
+    with pytest.raises(ValueError, match="TOP 전환"):
+        validate_longform_script(script)
+
+
 def test_validate_longform_script_preserves_selected_style():
     from app.models import validate_longform_script
 
@@ -181,6 +214,11 @@ def test_validate_longform_script_preserves_top_segment_metadata():
     for index, scene in enumerate(script["scenes"], start=1):
         scene["rank"] = max(1, 5 - ((index - 1) // 4))
         scene["segment_title"] = f"{scene['rank']}위 기록"
+        if index in {5, 9, 13, 17}:
+            scene["narration"] = (
+                f"다음은 {scene['rank']}위 기록입니다. "
+                f"{scene['segment_title']}은 다른 각도에서 봐야 합니다."
+            )
 
     result = validate_longform_script(script)
 
