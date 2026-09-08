@@ -211,7 +211,7 @@ def _board_asset_sort_key(asset: dict) -> tuple[int, int, int, int]:
     tier = str(asset.get("tier") or media_tier_for_source(asset)).upper()
     duplicate = 1 if asset.get("duplicate_source") else 0
     portrait = 0 if not is_video or _is_landscape_video(asset) else 1
-    return 0 if is_video else 1, duplicate, portrait, TIER_PRIORITY.get(tier, 9)
+    return 0 if is_video else 1, portrait, duplicate, TIER_PRIORITY.get(tier, 9)
 
 
 def _select_reusable_ai(data_dir: Path, query: str) -> list[dict]:
@@ -359,7 +359,7 @@ def _asset_sort_key(asset: dict) -> tuple[int, int, int, int]:
     video_priority = 0 if str(asset.get("media_type") or "").lower() == "video" else 1
     duplicate = 1 if asset.get("duplicate_source") else 0
     portrait = 1 if video_priority == 0 and not _is_landscape_video(asset) else 0
-    return video_priority, duplicate, portrait, TIER_PRIORITY.get(tier, 9)
+    return video_priority, portrait, duplicate, TIER_PRIORITY.get(tier, 9)
 
 
 def _local_suffix(asset: dict) -> str:

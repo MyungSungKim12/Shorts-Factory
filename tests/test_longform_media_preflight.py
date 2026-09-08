@@ -442,6 +442,31 @@ def test_preflight_orders_landscape_unused_video_before_portrait_duplicate():
     assert ordered[0] is landscape_unused
 
 
+def test_preflight_orders_landscape_duplicate_video_before_portrait_unused():
+    from app.services.longform_media_preflight import _asset_sort_key
+
+    portrait_unused = {
+        "provider": "pexels_video",
+        "media_type": "video",
+        "width": 1080,
+        "height": 1920,
+        "duplicate_source": False,
+        "tier": "B",
+    }
+    landscape_duplicate = {
+        "provider": "pexels_video",
+        "media_type": "video",
+        "width": 1920,
+        "height": 1080,
+        "duplicate_source": True,
+        "tier": "B",
+    }
+
+    ordered = sorted([portrait_unused, landscape_duplicate], key=_asset_sort_key)
+
+    assert ordered[0] is landscape_duplicate
+
+
 def test_preflight_uses_scene_visuals_before_chapter_title(tmp_path, monkeypatch):
     from app.services.longform_media_preflight import prepare_longform_media_board
 
