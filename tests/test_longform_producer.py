@@ -490,6 +490,16 @@ def test_longform_still_filter_keeps_images_static():
     assert "fps=30" in result
 
 
+def test_longform_video_filter_preserves_foreground_without_zoom_crop():
+    from app.agents.longform_producer import _longform_video_filter
+
+    result = _longform_video_filter()
+
+    assert "force_original_aspect_ratio=decrease" in result
+    assert "overlay=(W-w)/2:(H-h)/2" in result
+    assert "gblur" in result
+
+
 def test_longform_card_pads_audio_to_scene_duration(tmp_path, monkeypatch):
     from app.agents import longform_producer
 

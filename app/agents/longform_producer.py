@@ -462,6 +462,17 @@ def _longform_still_filter() -> str:
     )
 
 
+def _longform_video_filter() -> str:
+    """Build FFmpeg filter that avoids hard-cropping portrait or close-up video."""
+    return (
+        "split=2[bg][fg];"
+        "[bg]scale=1920:1080:force_original_aspect_ratio=increase,"
+        "crop=1920:1080,gblur=sigma=28,eq=brightness=-0.08:saturation=0.85[bg];"
+        "[fg]scale=1920:1080:force_original_aspect_ratio=decrease[fg];"
+        "[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,format=yuv420p"
+    )
+
+
 def _longform_playback_tempo() -> float:
     """Return the pitch-preserving longform narration tempo."""
     try:
@@ -664,10 +675,7 @@ def _encode_longform_media(
             motion_index=motion_index,
         )
         return
-    vf = (
-        "scale=1920:1080:force_original_aspect_ratio=increase,"
-        "crop=1920:1080,setsar=1,format=yuv420p"
-    )
+    vf = _longform_video_filter()
     _run_ffmpeg(
         [
             ffmpeg_path,

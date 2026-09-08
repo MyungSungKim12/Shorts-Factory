@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from googleapiclient.http import MediaFileUpload
+from PIL import Image
 
 from app.agents.uploader import (
     _description_with_hashtags,
@@ -156,17 +157,51 @@ def _uses_synthetic_longform_media(produce_log: dict) -> bool:
     return False
 
 
+YOUTUBE_THUMBNAIL_MAX_BYTES = 2_097_152
+
+
+def _prepare_upload_thumbnail(thumbnail_path: Path) -> Path | None:
+    """Return a YouTube-safe thumbnail file, compressing PNGs over 2MB to JPG."""
+    thumbnail_path = Path(thumbnail_path)
+    if not thumbnail_path.is_file():
+        return None
+    if (
+        thumbnail_path.suffix.lower() in {".jpg", ".jpeg"}
+        and thumbnail_path.stat().st_size <= YOUTUBE_THUMBNAIL_MAX_BYTES
+    ):
+        return thumbnail_path
+
+    prepared = thumbnail_path.with_suffix(".jpg")
+    with Image.open(thumbnail_path) as image:
+        image = image.convert("RGB")
+        for quality in (92, 86, 80, 74, 68, 62):
+            image.save(prepared, format="JPEG", quality=quality, optimize=True)
+            if prepared.stat().st_size <= YOUTUBE_THUMBNAIL_MAX_BYTES:
+                return prepared
+    return prepared if prepared.stat().st_size <= YOUTUBE_THUMBNAIL_MAX_BYTES else None
+
+
+def _thumbnail_mimetype(path: Path) -> str:
+    return "image/jpeg" if path.suffix.lower() in {".jpg", ".jpeg"} else "image/png"
+
+
 def _upload_longform_thumbnail(youtube, video_id: str, thumbnail_path: Path) -> dict:
     if not thumbnail_path.is_file():
         return {"status": "missing"}
+    upload_path = _prepare_upload_thumbnail(thumbnail_path)
+    if upload_path is None:
+        return {"status": "failed", "error": "thumbnail exceeds YouTube 2MB limit"}
     try:
         youtube.thumbnails().set(
             videoId=video_id,
-            media_body=MediaFileUpload(str(thumbnail_path), mimetype="image/png"),
+            media_body=MediaFileUpload(
+                str(upload_path),
+                mimetype=_thumbnail_mimetype(upload_path),
+            ),
         ).execute()
     except Exception as exc:
         return {"status": "failed", "error": str(exc)[:300]}
-    return {"status": "uploaded", "file": str(thumbnail_path)}
+    return {"status": "uploaded", "file": str(upload_path)}
 
 
 def run_longform_uploader(data_dir: Path, run_id: str) -> dict:

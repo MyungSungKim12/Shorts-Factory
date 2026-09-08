@@ -26,6 +26,7 @@ from app.services.media_library import (
 MEDIA_BOARD_FILE = "media_board.json"
 CONTACT_SHEET_FILE = "media_contact_sheet.png"
 TIER_PRIORITY = {"A": 0, "C": 1, "B": 2, "D": 3}
+LONGFORM_STOCK_CANDIDATES_PER_PROVIDER = 5
 
 
 def _scene_query(scene: dict, script: dict) -> str:
@@ -132,6 +133,7 @@ def _select_candidates(query: str, *, exact: bool) -> list[dict]:
         _pixabay_video_candidates,
         _pexels_photo_candidates,
     ):
+        added = 0
         for candidate in collector(provider_query):
             if stock_candidate_matches(provider_query, candidate):
                 selected.append(
@@ -139,8 +141,13 @@ def _select_candidates(query: str, *, exact: bool) -> list[dict]:
                         candidate, query=provider_query, exact=False, strong=True
                     )
                 )
-                break
-        if any(item["provider"] in {"pexels_video", "pixabay_video", "pexels_image"} for item in selected):
+                added += 1
+                if added >= LONGFORM_STOCK_CANDIDATES_PER_PROVIDER:
+                    break
+        if any(
+            item["provider"] in {"pexels_video", "pixabay_video"}
+            for item in selected
+        ):
             break
 
     return selected[:3]
@@ -174,7 +181,24 @@ def _prefer_unused_assets(assets: list[dict], used_assets: set[str]) -> list[dic
     return ordered
 
 
-def _board_asset_sort_key(asset: dict) -> tuple[int, int]:
+def _is_landscape_video(asset: dict) -> bool:
+    media_type = str(asset.get("media_type") or "").lower()
+    provider = str(asset.get("provider") or "").lower()
+    is_video = media_type == "video" or provider in {
+        "pexels_video",
+        "pixabay_video",
+        "veo",
+        "vertex_veo",
+        "veo-3.1-fast-generate-001",
+    }
+    if not is_video:
+        return False
+    width = int(asset.get("width") or 0)
+    height = int(asset.get("height") or 0)
+    return width <= 0 or height <= 0 or width >= height
+
+
+def _board_asset_sort_key(asset: dict) -> tuple[int, int, int, int]:
     media_type = str(asset.get("media_type") or "").lower()
     provider = str(asset.get("provider") or "").lower()
     is_video = media_type == "video" or provider in {
@@ -185,7 +209,9 @@ def _board_asset_sort_key(asset: dict) -> tuple[int, int]:
         "veo-3.1-fast-generate-001",
     }
     tier = str(asset.get("tier") or media_tier_for_source(asset)).upper()
-    return 0 if is_video else 1, TIER_PRIORITY.get(tier, 9)
+    duplicate = 1 if asset.get("duplicate_source") else 0
+    portrait = 0 if not is_video or _is_landscape_video(asset) else 1
+    return 0 if is_video else 1, duplicate, portrait, TIER_PRIORITY.get(tier, 9)
 
 
 def _select_reusable_ai(data_dir: Path, query: str) -> list[dict]:
@@ -328,10 +354,12 @@ def prepare_longform_media_board(data_dir: Path, run_id: str) -> dict:
     return board
 
 
-def _asset_sort_key(asset: dict) -> tuple[int, int]:
+def _asset_sort_key(asset: dict) -> tuple[int, int, int, int]:
     tier = str(asset.get("tier") or media_tier_for_source(asset)).upper()
-    is_video = 0 if str(asset.get("media_type") or "").lower() == "video" else 1
-    return is_video, TIER_PRIORITY.get(tier, 9)
+    video_priority = 0 if str(asset.get("media_type") or "").lower() == "video" else 1
+    duplicate = 1 if asset.get("duplicate_source") else 0
+    portrait = 1 if video_priority == 0 and not _is_landscape_video(asset) else 0
+    return video_priority, duplicate, portrait, TIER_PRIORITY.get(tier, 9)
 
 
 def _local_suffix(asset: dict) -> str:

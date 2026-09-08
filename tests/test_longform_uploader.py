@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+from PIL import Image
+
 
 def _script():
     value = {
@@ -98,7 +100,7 @@ def test_longform_uploader_uploads_output_and_writes_log(tmp_path, monkeypatch):
         json.dumps({"media_sources": []}, ensure_ascii=False), encoding="utf-8"
     )
     (work_dir / "output.mp4").write_bytes(b"mp4")
-    (work_dir / "thumbnail.png").write_bytes(b"png")
+    Image.new("RGB", (1, 1), (255, 0, 0)).save(work_dir / "thumbnail.png", format="PNG")
     seen = {}
     thumbnail_seen = {}
 
@@ -168,6 +170,19 @@ def test_longform_uploader_skips_existing_upload_log(tmp_path, monkeypatch):
 
     assert result["status"] == "skipped"
     assert result["video_id"] == "old"
+
+
+def test_prepare_upload_thumbnail_compresses_large_png_under_youtube_limit(tmp_path):
+    from app.agents.longform_uploader import _prepare_upload_thumbnail
+
+    source = tmp_path / "thumbnail.png"
+    Image.new("RGB", (1280, 720), (180, 20, 20)).save(source, format="PNG")
+
+    prepared = _prepare_upload_thumbnail(source)
+
+    assert prepared is not None
+    assert prepared.suffix == ".jpg"
+    assert prepared.stat().st_size <= 2_097_152
 
 
 def test_validate_longform_upload_package_accepts_landscape_video_probe(
