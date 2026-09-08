@@ -463,13 +463,10 @@ def _longform_still_filter() -> str:
 
 
 def _longform_video_filter() -> str:
-    """Build FFmpeg filter that avoids hard-cropping portrait or close-up video."""
+    """Build FFmpeg filter for true 16:9 longform sources without Shorts sidebars."""
     return (
-        "split=2[bg][fg];"
-        "[bg]scale=1920:1080:force_original_aspect_ratio=increase,"
-        "crop=1920:1080,gblur=sigma=28,eq=brightness=-0.08:saturation=0.85[bg];"
-        "[fg]scale=1920:1080:force_original_aspect_ratio=decrease[fg];"
-        "[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,format=yuv420p"
+        "scale=1920:1080:force_original_aspect_ratio=increase,"
+        "crop=1920:1080,setsar=1,format=yuv420p"
     )
 
 
@@ -523,6 +520,17 @@ def _media_asset_is_video(asset: dict | None) -> bool:
     )
 
 
+def _media_asset_is_portrait(asset: dict | None) -> bool:
+    if not isinstance(asset, dict):
+        return False
+    try:
+        width = int(asset.get("width") or 0)
+        height = int(asset.get("height") or 0)
+    except (TypeError, ValueError):
+        return False
+    return width > 0 and height > 0 and height > width
+
+
 def _assert_preview_has_video_sources(script: dict, media_board: dict) -> None:
     """Prevent review previews that are just still images with narration."""
     if not media_board:
@@ -539,6 +547,8 @@ def _assert_preview_has_video_sources(script: dict, media_board: dict) -> None:
                 f"롱폼 30초 미리보기 장면 {scene['n']}에 영상 소스가 없습니다. "
                 "정지 이미지/카드 fallback 미리보기는 생성하지 않습니다."
             )
+        if _media_asset_is_portrait(asset):
+            raise ValueError(f"롱폼 30초 미리보기 장면 {scene['n']}에 세로 영상 소스가 포함됨")
         cursor += float(scene.get("duration_sec") or 0)
     if checked == 0:
         raise ValueError("롱폼 30초 미리보기에 사용할 장면이 없습니다.")
@@ -564,6 +574,7 @@ def _assert_final_media_mix(script: dict, media_board: dict) -> None:
         raise ValueError("롱폼 최종 렌더링에는 media_board.json이 필요합니다.")
     video_count = 0
     missing_scenes = []
+    portrait_scenes = []
     for scene in script.get("scenes") or []:
         asset = _media_asset_for_scene(media_board, int(scene["n"]))
         if asset is None:
@@ -571,11 +582,15 @@ def _assert_final_media_mix(script: dict, media_board: dict) -> None:
             continue
         if _media_asset_is_video(asset):
             video_count += 1
+            if _media_asset_is_portrait(asset):
+                portrait_scenes.append(str(scene["n"]))
     if missing_scenes:
         raise ValueError(
             "롱폼 최종 렌더링에 사용할 수 있는 미디어가 없는 장면: "
             + ", ".join(missing_scenes[:10])
         )
+    if portrait_scenes:
+        raise ValueError("롱폼 최종 렌더링에 세로 영상 소스가 포함됨: " + ", ".join(portrait_scenes[:10]))
     required = _required_longform_video_sources(script)
     if video_count < required:
         raise ValueError(f"롱폼 영상 소스 {video_count}개 — 최소 {required}개 필요")

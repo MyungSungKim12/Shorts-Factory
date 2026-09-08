@@ -156,10 +156,10 @@ def test_media_gate_rejects_consecutive_duplicate_sources():
     assert "consecutive duplicate video source: scenes 5-6" in result["reasons"]
 
 
-def test_media_gate_rejects_too_many_portrait_videos():
+def test_media_gate_rejects_any_portrait_video():
     scenes = []
     for index in range(1, 41):
-        portrait = index <= 18
+        portrait = index == 18
         scenes.append(
             {
                 "n": index,
@@ -181,4 +181,4 @@ def test_media_gate_rejects_too_many_portrait_videos():
     result = longform_media_gate({"run_id": "longform-demo", "scenes": scenes})
 
     assert result["passed"] is False
-    assert "portrait video scenes above 12" in result["reasons"]
+    assert "portrait video scenes above 0" in result["reasons"]

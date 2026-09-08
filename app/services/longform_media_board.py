@@ -8,7 +8,7 @@ CORE_SCENE_ROLES = frozenset({"hook", "evidence", "mechanism", "payoff"})
 QUALITY_TIERS = frozenset({"A", "B", "C"})
 MIN_LONGFORM_SCENES = 40
 MIN_VIDEO_SCENES = 30
-MAX_PORTRAIT_VIDEO_SCENES = 12
+MAX_PORTRAIT_VIDEO_SCENES = 0
 MAX_SOURCE_REUSE = 2
 
 

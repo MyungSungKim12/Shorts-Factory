@@ -490,14 +490,52 @@ def test_longform_still_filter_keeps_images_static():
     assert "fps=30" in result
 
 
-def test_longform_video_filter_preserves_foreground_without_zoom_crop():
+def test_longform_video_filter_fills_landscape_frame_without_blurred_sidebars():
     from app.agents.longform_producer import _longform_video_filter
 
     result = _longform_video_filter()
 
-    assert "force_original_aspect_ratio=decrease" in result
-    assert "overlay=(W-w)/2:(H-h)/2" in result
-    assert "gblur" in result
+    assert "force_original_aspect_ratio=increase" in result
+    assert "crop=1920:1080" in result
+    assert "overlay=" not in result
+    assert "gblur" not in result
+
+
+def test_longform_final_render_rejects_portrait_video_source(tmp_path):
+    from app.agents import longform_producer
+
+    script = _script()
+    videos = []
+    for index, _scene in enumerate(script["scenes"], start=1):
+        video = tmp_path / f"scene-{index:02d}.mp4"
+        video.write_bytes(b"mp4")
+        videos.append(video)
+    media_board = {
+        "scenes": [
+            {
+                "n": scene["n"],
+                "assets": [
+                    {
+                        "provider": "pexels_video",
+                        "media_type": "video",
+                        "local_path": videos[index - 1].as_posix(),
+                        "width": 1920,
+                        "height": 1080,
+                    }
+                ],
+            }
+            for index, scene in enumerate(script["scenes"], start=1)
+        ]
+    }
+    media_board["scenes"][0]["assets"][0]["width"] = 1080
+    media_board["scenes"][0]["assets"][0]["height"] = 1920
+
+    try:
+        longform_producer._assert_final_media_mix(script, media_board)
+    except ValueError as exc:
+        assert "세로 영상" in str(exc)
+    else:
+        raise AssertionError("portrait source should be rejected for longform")
 
 
 def test_longform_card_pads_audio_to_scene_duration(tmp_path, monkeypatch):
