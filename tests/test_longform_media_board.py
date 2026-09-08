@@ -106,7 +106,7 @@ def test_media_gate_rejects_longform_with_too_few_video_scenes():
         "context", "evidence", "counterpoint", "payoff", "close",
     ]
     for index, role in enumerate(roles, start=1):
-        media_type = "video" if index <= 14 else "image"
+        media_type = "video" if index <= 19 else "image"
         provider = "pexels_video" if media_type == "video" else "wikimedia_image"
         tier = "C" if role in {"hook", "evidence", "mechanism", "payoff"} else "B"
         scenes.append(
@@ -122,4 +122,5 @@ def test_media_gate_rejects_longform_with_too_few_video_scenes():
     result = longform_media_gate(board)
 
     assert result["passed"] is False
-    assert "video scenes below 15" in result["reasons"]
+    assert "video scenes below 20" in result["reasons"]
+    assert result["min_video_scenes"] == 20

@@ -222,6 +222,62 @@ def test_materialize_media_board_downloads_best_asset(tmp_path, monkeypatch):
     assert Path(asset["local_path"]).is_file()
 
 
+def test_materialize_media_board_downloads_video_before_static_image(
+    tmp_path, monkeypatch
+):
+    from app.services.longform_media_preflight import materialize_longform_media_board
+
+    run_dir = tmp_path / "longform" / "longform-demo"
+    run_dir.mkdir(parents=True)
+    (run_dir / "media_board.json").write_text(
+        json.dumps(
+            {
+                "run_id": "longform-demo",
+                "scenes": [
+                    {
+                        "n": 1,
+                        "role": "hook",
+                        "assets": [
+                            {
+                                "tier": "A",
+                                "provider": "wikimedia_image",
+                                "media_type": "image",
+                                "download_url": "https://upload.wikimedia.org/richat.jpg",
+                            },
+                            {
+                                "tier": "B",
+                                "provider": "pexels_video",
+                                "media_type": "video",
+                                "download_url": "https://videos.pexels.com/glacier.mp4",
+                            },
+                        ],
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_download(candidate, output):
+        output.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"video" * 512)
+        return output.stat().st_size
+
+    monkeypatch.setattr(
+        "app.services.longform_media_preflight._download_candidate",
+        fake_download,
+    )
+
+    board = materialize_longform_media_board(tmp_path, "longform-demo")
+
+    materialized = [
+        asset for asset in board["scenes"][0]["assets"] if asset.get("local_path")
+    ]
+    assert materialized[0]["media_type"] == "video"
+    assert materialized[0]["local_path"].endswith(".mp4")
+    assert Path(materialized[0]["local_path"]).is_file()
+
+
 def test_preflight_prefers_unused_source_when_same_query_repeats(tmp_path, monkeypatch):
     from app.services.longform_media_preflight import prepare_longform_media_board
 
@@ -359,3 +415,47 @@ def test_preflight_orders_video_before_static_image_for_longform_scene(
     board = prepare_longform_media_board(tmp_path, "longform-demo")
 
     assert board["scenes"][0]["assets"][0]["media_type"] == "video"
+
+
+def test_preflight_uses_scene_visuals_before_chapter_title(tmp_path, monkeypatch):
+    from app.services.longform_media_preflight import prepare_longform_media_board
+
+    run_dir = tmp_path / "longform" / "longform-demo"
+    _write_script(run_dir)
+    script_path = run_dir / "script.json"
+    script = json.loads(script_path.read_text(encoding="utf-8"))
+    script["scenes"][0].pop("visual_query", None)
+    script["scenes"][0]["chapter_title"] = "남극의 붉은 폭포"
+    script["scenes"][0]["visuals"] = ["antarctic glacier red waterfall"]
+    script_path.write_text(json.dumps(script, ensure_ascii=False), encoding="utf-8")
+
+    captured = []
+
+    def fake_video_candidates(query):
+        captured.append(query)
+        return []
+
+    monkeypatch.setattr(
+        "app.services.longform_media_preflight._wikimedia_image_candidates",
+        lambda query: [],
+    )
+    monkeypatch.setattr(
+        "app.services.longform_media_preflight._nasa_image_candidates",
+        lambda query: [],
+    )
+    monkeypatch.setattr(
+        "app.services.longform_media_preflight._pexels_video_candidates",
+        fake_video_candidates,
+    )
+    monkeypatch.setattr(
+        "app.services.longform_media_preflight._pexels_photo_candidates",
+        lambda query: [],
+    )
+    monkeypatch.setattr(
+        "app.services.longform_media_preflight._pixabay_video_candidates",
+        lambda query: [],
+    )
+
+    prepare_longform_media_board(tmp_path, "longform-demo")
+
+    assert captured[0] == "antarctic glacier red waterfall"

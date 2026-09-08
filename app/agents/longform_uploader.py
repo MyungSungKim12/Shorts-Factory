@@ -138,6 +138,8 @@ def _validate_longform_upload_package(work_dir: Path, ffmpeg_path: str) -> dict:
         failures.append("audio")
     if float(report.get("duration_delta") or 0) > 0.75:
         failures.append("audio_duration_delta")
+    if float(report.get("internal_silence_max") or 0) > 1.5:
+        failures.append("internal_silence")
     result = {"passed": not failures, "failures": failures, "report": report}
     if failures:
         raise ValueError(f"롱폼 업로드 품질검사 실패: {', '.join(failures)}")
@@ -152,6 +154,19 @@ def _uses_synthetic_longform_media(produce_log: dict) -> bool:
         if isinstance(source, dict) and str(source.get("provider") or "").startswith("vertex"):
             return True
     return False
+
+
+def _upload_longform_thumbnail(youtube, video_id: str, thumbnail_path: Path) -> dict:
+    if not thumbnail_path.is_file():
+        return {"status": "missing"}
+    try:
+        youtube.thumbnails().set(
+            videoId=video_id,
+            media_body=MediaFileUpload(str(thumbnail_path), mimetype="image/png"),
+        ).execute()
+    except Exception as exc:
+        return {"status": "failed", "error": str(exc)[:300]}
+    return {"status": "uploaded", "file": str(thumbnail_path)}
 
 
 def run_longform_uploader(data_dir: Path, run_id: str) -> dict:
@@ -236,6 +251,7 @@ def run_longform_uploader(data_dir: Path, run_id: str) -> dict:
         _, response = request.next_chunk()
 
     video_id = response["id"]
+    thumbnail = _upload_longform_thumbnail(youtube, video_id, work_dir / "thumbnail.png")
     result = {
         "status": "uploaded",
         "video_id": video_id,
@@ -243,6 +259,7 @@ def run_longform_uploader(data_dir: Path, run_id: str) -> dict:
         "privacy": body["status"]["privacyStatus"],
         "uploaded_at": datetime.now().isoformat(),
         "quality_gate": quality,
+        "thumbnail": thumbnail,
     }
     _atomic_json(upload_log, result)
     return result

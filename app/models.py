@@ -359,6 +359,8 @@ class StoryScriptContract(BaseModel):
 
 class LongformScene(BaseModel):
     n: int = Field(ge=1)
+    rank: int | None = Field(default=None, ge=1, le=10)
+    segment_title: str = Field(default="", max_length=60)
     role: Literal[
         "hook",
         "context",
@@ -400,6 +402,8 @@ class LongformScriptContract(BaseModel):
     description: str = ""
     tags: list[str] = Field(default_factory=list)
     hook: str = Field(min_length=5)
+    thumbnail_main: str = Field(default="", max_length=24)
+    thumbnail_sub: str = Field(default="", max_length=24)
     style_id: Literal["documentary", "cinematic", "clean_news"] = "clean_news"
     scenes: list[LongformScene] = Field(min_length=20, max_length=30)
     visual_identity: VisualIdentity | None = None

@@ -6,7 +6,7 @@ from collections.abc import Iterable
 
 CORE_SCENE_ROLES = frozenset({"hook", "evidence", "mechanism", "payoff"})
 QUALITY_TIERS = frozenset({"A", "B", "C"})
-MIN_VIDEO_SCENES = 15
+MIN_VIDEO_SCENES = 20
 
 
 def media_tier_for_source(source: dict) -> str:
@@ -124,14 +124,15 @@ def longform_media_gate(media_board: dict) -> dict:
     ratio = round(quality_runtime / total_runtime, 3) if total_runtime else 0.0
     if ratio < 0.6:
         reasons.append(f"quality media runtime below 60%: {ratio:.1%}")
-    if len(scene_results) >= 20 and video_scene_count < MIN_VIDEO_SCENES:
-        reasons.append(f"video scenes below {MIN_VIDEO_SCENES}")
+    min_video_scenes = min(MIN_VIDEO_SCENES, len(scene_results))
+    if len(scene_results) >= 20 and video_scene_count < min_video_scenes:
+        reasons.append(f"video scenes below {min_video_scenes}")
 
     return {
         "passed": not reasons,
         "reasons": reasons,
         "quality_runtime_ratio": ratio,
         "video_scene_count": video_scene_count,
-        "min_video_scenes": MIN_VIDEO_SCENES,
+        "min_video_scenes": min_video_scenes,
         "scenes": scene_results,
     }

@@ -97,20 +97,35 @@ def test_longform_uploader_uploads_output_and_writes_log(tmp_path, monkeypatch):
         json.dumps({"media_sources": []}, ensure_ascii=False), encoding="utf-8"
     )
     (work_dir / "output.mp4").write_bytes(b"mp4")
+    (work_dir / "thumbnail.png").write_bytes(b"png")
     seen = {}
+    thumbnail_seen = {}
 
     class Request:
         def next_chunk(self):
             return None, {"id": "abc123"}
+
+    class ThumbnailRequest:
+        def execute(self):
+            thumbnail_seen["executed"] = True
+            return {"items": []}
 
     class Videos:
         def insert(self, part, body, media_body):
             seen.update(part=part, body=body, media_body=media_body)
             return Request()
 
+    class Thumbnails:
+        def set(self, videoId, media_body):
+            thumbnail_seen.update(videoId=videoId, media_body=media_body)
+            return ThumbnailRequest()
+
     class Youtube:
         def videos(self):
             return Videos()
+
+        def thumbnails(self):
+            return Thumbnails()
 
     monkeypatch.setattr(longform_uploader, "_get_youtube_client", lambda: Youtube())
     monkeypatch.setattr(
@@ -123,6 +138,8 @@ def test_longform_uploader_uploads_output_and_writes_log(tmp_path, monkeypatch):
 
     assert result["status"] == "uploaded"
     assert result["url"] == "https://youtube.com/watch?v=abc123"
+    assert result["thumbnail"]["status"] == "uploaded"
+    assert thumbnail_seen["videoId"] == "abc123"
     assert seen["body"]["snippet"]["title"] == _script()["title"]
     assert "#블러드폴스" in seen["body"]["snippet"]["description"]
     assert json.loads((work_dir / "upload_log.json").read_text(encoding="utf-8"))[
@@ -175,13 +192,48 @@ def test_validate_longform_upload_package_accepts_landscape_video_probe(
             "audio_codec": "aac",
             "has_audio": True,
             "duration_delta": 0.1,
-            "internal_silence_max": 24.0,
+            "internal_silence_max": 0.8,
         },
     )
 
     result = longform_uploader._validate_longform_upload_package(work_dir, "ffmpeg")
 
     assert result["passed"] is True
+
+
+def test_validate_longform_upload_package_rejects_internal_silence(
+    tmp_path, monkeypatch
+):
+    from app.agents import longform_uploader
+
+    work_dir = tmp_path / "longform" / "longform-demo"
+    work_dir.mkdir(parents=True)
+    (work_dir / "script.json").write_text(
+        json.dumps(_script(), ensure_ascii=False), encoding="utf-8"
+    )
+    (work_dir / "produce_log.json").write_text("{}", encoding="utf-8")
+    (work_dir / "output.mp4").write_bytes(b"mp4")
+    monkeypatch.setattr(
+        longform_uploader,
+        "_probe_longform_video",
+        lambda path, ffprobe: {
+            "width": 1920,
+            "height": 1080,
+            "duration": 360.0,
+            "video_codec": "h264",
+            "audio_codec": "aac",
+            "has_audio": True,
+            "duration_delta": 0.1,
+            "internal_silence_max": 2.4,
+        },
+    )
+
+    try:
+        longform_uploader._validate_longform_upload_package(work_dir, "ffmpeg")
+    except ValueError as exc:
+        assert "internal_silence" in str(exc)
+    else:
+        raise AssertionError("long internal silence should be rejected")
 
 
 def test_validate_longform_upload_package_rejects_less_than_six_minutes(

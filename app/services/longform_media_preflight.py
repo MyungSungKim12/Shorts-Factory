@@ -32,6 +32,12 @@ def _scene_query(scene: dict, script: dict) -> str:
     query = str(scene.get("visual_query") or "").strip()
     if query:
         return query
+    visuals = scene.get("visuals") or []
+    if isinstance(visuals, list):
+        for visual in visuals:
+            query = str(visual or "").strip()
+            if query:
+                return query
     identity = script.get("visual_identity") or {}
     exact_queries = identity.get("exact_queries") or []
     if exact_queries:
@@ -325,7 +331,7 @@ def prepare_longform_media_board(data_dir: Path, run_id: str) -> dict:
 def _asset_sort_key(asset: dict) -> tuple[int, int]:
     tier = str(asset.get("tier") or media_tier_for_source(asset)).upper()
     is_video = 0 if str(asset.get("media_type") or "").lower() == "video" else 1
-    return TIER_PRIORITY.get(tier, 9), is_video
+    return is_video, TIER_PRIORITY.get(tier, 9)
 
 
 def _local_suffix(asset: dict) -> str:

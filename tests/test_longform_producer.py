@@ -114,6 +114,8 @@ def test_longform_producer_writes_output_and_log_without_touching_shorts_work(
         Path(command[-1]).write_bytes(b"media")
 
     monkeypatch.setenv("TTS_SPEED", "1.0")
+    monkeypatch.setenv("LONGFORM_TTS_SPEED", "1.0")
+    monkeypatch.setenv("LONGFORM_REQUIRE_VIDEO_SOURCES", "0")
     monkeypatch.setattr(longform_producer, "_prepare_narration", fake_prepare)
     monkeypatch.setattr(longform_producer, "_duration", lambda path, ffmpeg: 9.0)
     monkeypatch.setattr(longform_producer, "_run_ffmpeg", fake_run)
@@ -122,6 +124,7 @@ def test_longform_producer_writes_output_and_log_without_touching_shorts_work(
 
     assert result["format"] == "longform"
     assert Path(result["output_file"]).read_bytes() == b"media"
+    assert Path(result["thumbnail_file"]).is_file()
     assert (work_dir / "produce_log.json").is_file()
     assert not (tmp_path / "work" / run_id).exists()
     assert commands
@@ -173,6 +176,8 @@ def test_longform_producer_reuses_permanent_ai_asset(tmp_path, monkeypatch):
         return type("R", (), {"provider": "google", "voice": "Kore", "speaking_rate": 1.0})(), 9.0
 
     monkeypatch.setenv("TTS_SPEED", "1.0")
+    monkeypatch.setenv("LONGFORM_TTS_SPEED", "1.0")
+    monkeypatch.setenv("LONGFORM_REQUIRE_VIDEO_SOURCES", "0")
     monkeypatch.setattr(longform_producer, "_prepare_narration", fake_prepare)
     monkeypatch.setattr(longform_producer, "_duration", lambda path, ffmpeg: 9.0)
     monkeypatch.setattr(
@@ -227,6 +232,8 @@ def test_longform_producer_records_media_board_usage(tmp_path, monkeypatch):
         return type("R", (), {"provider": "google", "voice": "Kore", "speaking_rate": 1.0})(), 9.0
 
     monkeypatch.setenv("TTS_SPEED", "1.0")
+    monkeypatch.setenv("LONGFORM_TTS_SPEED", "1.0")
+    monkeypatch.setenv("LONGFORM_REQUIRE_VIDEO_SOURCES", "0")
     monkeypatch.setattr(longform_producer, "_prepare_narration", fake_prepare)
     monkeypatch.setattr(longform_producer, "_duration", lambda path, ffmpeg: 9.0)
     monkeypatch.setattr(
@@ -291,6 +298,8 @@ def test_longform_producer_uses_materialized_media_from_board(tmp_path, monkeypa
         Path(command[-1]).write_bytes(b"media")
 
     monkeypatch.setenv("TTS_SPEED", "1.0")
+    monkeypatch.setenv("LONGFORM_TTS_SPEED", "1.0")
+    monkeypatch.setenv("LONGFORM_REQUIRE_VIDEO_SOURCES", "0")
     monkeypatch.setattr(longform_producer, "_prepare_narration", fake_prepare)
     monkeypatch.setattr(longform_producer, "_duration", lambda path, ffmpeg: 9.0)
     monkeypatch.setattr(longform_producer, "_run_ffmpeg", fake_run)
@@ -299,6 +308,90 @@ def test_longform_producer_uses_materialized_media_from_board(tmp_path, monkeypa
 
     assert result["media_sources"][0]["local_path"] == media.as_posix()
     assert any(str(media) in command for command in commands for command in command)
+
+
+def test_longform_preview_rejects_static_image_media_board(tmp_path):
+    from app.agents import longform_producer
+
+    run_id = "longform-preview-static"
+    work_dir = tmp_path / "longform" / run_id
+    work_dir.mkdir(parents=True)
+    (work_dir / "script.json").write_text(
+        json.dumps(_script(), ensure_ascii=False), encoding="utf-8"
+    )
+    image = work_dir / "media" / "scene-01-01.jpg"
+    image.parent.mkdir()
+    image.write_bytes(b"jpg")
+    (work_dir / "media_board.json").write_text(
+        json.dumps(
+            {
+                "run_id": run_id,
+                "scenes": [
+                    {
+                        "n": 1,
+                        "role": "hook",
+                        "assets": [
+                            {
+                                "tier": "C",
+                                "provider": "preview_reference",
+                                "media_type": "image",
+                                "local_path": image.as_posix(),
+                            }
+                        ],
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    try:
+        longform_producer.run_longform_preview(tmp_path, run_id, "ffmpeg")
+    except ValueError as exc:
+        assert "영상 소스" in str(exc)
+    else:
+        raise AssertionError("preview should reject static image-only media")
+
+
+def test_longform_final_render_rejects_missing_video_source(tmp_path):
+    from app.agents import longform_producer
+
+    run_id = "longform-final-static"
+    work_dir = tmp_path / "longform" / run_id
+    work_dir.mkdir(parents=True)
+    (work_dir / "script.json").write_text(
+        json.dumps(_script(), ensure_ascii=False), encoding="utf-8"
+    )
+    (work_dir / "media_board.json").write_text(
+        json.dumps(
+            {
+                "run_id": run_id,
+                "scenes": [
+                    {
+                        "n": 1,
+                        "role": "hook",
+                        "assets": [
+                            {
+                                "tier": "B",
+                                "provider": "pexels_image",
+                                "media_type": "image",
+                            }
+                        ],
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    try:
+        longform_producer.run_longform_producer(tmp_path, run_id, "ffmpeg")
+    except ValueError as exc:
+        assert "정지 이미지/카드 fallback" in str(exc)
+    else:
+        raise AssertionError("final longform render should require video sources")
 
 
 def test_longform_style_previews_create_selectable_pngs(tmp_path):
@@ -321,6 +414,31 @@ def test_longform_style_previews_create_selectable_pngs(tmp_path):
         assert item["subtitle_font_size"] >= 24
 
 
+def test_create_longform_thumbnail_writes_clickable_banner(tmp_path):
+    from app.agents.longform_producer import create_longform_thumbnail
+    from PIL import Image
+
+    script = _script()
+    script["thumbnail_main"] = "지구가 숨긴 TOP 5"
+    script["thumbnail_sub"] = "이건 진짜 이상함"
+    output = tmp_path / "thumbnail.png"
+
+    result = create_longform_thumbnail(script, output)
+
+    assert Path(result["thumbnail_file"]).is_file()
+    assert result["main_text"] == "지구가 숨긴 TOP 5"
+    assert result["sub_text"] == "이건 진짜 이상함"
+    with Image.open(output) as image:
+        assert image.size == (1280, 720)
+
+
+def test_thumbnail_main_text_splits_into_two_impact_lines():
+    from app.agents.longform_producer import _thumbnail_main_lines
+
+    assert _thumbnail_main_lines("남극의 피폭포") == ["남극의", "피폭포"]
+    assert _thumbnail_main_lines("지구가 숨긴 TOP 5") == ["지구가 숨긴", "TOP 5"]
+
+
 def test_clean_news_subtitle_style_is_not_shorts_caption_style():
     from app.agents.longform_producer import _longform_subtitle_style
 
@@ -335,13 +453,13 @@ def test_clean_news_subtitle_style_is_not_shorts_caption_style():
     assert "MarginV=42" in style
 
 
-def test_longform_playback_tempo_defaults_to_clear_documentary_speed(monkeypatch):
+def test_longform_playback_tempo_defaults_to_shorts_like_speed(monkeypatch):
     from app.agents.longform_producer import _longform_playback_tempo
 
     monkeypatch.setenv("TTS_SPEED", "1.2")
     monkeypatch.delenv("LONGFORM_TTS_SPEED", raising=False)
 
-    assert _longform_playback_tempo() == 1.0
+    assert _longform_playback_tempo() == 1.2
 
 
 def test_longform_playback_tempo_uses_dedicated_setting(monkeypatch):
@@ -351,6 +469,13 @@ def test_longform_playback_tempo_uses_dedicated_setting(monkeypatch):
     monkeypatch.setenv("LONGFORM_TTS_SPEED", "1.1")
 
     assert _longform_playback_tempo() == 1.1
+
+
+def test_longform_scene_duration_stays_close_to_audio():
+    from app.agents.longform_producer import _longform_scene_duration
+
+    assert _longform_scene_duration(18.0, 9.0) == 10.0
+    assert _longform_scene_duration(8.0, 9.0) == 9.2
 
 
 def test_longform_still_filter_keeps_images_static():

@@ -168,3 +168,22 @@ def test_validate_longform_script_defaults_to_clean_news_style():
     result = validate_longform_script(_longform_script())
 
     assert result["style_id"] == "clean_news"
+
+
+def test_validate_longform_script_preserves_top_segment_metadata():
+    from app.models import validate_longform_script
+
+    script = _longform_script(
+        thumbnail_main="지구의 금지구역",
+        thumbnail_sub="TOP 5",
+    )
+    for index, scene in enumerate(script["scenes"], start=1):
+        scene["rank"] = max(1, 5 - ((index - 1) // 4))
+        scene["segment_title"] = f"{scene['rank']}위 기록"
+
+    result = validate_longform_script(script)
+
+    assert result["thumbnail_main"] == "지구의 금지구역"
+    assert result["thumbnail_sub"] == "TOP 5"
+    assert result["scenes"][0]["rank"] == 5
+    assert result["scenes"][0]["segment_title"] == "5위 기록"

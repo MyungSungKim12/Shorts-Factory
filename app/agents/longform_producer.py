@@ -5,11 +5,12 @@ import hashlib
 import json
 import os
 import re
+import random
 import tempfile
 from datetime import datetime
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
 from app.models import validate_longform_script
 from app.services.ai_opening_library import AiOpeningLibrary, normalize_subject_key
@@ -188,6 +189,156 @@ def _create_style_preview(
     }
 
 
+def _thumbnail_text(script: dict) -> tuple[str, str]:
+    main = str(script.get("thumbnail_main") or "").strip()
+    sub = str(script.get("thumbnail_sub") or "").strip()
+    title = str(script.get("title") or "").strip()
+    hook = str(script.get("hook") or "").strip()
+    if not main:
+        if "TOP" in title.upper():
+            main = title[:18]
+        else:
+            main = "지구가 숨긴 TOP 5"
+    if not sub:
+        sub = "이건 진짜 이상함" if not hook else hook[:18].rstrip(" ,.")
+    return main[:24], sub[:24]
+
+
+def _thumbnail_main_lines(main_text: str) -> list[str]:
+    words = str(main_text or "").strip().split()
+    if not words:
+        return ["지구의", "비밀"]
+    upper_words = [word.upper() for word in words]
+    if "TOP" in upper_words:
+        index = upper_words.index("TOP")
+        first = " ".join(words[:index]).strip()
+        second = " ".join(words[index:]).strip()
+        if first and second:
+            return [first[:10], second[:10]]
+    if len(words) == 1:
+        text = words[0]
+        if len(text) <= 4:
+            return [text]
+        split = max(2, len(text) // 2)
+        return [text[:split], text[split:]]
+    return [" ".join(words[:-1])[:10], words[-1][:10]]
+
+
+def _cover_resize(image: Image.Image, size: tuple[int, int]) -> Image.Image:
+    target_w, target_h = size
+    source_w, source_h = image.size
+    scale = max(target_w / max(1, source_w), target_h / max(1, source_h))
+    resized = image.resize(
+        (int(source_w * scale), int(source_h * scale)),
+        Image.Resampling.LANCZOS,
+    )
+    left = max(0, (resized.width - target_w) // 2)
+    top = max(0, (resized.height - target_h) // 2)
+    return resized.crop((left, top, left + target_w, top + target_h))
+
+
+def _draw_distress(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], seed: str) -> None:
+    rng = random.Random(hashlib.sha256(seed.encode("utf-8")).hexdigest())
+    x0, y0, x1, y1 = box
+    for _ in range(260):
+        x = rng.randint(x0, max(x0, x1))
+        y = rng.randint(y0, max(y0, y1))
+        radius = rng.randint(1, 4)
+        draw.ellipse((x, y, x + radius, y + radius), fill=(0, 0, 0, rng.randint(55, 130)))
+
+
+def _draw_torn_strip(
+    draw: ImageDraw.ImageDraw,
+    box: tuple[int, int, int, int],
+    *,
+    fill: tuple[int, int, int, int],
+    seed: str,
+) -> None:
+    rng = random.Random(hashlib.sha256(seed.encode("utf-8")).hexdigest())
+    x0, y0, x1, y1 = box
+    points = []
+    for x in range(x0, x1 + 1, 34):
+        points.append((x, y0 + rng.randint(-8, 8)))
+    for x in range(x1, x0 - 1, -34):
+        points.append((x, y1 + rng.randint(-8, 8)))
+    draw.polygon(points, fill=fill)
+    draw.line(points + [points[0]], fill=(85, 55, 20, 120), width=2)
+
+
+def create_longform_thumbnail(script: dict, output: Path, background: Path | None = None) -> dict:
+    """Create a high-contrast Korean YouTube thumbnail for a longform episode."""
+    main_text, sub_text = _thumbnail_text(script)
+    if background and Path(background).is_file():
+        try:
+            image = Image.open(background).convert("RGB")
+            image = _cover_resize(image, (1280, 720))
+            image = ImageEnhance.Contrast(image).enhance(1.35)
+            image = ImageEnhance.Color(image).enhance(1.25)
+            image = ImageEnhance.Sharpness(image).enhance(1.5)
+        except Exception:
+            image = Image.new("RGB", (1280, 720), (8, 10, 14))
+    else:
+        image = Image.new("RGB", (1280, 720), (8, 10, 14))
+        base_draw = ImageDraw.Draw(image, "RGBA")
+        for y in range(720):
+            ratio = y / 719
+            base_draw.line(
+                (0, y, 1280, y),
+                fill=(5 + int(20 * ratio), 10 + int(18 * ratio), 18 + int(35 * ratio), 255),
+            )
+        for x in range(640, 1280, 18):
+            base_draw.line((x, 0, x - 260, 720), fill=(95, 0, 12, 38), width=10)
+        image = image.filter(ImageFilter.GaussianBlur(radius=0.4))
+    draw = ImageDraw.Draw(image, "RGBA")
+    for x in range(1280):
+        ratio = x / 1279
+        alpha = int(238 * (1.0 - ratio))
+        draw.line((x, 0, x, 720), fill=(0, 0, 0, alpha))
+    for y in range(720):
+        ratio = y / 719
+        draw.line((0, y, 1280, y), fill=(5, 8, 14, int(25 + 88 * ratio)))
+    draw.polygon([(720, 0), (1280, 0), (1280, 720), (590, 720)], fill=(130, 0, 0, 62))
+    main_lines = _thumbnail_main_lines(main_text)[:2]
+    y = 82
+    for line_index, line in enumerate(main_lines):
+        color = (252, 252, 248) if line_index == 0 else (232, 18, 18)
+        font_size = 190 if len(line.replace(" ", "")) <= 4 else 142
+        font = _title_font(font_size)
+        draw.text(
+            (58, y),
+            line,
+            font=font,
+            fill=color,
+            stroke_width=11,
+            stroke_fill=(0, 0, 0),
+        )
+        _draw_distress(draw, (58, y + 10, 760, y + font_size), f"{main_text}-{line_index}")
+        y += font_size - 4
+    strip_y = min(600, y + 10)
+    _draw_torn_strip(
+        draw,
+        (48, strip_y, 760, strip_y + 94),
+        fill=(245, 197, 65, 242),
+        seed=sub_text,
+    )
+    draw.text(
+        (92, strip_y + 47),
+        sub_text,
+        font=_title_font(54),
+        fill=(0, 0, 0),
+        anchor="lm",
+        stroke_width=1,
+        stroke_fill=(255, 236, 160),
+    )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    image.save(output, quality=94)
+    return {
+        "thumbnail_file": str(output.resolve()),
+        "main_text": main_text,
+        "sub_text": sub_text,
+    }
+
+
 def generate_longform_style_previews(
     output_dir: Path,
     *,
@@ -314,10 +465,17 @@ def _longform_still_filter() -> str:
 def _longform_playback_tempo() -> float:
     """Return the pitch-preserving longform narration tempo."""
     try:
-        tempo = float(os.getenv("LONGFORM_TTS_SPEED", "1.0"))
+        tempo = float(os.getenv("LONGFORM_TTS_SPEED", "1.2"))
     except ValueError:
-        return 1.0
-    return tempo if 0.8 <= tempo <= 1.25 else 1.0
+        return 1.2
+    return tempo if 0.8 <= tempo <= 1.25 else 1.2
+
+
+def _longform_scene_duration(planned_duration: float, audio_duration: float) -> float:
+    """Keep scenes close to narration so longform does not drift into dead air."""
+    planned = max(0.1, float(planned_duration or 0))
+    audio = max(0.1, float(audio_duration or 0))
+    return max(audio + 0.2, min(planned, audio + 1.0))
 
 
 def _media_asset_for_scene(media_board: dict, scene_number: int) -> dict | None:
@@ -331,6 +489,143 @@ def _media_asset_for_scene(media_board: dict, scene_number: int) -> dict | None:
             if local_path and Path(local_path).is_file():
                 return asset
     return None
+
+
+def _media_asset_is_video(asset: dict | None) -> bool:
+    if not isinstance(asset, dict):
+        return False
+    media_type = str(asset.get("media_type") or asset.get("type") or "").lower()
+    provider = str(asset.get("provider") or "").lower()
+    local_path = str(asset.get("local_path") or asset.get("path") or "").strip()
+    suffix = Path(local_path).suffix.lower() if local_path else ""
+    return (
+        media_type == "video"
+        or suffix in {".mp4", ".mov", ".webm", ".mkv"}
+        or provider
+        in {
+            "pexels_video",
+            "pixabay_video",
+            "veo",
+            "vertex_veo",
+            "veo-3.1-fast-generate-001",
+        }
+    )
+
+
+def _assert_preview_has_video_sources(script: dict, media_board: dict) -> None:
+    """Prevent review previews that are just still images with narration."""
+    if not media_board:
+        raise ValueError("롱폼 30초 미리보기에는 영상 소스가 포함된 media_board.json이 필요합니다.")
+    cursor = 0.0
+    checked = 0
+    for scene in script.get("scenes") or []:
+        if cursor >= 30.0:
+            break
+        checked += 1
+        asset = _media_asset_for_scene(media_board, int(scene["n"]))
+        if not _media_asset_is_video(asset):
+            raise ValueError(
+                f"롱폼 30초 미리보기 장면 {scene['n']}에 영상 소스가 없습니다. "
+                "정지 이미지/카드 fallback 미리보기는 생성하지 않습니다."
+            )
+        cursor += float(scene.get("duration_sec") or 0)
+    if checked == 0:
+        raise ValueError("롱폼 30초 미리보기에 사용할 장면이 없습니다.")
+
+
+def _strict_video_sources_enabled() -> bool:
+    return str(os.getenv("LONGFORM_REQUIRE_VIDEO_SOURCES", "1")).strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def _assert_all_scenes_have_video_sources(script: dict, media_board: dict) -> None:
+    """Prevent final longform renders from falling back to still images/cards."""
+    if not media_board:
+        raise ValueError("롱폼 최종 렌더링에는 영상 소스가 포함된 media_board.json이 필요합니다.")
+    for scene in script.get("scenes") or []:
+        asset = _media_asset_for_scene(media_board, int(scene["n"]))
+        if not _media_asset_is_video(asset):
+            raise ValueError(
+                f"롱폼 장면 {scene['n']}에 사용할 수 있는 영상 소스가 없습니다. "
+                "정지 이미지/카드 fallback으로 최종 롱폼을 만들지 않습니다."
+            )
+
+
+def _thumbnail_background_from_board(media_board: dict) -> Path | None:
+    for board_scene in media_board.get("scenes") or []:
+        for asset in board_scene.get("assets") or []:
+            media_type = str(asset.get("media_type") or asset.get("type") or "").lower()
+            local_path = str(asset.get("local_path") or asset.get("path") or "").strip()
+            if media_type in {"image", "photo"} and local_path and Path(local_path).is_file():
+                return Path(local_path)
+    return None
+
+
+def _extract_video_thumbnail_frame(
+    media: Path,
+    output: Path,
+    ffmpeg_path: str,
+) -> Path | None:
+    if not media.is_file():
+        return None
+    try:
+        _run_ffmpeg(
+            [
+                ffmpeg_path,
+                "-y",
+                "-ss",
+                "00:00:01",
+                "-i",
+                str(media),
+                "-frames:v",
+                "1",
+                "-q:v",
+                "2",
+                str(output),
+            ],
+            timeout=120,
+        )
+    except Exception:
+        return None
+    return output if output.is_file() else None
+
+
+def _thumbnail_background_from_media_board(
+    media_board: dict,
+    ffmpeg_path: str,
+    tmp_path: Path,
+) -> Path | None:
+    first_image: Path | None = None
+    for board_scene in media_board.get("scenes") or []:
+        for asset in board_scene.get("assets") or []:
+            media_type = str(asset.get("media_type") or asset.get("type") or "").lower()
+            provider = str(asset.get("provider") or "").lower()
+            local_path = str(asset.get("local_path") or asset.get("path") or "").strip()
+            if not local_path:
+                continue
+            path = Path(local_path)
+            if not path.is_file():
+                continue
+            is_video = media_type == "video" or provider in {
+                "pexels_video",
+                "pixabay_video",
+                "veo",
+                "vertex_veo",
+                "veo-3.1-fast-generate-001",
+            }
+            if is_video:
+                return _extract_video_thumbnail_frame(
+                    path,
+                    tmp_path / "thumbnail-background.jpg",
+                    ffmpeg_path,
+                )
+            if first_image is None and media_type in {"image", "photo"}:
+                first_image = path
+    return first_image
 
 
 def _encode_longform_media(
@@ -572,6 +867,10 @@ def _render_longform(
         if media_board_file.is_file()
         else {}
     )
+    if max_total_duration is not None:
+        _assert_preview_has_video_sources(script, media_board)
+    elif _strict_video_sources_enabled():
+        _assert_all_scenes_have_video_sources(script, media_board)
 
     with tempfile.TemporaryDirectory(prefix="shorts-factory-longform-") as tmpdir:
         tmp_path = Path(tmpdir)
@@ -602,7 +901,10 @@ def _render_longform(
                 _retime_audio(wav, tempo, ffmpeg_path)
                 duration = _duration(wav, ffmpeg_path)
             tts_results.append(result)
-            scene_duration = max(float(scene["duration_sec"]), duration + 0.2)
+            scene_duration = _longform_scene_duration(
+                float(scene["duration_sec"]),
+                duration,
+            )
             if max_total_duration is not None:
                 remaining = max_total_duration - cursor
                 if remaining <= 0:
@@ -673,6 +975,16 @@ def _render_longform(
             planned_duration=cursor,
         )
         actual_duration = _duration(output_mp4, ffmpeg_path)
+        thumbnail_background = (
+            _thumbnail_background_from_media_board(media_board, ffmpeg_path, tmp_path)
+            if media_board
+            else None
+        )
+        thumbnail = create_longform_thumbnail(
+            script,
+            work_dir / "thumbnail.png",
+            background=thumbnail_background,
+        )
 
     ai_assets = _reusable_ai_assets(script, data_dir, run_id)
     produce_log = {
@@ -680,11 +992,13 @@ def _render_longform(
         "timestamp": datetime.now().isoformat(),
         "format": "longform",
         "output_file": str(output_mp4.resolve()),
+        "thumbnail_file": thumbnail["thumbnail_file"],
         "preview": max_total_duration is not None,
         "planned_duration": script["total_duration_sec"],
         "actual_duration": round(actual_duration, 1),
         "script_sha256": hashlib.sha256(script_file.read_bytes()).hexdigest(),
         "click_package": _longform_click_package(script),
+        "thumbnail": thumbnail,
         "chapter_titles": [
             scene["chapter_title"] for scene in rendered_scenes
         ],
