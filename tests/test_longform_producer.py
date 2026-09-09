@@ -626,6 +626,35 @@ def test_longform_video_does_not_pad_audio_with_silence(tmp_path, monkeypatch):
     assert "apad" not in command
 
 
+def test_longform_concat_reencodes_timestamps_for_smooth_scene_boundaries(
+    tmp_path, monkeypatch
+):
+    from app.agents import longform_producer
+
+    commands = []
+    files = []
+    for index in range(2):
+        scene = tmp_path / f"scene-{index}.mp4"
+        scene.write_bytes(b"mp4")
+        files.append(scene)
+    output = tmp_path / "concat.mp4"
+
+    def fake_run(command, cwd=None, timeout=None):
+        commands.append(command)
+        output.write_bytes(b"mp4")
+
+    monkeypatch.setattr(longform_producer, "_run_ffmpeg", fake_run)
+
+    longform_producer._concat_longform_files(files, output, "ffmpeg", tmp_path)
+
+    command = commands[0]
+    assert "-c" not in command
+    assert "libx264" in command
+    assert "aac" in command
+    assert any("setpts=PTS-STARTPTS" in item for item in command)
+    assert any("aresample=async=1:first_pts=0" in item for item in command)
+
+
 def test_finish_longform_caps_output_to_planned_duration(tmp_path, monkeypatch):
     from app.agents import longform_producer
 
