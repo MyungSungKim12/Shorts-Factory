@@ -575,6 +575,60 @@ def test_longform_final_render_rejects_portrait_video_source(tmp_path):
         raise AssertionError("portrait source should be rejected for longform")
 
 
+def test_longform_thumbnail_background_skips_portrait_video(
+    tmp_path, monkeypatch
+):
+    from app.agents import longform_producer
+
+    portrait = tmp_path / "portrait.mp4"
+    landscape = tmp_path / "landscape.mp4"
+    portrait.write_bytes(b"portrait")
+    landscape.write_bytes(b"landscape")
+    extracted = tmp_path / "thumbnail-background.jpg"
+
+    media_board = {
+        "scenes": [
+            {
+                "assets": [
+                    {
+                        "provider": "pexels_video",
+                        "media_type": "video",
+                        "local_path": str(portrait),
+                        "width": 1080,
+                        "height": 1920,
+                    },
+                    {
+                        "provider": "pixabay_video",
+                        "media_type": "video",
+                        "local_path": str(landscape),
+                        "width": 1920,
+                        "height": 1080,
+                    },
+                ]
+            }
+        ]
+    }
+
+    def fake_extract(media, output, ffmpeg_path):
+        assert media == landscape
+        output.write_bytes(b"jpg")
+        return output
+
+    monkeypatch.setattr(
+        longform_producer,
+        "_extract_video_thumbnail_frame",
+        fake_extract,
+    )
+
+    result = longform_producer._thumbnail_background_from_media_board(
+        media_board,
+        "ffmpeg",
+        tmp_path,
+    )
+
+    assert result == extracted
+
+
 def test_longform_card_does_not_pad_audio_with_silence(tmp_path, monkeypatch):
     from app.agents import longform_producer
 

@@ -417,6 +417,68 @@ def test_preflight_orders_video_before_static_image_for_longform_scene(
     assert board["scenes"][0]["assets"][0]["media_type"] == "video"
 
 
+def test_preflight_checks_pixabay_when_pexels_only_has_portrait_video(
+    tmp_path, monkeypatch
+):
+    from app.services.longform_media_preflight import prepare_longform_media_board
+
+    run_dir = tmp_path / "longform" / "longform-demo"
+    _write_script(run_dir)
+
+    monkeypatch.setattr(
+        "app.services.longform_media_preflight._wikimedia_image_candidates",
+        lambda query: [],
+    )
+    monkeypatch.setattr(
+        "app.services.longform_media_preflight._nasa_image_candidates",
+        lambda query: [],
+    )
+    monkeypatch.setattr(
+        "app.services.longform_media_preflight._pexels_video_candidates",
+        lambda query: [
+            MediaCandidate(
+                provider="pexels_video",
+                media_id="pexels-portrait",
+                source_url="https://www.pexels.com/video/portrait",
+                download_url="https://videos.pexels.com/portrait.mp4",
+                width=1080,
+                height=1920,
+                media_type="video",
+                keyword=query,
+                license="Pexels",
+                description="portrait Richat Structure clip",
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        "app.services.longform_media_preflight._pixabay_video_candidates",
+        lambda query: [
+            MediaCandidate(
+                provider="pixabay_video",
+                media_id="pixabay-landscape",
+                source_url="https://pixabay.com/videos/id-landscape/",
+                download_url="https://cdn.pixabay.com/landscape.mp4",
+                width=1920,
+                height=1080,
+                media_type="video",
+                keyword=query,
+                license="Pixabay",
+                description="landscape Richat Structure clip",
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        "app.services.longform_media_preflight._pexels_photo_candidates",
+        lambda query: [],
+    )
+
+    board = prepare_longform_media_board(tmp_path, "longform-demo")
+
+    first = board["scenes"][0]["assets"][0]
+    assert first["provider"] == "pixabay_video"
+    assert first["width"] > first["height"]
+
+
 def test_preflight_orders_landscape_unused_video_before_portrait_duplicate():
     from app.services.longform_media_preflight import _asset_sort_key
 
@@ -465,6 +527,29 @@ def test_preflight_orders_landscape_duplicate_video_before_portrait_unused():
     ordered = sorted([portrait_unused, landscape_duplicate], key=_asset_sort_key)
 
     assert ordered[0] is landscape_duplicate
+
+
+def test_preflight_orders_static_image_before_portrait_video_for_longform():
+    from app.services.longform_media_preflight import _asset_sort_key
+
+    portrait_video = {
+        "provider": "pexels_video",
+        "media_type": "video",
+        "width": 1080,
+        "height": 1920,
+        "tier": "B",
+    }
+    reference_image = {
+        "provider": "wikimedia_image",
+        "media_type": "image",
+        "width": 1920,
+        "height": 1080,
+        "tier": "A",
+    }
+
+    ordered = sorted([portrait_video, reference_image], key=_asset_sort_key)
+
+    assert ordered[0] is reference_image
 
 
 def test_preflight_uses_scene_visuals_before_chapter_title(tmp_path, monkeypatch):

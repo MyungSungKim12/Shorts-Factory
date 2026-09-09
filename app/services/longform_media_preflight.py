@@ -128,13 +128,31 @@ def _select_candidates(query: str, *, exact: bool) -> list[dict]:
         )
         break
 
+    stock: list[dict] = []
     for collector in (
         _pexels_video_candidates,
         _pixabay_video_candidates,
-        _pexels_photo_candidates,
     ):
         added = 0
         for candidate in collector(provider_query):
+            if stock_candidate_matches(provider_query, candidate):
+                stock.append(
+                    _candidate_to_source(
+                        candidate, query=provider_query, exact=False, strong=True
+                    )
+                )
+                added += 1
+                if added >= LONGFORM_STOCK_CANDIDATES_PER_PROVIDER:
+                    break
+    stock_video = sorted(stock, key=_board_asset_sort_key)
+    selected.extend(stock_video)
+
+    if not any(
+        item["provider"] in {"pexels_video", "pixabay_video"}
+        for item in selected
+    ):
+        added = 0
+        for candidate in _pexels_photo_candidates(provider_query):
             if stock_candidate_matches(provider_query, candidate):
                 selected.append(
                     _candidate_to_source(
@@ -144,13 +162,8 @@ def _select_candidates(query: str, *, exact: bool) -> list[dict]:
                 added += 1
                 if added >= LONGFORM_STOCK_CANDIDATES_PER_PROVIDER:
                     break
-        if any(
-            item["provider"] in {"pexels_video", "pixabay_video"}
-            for item in selected
-        ):
-            break
 
-    return selected[:3]
+    return sorted(selected, key=_board_asset_sort_key)[:3]
 
 
 def _asset_identity(asset: dict) -> str:
@@ -210,8 +223,9 @@ def _board_asset_sort_key(asset: dict) -> tuple[int, int, int, int]:
     }
     tier = str(asset.get("tier") or media_tier_for_source(asset)).upper()
     duplicate = 1 if asset.get("duplicate_source") else 0
-    portrait = 0 if not is_video or _is_landscape_video(asset) else 1
-    return 0 if is_video else 1, portrait, duplicate, TIER_PRIORITY.get(tier, 9)
+    portrait = is_video and not _is_landscape_video(asset)
+    media_priority = 0 if is_video and not portrait else 2 if portrait else 1
+    return media_priority, duplicate, TIER_PRIORITY.get(tier, 9), 0
 
 
 def _select_reusable_ai(data_dir: Path, query: str) -> list[dict]:
@@ -356,10 +370,11 @@ def prepare_longform_media_board(data_dir: Path, run_id: str) -> dict:
 
 def _asset_sort_key(asset: dict) -> tuple[int, int, int, int]:
     tier = str(asset.get("tier") or media_tier_for_source(asset)).upper()
-    video_priority = 0 if str(asset.get("media_type") or "").lower() == "video" else 1
+    is_video = str(asset.get("media_type") or "").lower() == "video"
+    portrait = is_video and not _is_landscape_video(asset)
+    media_priority = 0 if is_video and not portrait else 2 if portrait else 1
     duplicate = 1 if asset.get("duplicate_source") else 0
-    portrait = 1 if video_priority == 0 and not _is_landscape_video(asset) else 0
-    return video_priority, portrait, duplicate, TIER_PRIORITY.get(tier, 9)
+    return media_priority, duplicate, TIER_PRIORITY.get(tier, 9), 0
 
 
 def _local_suffix(asset: dict) -> str:

@@ -694,6 +694,8 @@ def _thumbnail_background_from_media_board(
                 "veo-3.1-fast-generate-001",
             }
             if is_video:
+                if _media_asset_is_portrait(asset):
+                    continue
                 return _extract_video_thumbnail_frame(
                     path,
                     tmp_path / "thumbnail-background.jpg",
