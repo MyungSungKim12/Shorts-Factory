@@ -443,15 +443,45 @@ def test_thumbnail_main_text_splits_into_two_impact_lines():
 def test_clean_news_subtitle_style_is_not_shorts_caption_style():
     from app.agents.longform_producer import _longform_subtitle_style
 
-    style = _longform_subtitle_style("Malgun Gothic", "clean_news")
+    style = _longform_subtitle_style("NanumGothic", "clean_news")
 
-    assert "FontSize=16" in style
+    assert "FontName=NanumGothic" in style
+    assert "FontSize=15" in style
     assert "Outline=1" in style
     assert "Outline=3" not in style
     assert "Shadow=0" in style
     assert "BorderStyle=4" in style
-    assert "BackColour=&HCC000000" in style
-    assert "MarginV=42" in style
+    assert "BackColour=&H80000000" in style
+    assert "MarginL=320" in style
+    assert "MarginR=320" in style
+    assert "MarginV=58" in style
+
+
+def test_longform_srt_wraps_long_lines_to_two_safe_lines(tmp_path):
+    from app.agents.longform_producer import _write_longform_srt
+
+    script = {
+        "scenes": [
+            {
+                "n": 1,
+                "narration": (
+                    "남극 빙하 아래에서 붉은 물이 흘러나오는 장면은 처음 보면 합성처럼 보이지만 "
+                    "실제로는 철 성분과 소금물이 만든 자연 현상입니다."
+                ),
+            }
+        ]
+    }
+    output = tmp_path / "longform.srt"
+
+    _write_longform_srt(script, {1: 0.0}, {1: 8.0}, output)
+
+    text_lines = [
+        line for line in output.read_text(encoding="utf-8").splitlines()
+        if line and "-->" not in line and not line.isdigit()
+    ]
+    assert text_lines
+    assert all(len(line) <= 40 for line in text_lines)
+    assert any("\n" in block for block in output.read_text(encoding="utf-8").split("\n\n"))
 
 
 def test_longform_playback_tempo_defaults_to_shorts_like_speed(monkeypatch):
@@ -472,11 +502,11 @@ def test_longform_playback_tempo_uses_dedicated_setting(monkeypatch):
     assert _longform_playback_tempo() == 1.1
 
 
-def test_longform_scene_duration_stays_close_to_audio():
+def test_longform_scene_duration_matches_audio_without_dead_air():
     from app.agents.longform_producer import _longform_scene_duration
 
-    assert _longform_scene_duration(18.0, 9.0) == 10.0
-    assert _longform_scene_duration(8.0, 9.0) == 9.2
+    assert _longform_scene_duration(18.0, 9.0) == 9.0
+    assert _longform_scene_duration(8.0, 9.0) == 9.0
 
 
 def test_longform_still_filter_keeps_images_static():
@@ -538,7 +568,7 @@ def test_longform_final_render_rejects_portrait_video_source(tmp_path):
         raise AssertionError("portrait source should be rejected for longform")
 
 
-def test_longform_card_pads_audio_to_scene_duration(tmp_path, monkeypatch):
+def test_longform_card_does_not_pad_audio_with_silence(tmp_path, monkeypatch):
     from app.agents import longform_producer
 
     commands = []
@@ -564,8 +594,36 @@ def test_longform_card_pads_audio_to_scene_duration(tmp_path, monkeypatch):
     )
 
     command = commands[0]
-    assert "-af" in command
-    assert "apad" in command
+    assert "apad" not in command
+
+
+def test_longform_video_does_not_pad_audio_with_silence(tmp_path, monkeypatch):
+    from app.agents import longform_producer
+
+    commands = []
+    media = tmp_path / "media.mp4"
+    narration = tmp_path / "narration.wav"
+    output = tmp_path / "scene.mp4"
+    media.write_bytes(b"mp4")
+    narration.write_bytes(b"wav")
+
+    def fake_run(command, cwd=None, timeout=None):
+        commands.append(command)
+        Path(command[-1]).write_bytes(b"mp4")
+
+    monkeypatch.setattr(longform_producer, "_run_ffmpeg", fake_run)
+
+    longform_producer._encode_longform_media(
+        media,
+        narration,
+        output,
+        60.0,
+        "ffmpeg",
+        motion_index=1,
+    )
+
+    command = commands[0]
+    assert "apad" not in command
 
 
 def test_finish_longform_caps_output_to_planned_duration(tmp_path, monkeypatch):

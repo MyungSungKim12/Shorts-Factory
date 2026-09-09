@@ -7,6 +7,7 @@ import os
 import re
 import random
 import tempfile
+import textwrap
 from datetime import datetime
 from pathlib import Path
 
@@ -376,13 +377,12 @@ def _write_longform_srt(
     cue = 0
     for scene in script.get("scenes", []):
         text = str(scene["narration"])
-        chunks = re.split(r"(?<=[.!?…])\s+", text.strip())
-        chunks = [chunk for chunk in chunks if chunk]
+        chunks = _longform_subtitle_chunks(text)
         if not chunks:
             chunks = [text]
         cursor = scene_starts[scene["n"]]
         duration = max(0.1, audio_durations[scene["n"]])
-        weights = [max(1, len(chunk)) for chunk in chunks]
+        weights = [max(1, len(chunk.replace("\n", ""))) for chunk in chunks]
         total_weight = sum(weights)
         for chunk, weight in zip(chunks, weights):
             chunk_duration = duration * weight / total_weight
@@ -397,6 +397,32 @@ def _write_longform_srt(
             )
             cursor += chunk_duration
     output.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _longform_subtitle_chunks(text: str) -> list[str]:
+    """Split narration into safe one/two-line subtitle cues for 16:9 longform."""
+    sentence_chunks = re.split(r"(?<=[.!?…。！？])\s+", text.strip())
+    result: list[str] = []
+    for sentence in [chunk.strip() for chunk in sentence_chunks if chunk.strip()]:
+        wrapped = textwrap.wrap(
+            sentence,
+            width=34,
+            break_long_words=False,
+            break_on_hyphens=False,
+        )
+        if not wrapped:
+            continue
+        safe_lines: list[str] = []
+        for line in wrapped:
+            if len(line) <= 34:
+                safe_lines.append(line)
+                continue
+            safe_lines.extend(
+                line[index : index + 34] for index in range(0, len(line), 34)
+            )
+        for index in range(0, len(safe_lines), 2):
+            result.append("\n".join(safe_lines[index : index + 2]))
+    return result
 
 
 def _srt_time(seconds: float) -> str:
@@ -430,8 +456,7 @@ def _encode_longform_card(
             vf,
             "-t",
             f"{duration:.3f}",
-            "-af",
-            "apad",
+            "-shortest",
             "-c:v",
             "libx264",
             "-preset",
@@ -480,10 +505,9 @@ def _longform_playback_tempo() -> float:
 
 
 def _longform_scene_duration(planned_duration: float, audio_duration: float) -> float:
-    """Keep scenes close to narration so longform does not drift into dead air."""
-    planned = max(0.1, float(planned_duration or 0))
+    """Match scene length to narration so longform never drifts into dead air."""
     audio = max(0.1, float(audio_duration or 0))
-    return max(audio + 0.2, min(planned, audio + 1.0))
+    return round(audio, 3)
 
 
 def _media_asset_for_scene(media_board: dict, scene_number: int) -> dict | None:
@@ -708,8 +732,7 @@ def _encode_longform_media(
             vf,
             "-t",
             f"{duration:.3f}",
-            "-af",
-            "apad",
+            "-shortest",
             "-c:v",
             "libx264",
             "-preset",
@@ -742,7 +765,7 @@ def _finish_longform(
 ) -> None:
     import os
 
-    font = os.getenv("SUBTITLE_FONT", "Malgun Gothic")
+    font = os.getenv("SUBTITLE_FONT", "NanumGothic")
     style = _longform_subtitle_style(font, "clean_news")
     _run_ffmpeg(
         [
@@ -777,21 +800,21 @@ def _longform_subtitle_style(font: str, style_id: str = "clean_news") -> str:
     """Return ASS style for readable longform subtitles, not Shorts captions."""
     presets = {
         "clean_news": {
-            "font_size": 16,
+            "font_size": 15,
             "outline": 1,
             "shadow": 0,
-            "margin_v": 42,
-            "back": "&HCC000000",
+            "margin_v": 58,
+            "back": "&H80000000",
         },
         "documentary": {
-            "font_size": 17,
+            "font_size": 15,
             "outline": 1,
             "shadow": 0,
             "margin_v": 82,
-            "back": "&HCC000000",
+            "back": "&H80000000",
         },
         "cinematic": {
-            "font_size": 17,
+            "font_size": 15,
             "outline": 1,
             "shadow": 1,
             "margin_v": 78,
@@ -804,7 +827,7 @@ def _longform_subtitle_style(font: str, style_id: str = "clean_news") -> str:
         "PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,"
         f"BackColour={preset['back']},BorderStyle=4,"
         f"Outline={preset['outline']},Shadow={preset['shadow']},"
-        f"Alignment=2,MarginL=220,MarginR=220,MarginV={preset['margin_v']},"
+        f"Alignment=2,MarginL=320,MarginR=320,MarginV={preset['margin_v']},"
         "WrapStyle=2"
     )
 
