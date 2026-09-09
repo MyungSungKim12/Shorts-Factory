@@ -509,6 +509,13 @@ def test_longform_scene_duration_matches_audio_without_dead_air():
     assert _longform_scene_duration(8.0, 9.0) == 9.0
 
 
+def test_longform_preview_skips_tiny_tail_scene_after_transition_overlap():
+    from app.agents.longform_producer import _should_render_longform_scene
+
+    assert _should_render_longform_scene(44.6, 45.0, 0.28) is False
+    assert _should_render_longform_scene(43.0, 45.0, 0.28) is True
+
+
 def test_longform_still_filter_keeps_images_static():
     from app.agents.longform_producer import _longform_still_filter
 

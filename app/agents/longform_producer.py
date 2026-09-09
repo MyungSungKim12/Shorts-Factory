@@ -510,6 +510,17 @@ def _longform_scene_duration(planned_duration: float, audio_duration: float) -> 
     return round(audio, 3)
 
 
+def _should_render_longform_scene(
+    cursor: float,
+    max_total_duration: float | None,
+    transition_duration: float,
+) -> bool:
+    if max_total_duration is None:
+        return True
+    remaining = float(max_total_duration) - float(cursor)
+    return remaining > max(0.8, float(transition_duration) + 0.25)
+
+
 def _media_asset_for_scene(media_board: dict, scene_number: int) -> dict | None:
     """Return the first materialized asset for a scene from media_board.json."""
     for board_scene in media_board.get("scenes") or []:
@@ -1066,7 +1077,7 @@ def _render_longform(
         tempo = _longform_playback_tempo()
         transition = _longform_transition_duration()
         for index, scene in enumerate(script["scenes"], start=1):
-            if max_total_duration is not None and cursor >= max_total_duration:
+            if not _should_render_longform_scene(cursor, max_total_duration, transition):
                 break
             raw = tmp_path / f"narration-{index:02d}.mp3"
             wav = tmp_path / f"narration-{index:02d}.wav"
