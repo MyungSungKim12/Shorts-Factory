@@ -552,6 +552,33 @@ def test_preflight_orders_static_image_before_portrait_video_for_longform():
     assert ordered[0] is reference_image
 
 
+def test_preflight_prefers_duplicate_landscape_over_unused_portrait():
+    from app.services.longform_media_preflight import _prefer_unused_assets
+
+    used = {"https://pixabay.com/videos/id-landscape/"}
+    portrait_unused = {
+        "provider": "pexels_video",
+        "media_type": "video",
+        "width": 1080,
+        "height": 1920,
+        "source_url": "https://www.pexels.com/video/portrait",
+        "tier": "B",
+    }
+    landscape_duplicate = {
+        "provider": "pixabay_video",
+        "media_type": "video",
+        "width": 1920,
+        "height": 1080,
+        "source_url": "https://pixabay.com/videos/id-landscape/",
+        "tier": "B",
+    }
+
+    ordered = _prefer_unused_assets([portrait_unused, landscape_duplicate], used)
+
+    assert ordered[0]["source_url"] == "https://pixabay.com/videos/id-landscape/"
+    assert ordered[0]["duplicate_source"] is True
+
+
 def test_preflight_uses_scene_visuals_before_chapter_title(tmp_path, monkeypatch):
     from app.services.longform_media_preflight import prepare_longform_media_board
 

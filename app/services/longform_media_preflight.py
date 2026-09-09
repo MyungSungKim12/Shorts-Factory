@@ -177,15 +177,13 @@ def _asset_identity(asset: dict) -> str:
 
 
 def _prefer_unused_assets(assets: list[dict], used_assets: set[str]) -> list[dict]:
-    unused = []
-    repeated = []
+    marked = []
     for asset in assets:
         identity = _asset_identity(asset)
-        target = repeated if identity and identity in used_assets else unused
         item = dict(asset)
         item["duplicate_source"] = bool(identity and identity in used_assets)
-        target.append(item)
-    ordered = [*unused, *repeated]
+        marked.append(item)
+    ordered = sorted(marked, key=_board_asset_sort_key)
     for asset in ordered:
         identity = _asset_identity(asset)
         if identity:
