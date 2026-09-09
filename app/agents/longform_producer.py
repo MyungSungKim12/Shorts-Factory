@@ -814,7 +814,7 @@ def _longform_subtitle_style(font: str, style_id: str = "clean_news") -> str:
             "font_size": 15,
             "outline": 1,
             "shadow": 0,
-            "margin_v": 58,
+            "margin_v": 36,
             "back": "&H80000000",
         },
         "documentary": {

@@ -454,7 +454,7 @@ def test_clean_news_subtitle_style_is_not_shorts_caption_style():
     assert "BackColour=&H80000000" in style
     assert "MarginL=320" in style
     assert "MarginR=320" in style
-    assert "MarginV=58" in style
+    assert "MarginV=36" in style
 
 
 def test_longform_srt_wraps_long_lines_to_two_safe_lines(tmp_path):
