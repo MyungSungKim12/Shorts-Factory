@@ -626,7 +626,7 @@ def test_longform_video_does_not_pad_audio_with_silence(tmp_path, monkeypatch):
     assert "apad" not in command
 
 
-def test_longform_concat_reencodes_timestamps_for_smooth_scene_boundaries(
+def test_longform_concat_crossfades_scene_boundaries(
     tmp_path, monkeypatch
 ):
     from app.agents import longform_producer
@@ -645,14 +645,25 @@ def test_longform_concat_reencodes_timestamps_for_smooth_scene_boundaries(
 
     monkeypatch.setattr(longform_producer, "_run_ffmpeg", fake_run)
 
-    longform_producer._concat_longform_files(files, output, "ffmpeg", tmp_path)
+    longform_producer._concat_longform_files(
+        files,
+        output,
+        "ffmpeg",
+        tmp_path,
+        durations=[5.0, 5.0],
+        transition_duration=0.28,
+    )
 
     command = commands[0]
-    assert "-c" not in command
     assert "libx264" in command
     assert "aac" in command
-    assert any("setpts=PTS-STARTPTS" in item for item in command)
-    assert any("aresample=async=1:first_pts=0" in item for item in command)
+    assert "-filter_complex" in command
+    filter_graph = command[command.index("-filter_complex") + 1]
+    assert "xfade=transition=fade:duration=0.280:offset=4.720" in filter_graph
+    assert "acrossfade=d=0.280" in filter_graph
+    assert "[vout]" in filter_graph
+    assert "[aout]" in filter_graph
+    assert command[command.index("-map") + 1] == "[vout]"
 
 
 def test_finish_longform_caps_output_to_planned_duration(tmp_path, monkeypatch):

@@ -833,8 +833,29 @@ def _longform_subtitle_style(font: str, style_id: str = "clean_news") -> str:
 
 
 def _concat_longform_files(
-    files: list[Path], output: Path, ffmpeg_path: str, tmp_path: Path
+    files: list[Path],
+    output: Path,
+    ffmpeg_path: str,
+    tmp_path: Path,
+    *,
+    durations: list[float] | None = None,
+    transition_duration: float | None = None,
 ) -> None:
+    transition = (
+        _longform_transition_duration()
+        if transition_duration is None
+        else max(0.0, float(transition_duration))
+    )
+    if len(files) > 1 and transition > 0:
+        _concat_longform_files_with_crossfade(
+            files,
+            output,
+            ffmpeg_path,
+            durations=durations,
+            transition_duration=transition,
+        )
+        return
+
     manifest = tmp_path / f"{output.stem}-concat.txt"
     lines = [
         f"file '{path.resolve().as_posix().replace(chr(39), chr(39) + chr(92) + chr(39) + chr(39))}'"
@@ -875,6 +896,87 @@ def _concat_longform_files(
         ],
         timeout=1800,
     )
+
+
+def _longform_transition_duration() -> float:
+    try:
+        configured = float(os.getenv("LONGFORM_SCENE_TRANSITION_SEC", "0.28"))
+    except ValueError:
+        return 0.28
+    return min(0.5, max(0.0, configured))
+
+
+def _concat_longform_files_with_crossfade(
+    files: list[Path],
+    output: Path,
+    ffmpeg_path: str,
+    *,
+    durations: list[float] | None,
+    transition_duration: float,
+) -> None:
+    durations = durations or [0.0 for _ in files]
+    if len(durations) != len(files):
+        raise ValueError("롱폼 장면 파일 수와 duration 수가 다릅니다.")
+
+    command = [ffmpeg_path]
+    for path in files:
+        command.extend(["-i", str(path)])
+
+    filters: list[str] = []
+    for index in range(len(files)):
+        filters.append(
+            f"[{index}:v]setpts=PTS-STARTPTS,fps=30,format=yuv420p[v{index}]"
+        )
+        filters.append(f"[{index}:a]asetpts=PTS-STARTPTS[a{index}]")
+
+    current_v = "v0"
+    current_a = "a0"
+    elapsed = float(durations[0])
+    for index in range(1, len(files)):
+        offset = max(0.01, elapsed - transition_duration)
+        next_v = "vout" if index == len(files) - 1 else f"vx{index}"
+        next_a = "aout" if index == len(files) - 1 else f"ax{index}"
+        filters.append(
+            f"[{current_v}][v{index}]"
+            f"xfade=transition=fade:duration={transition_duration:.3f}:offset={offset:.3f}"
+            f"[{next_v}]"
+        )
+        filters.append(
+            f"[{current_a}][a{index}]"
+            f"acrossfade=d={transition_duration:.3f}:c1=tri:c2=tri"
+            f"[{next_a}]"
+        )
+        current_v = next_v
+        current_a = next_a
+        elapsed = elapsed + float(durations[index]) - transition_duration
+
+    command.extend(
+        [
+            "-filter_complex",
+            ";".join(filters),
+            "-map",
+            "[vout]",
+            "-map",
+            "[aout]",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "24",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "160k",
+            "-ar",
+            "44100",
+            "-movflags",
+            "+faststart",
+            "-y",
+            str(output),
+        ]
+    )
+    _run_ffmpeg(command, timeout=1800)
 
 
 def _longform_click_package(script: dict) -> dict:
@@ -962,6 +1064,7 @@ def _render_longform(
         audio_durations = {}
         cursor = 0.0
         tempo = _longform_playback_tempo()
+        transition = _longform_transition_duration()
         for index, scene in enumerate(script["scenes"], start=1):
             if max_total_duration is not None and cursor >= max_total_duration:
                 break
@@ -990,8 +1093,9 @@ def _render_longform(
                     break
                 scene_duration = min(scene_duration, remaining)
             audio_durations[scene["n"]] = min(duration, scene_duration)
-            scene_starts[scene["n"]] = cursor
-            cursor += scene_duration
+            scene_start = max(0.0, cursor - (transition if index > 1 else 0.0))
+            scene_starts[scene["n"]] = scene_start
+            cursor = scene_start + scene_duration
             rendered_scene = dict(scene)
             rendered_scene["duration_sec"] = scene_duration
             rendered_scenes.append(rendered_scene)
@@ -1039,7 +1143,17 @@ def _render_longform(
             scene_videos.append(scene_video)
 
         concat_video = tmp_path / "longform-concat.mp4"
-        _concat_longform_files(scene_videos, concat_video, ffmpeg_path, tmp_path)
+        scene_durations = [
+            float(scene.get("duration_sec") or 0) for scene in rendered_scenes
+        ]
+        _concat_longform_files(
+            scene_videos,
+            concat_video,
+            ffmpeg_path,
+            tmp_path,
+            durations=scene_durations,
+            transition_duration=transition,
+        )
         srt_path = tmp_path / "longform.srt"
         render_script = dict(script)
         render_script["scenes"] = rendered_scenes
