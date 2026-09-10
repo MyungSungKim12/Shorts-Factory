@@ -727,6 +727,40 @@ def test_longform_concat_crossfades_scene_boundaries(
     assert command[command.index("-map") + 1] == "[vout]"
 
 
+def test_longform_concat_uses_lightweight_concat_for_many_scenes(
+    tmp_path, monkeypatch
+):
+    from app.agents import longform_producer
+
+    commands = []
+    files = []
+    for index in range(40):
+        scene = tmp_path / f"scene-{index}.mp4"
+        scene.write_bytes(b"mp4")
+        files.append(scene)
+    output = tmp_path / "concat.mp4"
+
+    def fake_run(command, cwd=None, timeout=None):
+        commands.append(command)
+        Path(command[-1]).write_bytes(b"mp4")
+
+    monkeypatch.setattr(longform_producer, "_run_ffmpeg", fake_run)
+
+    longform_producer._concat_longform_files(
+        files,
+        output,
+        "ffmpeg",
+        tmp_path,
+        durations=[12.0] * len(files),
+        transition_duration=0.28,
+    )
+
+    command = commands[0]
+    assert "-f" in command
+    assert "concat" in command
+    assert "-filter_complex" not in command
+
+
 def test_finish_longform_caps_output_to_planned_duration(tmp_path, monkeypatch):
     from app.agents import longform_producer
 

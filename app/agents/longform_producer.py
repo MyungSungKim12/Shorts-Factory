@@ -859,7 +859,7 @@ def _concat_longform_files(
         if transition_duration is None
         else max(0.0, float(transition_duration))
     )
-    if len(files) > 1 and transition > 0:
+    if len(files) > 1 and transition > 0 and len(files) <= 8:
         _concat_longform_files_with_crossfade(
             files,
             output,
