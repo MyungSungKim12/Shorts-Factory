@@ -886,22 +886,8 @@ def _concat_longform_files(
             str(manifest),
             "-fflags",
             "+genpts",
-            "-vf",
-            "setpts=PTS-STARTPTS,fps=30,format=yuv420p",
-            "-af",
-            "aresample=async=1:first_pts=0",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "24",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "160k",
-            "-ar",
-            "44100",
+            "-c",
+            "copy",
             "-movflags",
             "+faststart",
             "-y",
@@ -1239,12 +1225,12 @@ def run_longform_producer(data_dir: Path, run_id: str, ffmpeg_path: str) -> dict
 
 
 def run_longform_preview(data_dir: Path, run_id: str, ffmpeg_path: str) -> dict:
-    """Render the opening 30 seconds into `preview_30s.mp4` for review."""
+    """Render the opening two minutes into `preview_30s.mp4` for review."""
     return _render_longform(
         data_dir,
         run_id,
         ffmpeg_path,
         output_name="preview_30s.mp4",
         log_name="preview_log.json",
-        max_total_duration=30.0,
+        max_total_duration=120.0,
     )

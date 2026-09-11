@@ -516,6 +516,22 @@ def test_longform_preview_skips_tiny_tail_scene_after_transition_overlap():
     assert _should_render_longform_scene(43.0, 45.0, 0.28) is True
 
 
+def test_longform_review_preview_is_two_minutes(tmp_path, monkeypatch):
+    from app.agents import longform_producer
+
+    seen = {}
+
+    def fake_render(data_dir, run_id, ffmpeg_path, **kwargs):
+        seen.update(kwargs)
+        return {"output_file": str(tmp_path / "preview_30s.mp4")}
+
+    monkeypatch.setattr(longform_producer, "_render_longform", fake_render)
+
+    longform_producer.run_longform_preview(tmp_path, "longform-demo", "ffmpeg")
+
+    assert seen["max_total_duration"] == 120.0
+
+
 def test_longform_still_filter_keeps_images_static():
     from app.agents.longform_producer import _longform_still_filter
 
@@ -758,7 +774,9 @@ def test_longform_concat_uses_lightweight_concat_for_many_scenes(
     command = commands[0]
     assert "-f" in command
     assert "concat" in command
+    assert command[command.index("-c") + 1] == "copy"
     assert "-filter_complex" not in command
+    assert "-vf" not in command
 
 
 def test_finish_longform_caps_output_to_planned_duration(tmp_path, monkeypatch):

@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from app.agents.orchestrator import run_pipeline
+from app.routes.longform import router as longform_router
 from app.routes.slots import require_dashboard_token, router as slots_router
 from app.services.server_files import list_server_files, resolve_download
 
@@ -31,6 +32,7 @@ app.add_middleware(
 )
 
 app.include_router(slots_router)
+app.include_router(longform_router)
 
 # 백그라운드 작업 상태
 _pipeline_running = False
