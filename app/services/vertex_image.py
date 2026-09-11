@@ -45,7 +45,10 @@ def _load_sdk():
 def _client_from_environment():
     genai, sdk_types = _load_sdk()
     project = os.getenv("GOOGLE_CLOUD_PROJECT", "").strip()
-    location = os.getenv("GOOGLE_CLOUD_LOCATION", "global").strip() or "global"
+    location = (
+        os.getenv("IMAGEN_LOCATION")
+        or os.getenv("GOOGLE_CLOUD_LOCATION", "global")
+    ).strip() or "global"
     if not project:
         raise ImagenUnavailable("GOOGLE_CLOUD_PROJECT is missing")
     try:
@@ -99,7 +102,7 @@ def generate_thumbnail_poster(
     elif sdk_types is None:
         _, sdk_types = _load_sdk()
 
-    model = os.getenv("IMAGEN_THUMBNAIL_MODEL", "imagen-3.0-generate-002").strip()
+    model = os.getenv("IMAGEN_THUMBNAIL_MODEL", "gemini-2.5-flash-image").strip()
     estimated_cost = _estimated_cost_usd()
     reservation = None
     if os.getenv("AI_CREDIT_MODE"):
@@ -121,27 +124,54 @@ def generate_thumbnail_poster(
     destination = Path(output)
     destination.parent.mkdir(parents=True, exist_ok=True)
     try:
-        response = client.models.generate_images(
-            model=model,
-            prompt=thumbnail_poster_prompt(title=title, brief=brief),
-            config=sdk_types.GenerateImagesConfig(
-                number_of_images=1,
-                aspect_ratio="16:9",
-                include_rai_reason=True,
-                output_mime_type="image/jpeg",
-                person_generation="dont_allow",
-            ),
-        )
-        generated = getattr(response, "generated_images", None) or []
-        if not generated:
-            raise ImagenGenerationFailed("Imagen returned no image")
-        image = getattr(generated[0], "image", generated[0])
-        if hasattr(image, "save"):
-            image.save(str(destination))
-        elif hasattr(image, "image_bytes"):
-            destination.write_bytes(image.image_bytes)
+        prompt = thumbnail_poster_prompt(title=title, brief=brief)
+        if model.startswith("imagen-"):
+            response = client.models.generate_images(
+                model=model,
+                prompt=prompt,
+                config=sdk_types.GenerateImagesConfig(
+                    number_of_images=1,
+                    aspect_ratio="16:9",
+                    include_rai_reason=True,
+                    output_mime_type="image/jpeg",
+                    person_generation="dont_allow",
+                ),
+            )
+            generated = getattr(response, "generated_images", None) or []
+            if not generated:
+                raise ImagenGenerationFailed("Imagen returned no image")
+            image = getattr(generated[0], "image", generated[0])
+            if hasattr(image, "save"):
+                image.save(str(destination))
+            elif hasattr(image, "image_bytes"):
+                destination.write_bytes(image.image_bytes)
+            else:
+                raise ImagenGenerationFailed("Imagen image object cannot be saved")
         else:
-            raise ImagenGenerationFailed("Imagen image object cannot be saved")
+            response = client.models.generate_content(
+                model=model,
+                contents=prompt,
+                config=sdk_types.GenerateContentConfig(
+                    response_modalities=["IMAGE"],
+                    image_config=sdk_types.ImageConfig(
+                        aspect_ratio="16:9",
+                        output_mime_type="image/jpeg",
+                        person_generation="dont_allow",
+                    ),
+                ),
+            )
+            for candidate in getattr(response, "candidates", []) or []:
+                content = getattr(candidate, "content", None)
+                for part in getattr(content, "parts", []) or []:
+                    inline = getattr(part, "inline_data", None)
+                    data = getattr(inline, "data", None) if inline else None
+                    if data:
+                        destination.write_bytes(data)
+                        break
+                if destination.exists():
+                    break
+            if not destination.exists():
+                raise ImagenGenerationFailed("Gemini image returned no inline image")
         if not destination.is_file() or destination.stat().st_size == 0:
             raise ImagenGenerationFailed("Imagen output file is empty")
     except (ImagenUnavailable, ImagenGenerationFailed):

@@ -331,7 +331,8 @@ def create_longform_thumbnail(script: dict, output: Path, background: Path | Non
             base_draw.line((x, 0, x - 260, 720), fill=(95, 0, 12, 38), width=10)
         image = image.filter(ImageFilter.GaussianBlur(radius=0.4))
     image = image.convert("RGBA")
-    draw = ImageDraw.Draw(image, "RGBA")
+    overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay, "RGBA")
     for x in range(1280):
         ratio = x / 1279
         alpha = int(238 * (1.0 - ratio))
@@ -339,8 +340,10 @@ def create_longform_thumbnail(script: dict, output: Path, background: Path | Non
     for y in range(720):
         ratio = y / 719
         draw.line((0, y, 1280, y), fill=(5, 8, 14, int(25 + 88 * ratio)))
-    draw.polygon([(700, 0), (1280, 0), (1280, 720), (570, 720)], fill=(140, 0, 0, 75))
-    draw.rectangle((0, 0, 810, 720), fill=(0, 0, 0, 38))
+    draw.polygon([(700, 0), (1280, 0), (1280, 720), (570, 720)], fill=(135, 0, 0, 42))
+    draw.rectangle((0, 0, 810, 720), fill=(0, 0, 0, 32))
+    image.alpha_composite(overlay)
+    draw = ImageDraw.Draw(image, "RGBA")
     main_lines = _thumbnail_main_lines(main_text)[:2]
     y = 66
     largest_bbox = (56, y, 760, y)

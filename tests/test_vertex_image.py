@@ -11,6 +11,8 @@ class FakeConfig:
 
 class FakeTypes:
     GenerateImagesConfig = FakeConfig
+    GenerateContentConfig = FakeConfig
+    ImageConfig = FakeConfig
 
 
 class FakeGeneratedImage:
@@ -28,6 +30,22 @@ class FakeModels:
     def generate_images(self, **kwargs):
         self.calls.append(kwargs)
         return SimpleNamespace(generated_images=[FakeGeneratedImage()])
+
+    def generate_content(self, **kwargs):
+        self.calls.append(kwargs)
+        return SimpleNamespace(
+            candidates=[
+                SimpleNamespace(
+                    content=SimpleNamespace(
+                        parts=[
+                            SimpleNamespace(
+                                inline_data=SimpleNamespace(data=b"gemini-poster")
+                            )
+                        ]
+                    )
+                )
+            ]
+        )
 
 
 class FakeClient:
@@ -48,7 +66,35 @@ def test_disabled_thumbnail_poster_never_constructs_client(tmp_path, monkeypatch
         )
 
 
-def test_thumbnail_poster_uses_landscape_youtube_prompt(tmp_path, monkeypatch):
+def test_thumbnail_poster_uses_gemini_image_when_configured(tmp_path, monkeypatch):
+    from app.services.vertex_image import generate_thumbnail_poster
+
+    monkeypatch.setenv("LONGFORM_THUMBNAIL_AI_ENABLED", "true")
+    monkeypatch.delenv("AI_CREDIT_MODE", raising=False)
+    monkeypatch.setenv("IMAGEN_THUMBNAIL_MODEL", "gemini-2.5-flash-image")
+    client = FakeClient()
+
+    result = generate_thumbnail_poster(
+        tmp_path / "poster.jpg",
+        title="남극의 피폭포",
+        brief="붉은 물이 얼지 않는 남극 빙하 미스터리",
+        client=client,
+        sdk_types=FakeTypes,
+    )
+
+    call = client.models.calls[0]
+    config = call["config"]
+    assert result.output.read_bytes() == b"gemini-poster"
+    assert result.model == "gemini-2.5-flash-image"
+    assert result.estimated_cost_usd > 0
+    assert "photorealistic YouTube documentary thumbnail background poster" in call["contents"]
+    assert "no text" in call["contents"].lower()
+    assert config.response_modalities == ["IMAGE"]
+    assert config.image_config.aspect_ratio == "16:9"
+    assert config.image_config.output_mime_type == "image/jpeg"
+
+
+def test_thumbnail_poster_can_use_imagen_model(tmp_path, monkeypatch):
     from app.services.vertex_image import generate_thumbnail_poster
 
     monkeypatch.setenv("LONGFORM_THUMBNAIL_AI_ENABLED", "true")
@@ -65,15 +111,9 @@ def test_thumbnail_poster_uses_landscape_youtube_prompt(tmp_path, monkeypatch):
     )
 
     call = client.models.calls[0]
-    config = call["config"]
     assert result.output.read_bytes() == b"poster"
     assert result.model == "imagen-3.0-generate-002"
-    assert result.estimated_cost_usd > 0
-    assert "photorealistic YouTube documentary thumbnail background poster" in call["prompt"]
-    assert "no text" in call["prompt"].lower()
-    assert config.aspect_ratio == "16:9"
-    assert config.number_of_images == 1
-    assert config.output_mime_type == "image/jpeg"
+    assert call["config"].aspect_ratio == "16:9"
 
 
 def test_credit_free_mode_prevents_new_thumbnail_poster(tmp_path, monkeypatch):

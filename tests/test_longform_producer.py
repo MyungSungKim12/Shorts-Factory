@@ -433,6 +433,32 @@ def test_create_longform_thumbnail_writes_clickable_banner(tmp_path):
         assert image.size == (1280, 720)
 
 
+def test_thumbnail_overlay_keeps_right_side_background_visible(tmp_path):
+    from app.agents.longform_producer import create_longform_thumbnail
+    from PIL import Image
+
+    background = tmp_path / "background.jpg"
+    image = Image.new("RGB", (1280, 720), (30, 90, 120))
+    image.paste((50, 150, 70), (900, 0, 1280, 720))
+    image.save(background)
+    output = tmp_path / "thumbnail.png"
+
+    create_longform_thumbnail(
+        {
+            "thumbnail_main": "사라진 지하문명",
+            "thumbnail_sub": "입구는 남았다",
+        },
+        output,
+        background=background,
+    )
+
+    with Image.open(output) as rendered:
+        pixel = rendered.convert("RGB").getpixel((1100, 360))
+
+    assert pixel[1] > pixel[0]
+    assert pixel[2] > 20
+
+
 def test_thumbnail_main_text_splits_into_two_impact_lines():
     from app.agents.longform_producer import _thumbnail_main_lines
 
