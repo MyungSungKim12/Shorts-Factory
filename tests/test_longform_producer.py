@@ -481,6 +481,29 @@ def test_thumbnail_yellow_strip_wraps_subtitle_not_full_headline(tmp_path):
     assert x1 < 650
 
 
+def test_thumbnail_main_text_stays_inside_left_readable_area(tmp_path):
+    from app.agents.longform_producer import create_longform_thumbnail
+    from PIL import Image
+
+    background = tmp_path / "background.jpg"
+    Image.new("RGB", (1280, 720), (25, 50, 70)).save(background)
+    output = tmp_path / "thumbnail.png"
+
+    result = create_longform_thumbnail(
+        {
+            "thumbnail_main": "땅속의 지하도시",
+            "thumbnail_sub": "왜 버렸나?",
+        },
+        output,
+        background=background,
+    )
+
+    boxes = result["text_boxes"]
+    assert len(boxes) == 2
+    assert all(box["right"] <= 710 for box in boxes)
+    assert boxes[0]["bottom"] < boxes[1]["top"]
+
+
 def test_thumbnail_main_text_splits_into_two_impact_lines():
     from app.agents.longform_producer import _thumbnail_main_lines
 

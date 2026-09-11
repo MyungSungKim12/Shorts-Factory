@@ -306,6 +306,26 @@ def _draw_thumbnail_text(
     return bbox
 
 
+def _fit_thumbnail_font(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    *,
+    preferred_size: int,
+    min_size: int,
+    max_width: int,
+    stroke_width: int,
+) -> tuple[ImageFont.FreeTypeFont | ImageFont.ImageFont, int, tuple[int, int, int, int]]:
+    size = preferred_size
+    while size > min_size:
+        font = _title_font(size)
+        bbox = draw.textbbox((0, 0), text, font=font, stroke_width=stroke_width)
+        if bbox[2] - bbox[0] <= max_width:
+            return font, size, bbox
+        size -= 4
+    font = _title_font(min_size)
+    return font, min_size, draw.textbbox((0, 0), text, font=font, stroke_width=stroke_width)
+
+
 def create_longform_thumbnail(script: dict, output: Path, background: Path | None = None) -> dict:
     """Create a high-contrast Korean YouTube thumbnail for a longform episode."""
     main_text, sub_text = _thumbnail_text(script)
@@ -347,14 +367,24 @@ def create_longform_thumbnail(script: dict, output: Path, background: Path | Non
     main_lines = _thumbnail_main_lines(main_text)[:2]
     y = 66
     largest_bbox = (56, y, 760, y)
+    text_boxes: list[dict[str, int | str]] = []
     for line_index, line in enumerate(main_lines):
         color = (252, 252, 248) if line_index == 0 else (238, 15, 15)
         compact_len = len(line.replace(" ", ""))
         if line_index == 0:
-            font_size = 156 if compact_len <= 5 else 126
+            preferred_size = 156 if compact_len <= 5 else 126
+            max_width = 555
         else:
-            font_size = 192 if compact_len <= 5 else 154
-        font = _title_font(font_size)
+            preferred_size = 188 if compact_len <= 4 else 154
+            max_width = 650
+        font, font_size, _ = _fit_thumbnail_font(
+            draw,
+            line,
+            preferred_size=preferred_size,
+            min_size=104,
+            max_width=max_width,
+            stroke_width=15,
+        )
         bbox = _draw_thumbnail_text(
             image,
             (58, y),
@@ -364,13 +394,23 @@ def create_longform_thumbnail(script: dict, output: Path, background: Path | Non
             stroke_width=15,
             seed=f"{main_text}-{line_index}",
         )
+        text_boxes.append(
+            {
+                "text": line,
+                "left": int(bbox[0]),
+                "top": int(bbox[1]),
+                "right": int(bbox[2]),
+                "bottom": int(bbox[3]),
+                "font_size": int(font_size),
+            }
+        )
         largest_bbox = (
             min(largest_bbox[0], bbox[0]),
             min(largest_bbox[1], bbox[1]),
             max(largest_bbox[2], bbox[2]),
             max(largest_bbox[3], bbox[3]),
         )
-        y += int(font_size * 0.82)
+        y = int(bbox[3] + 10)
     strip_y = min(598, max(414, y + 4))
     strip_x0 = 48
     sub_font_size = 58
@@ -416,6 +456,7 @@ def create_longform_thumbnail(script: dict, output: Path, background: Path | Non
         "layout": "left_big_white_red_yellow_torn_strip",
         "background_mode": "ai_or_stock_poster",
         "strip_box": (strip_x0, strip_y, strip_x1, strip_y + strip_height),
+        "text_boxes": text_boxes,
     }
 
 
