@@ -2,9 +2,15 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+from PIL import Image
+
 
 def test_longform_workflow_creates_reviewable_draft_from_performance_report(tmp_path):
-    from app.services.longform_workflow import create_longform_draft
+    from app.services import longform_workflow
+
+    background = tmp_path / "background.jpg"
+    Image.new("RGB", (1280, 720), (30, 40, 50)).save(background)
+    longform_workflow._find_thumbnail_background = lambda data_dir, script, candidate, revision=1, ffmpeg_path="ffmpeg": background
 
     reports = tmp_path / "reports"
     reports.mkdir()
@@ -25,7 +31,7 @@ def test_longform_workflow_creates_reviewable_draft_from_performance_report(tmp_
         encoding="utf-8",
     )
 
-    result = create_longform_draft(
+    result = longform_workflow.create_longform_draft(
         tmp_path,
         now=datetime(2026, 9, 11, 9, 0, tzinfo=timezone.utc),
     )
@@ -36,6 +42,7 @@ def test_longform_workflow_creates_reviewable_draft_from_performance_report(tmp_
     assert "TOP 5" in result["topic"]["title"]
     assert (run_dir / "script.json").is_file()
     assert (run_dir / "thumbnail.png").is_file()
+    assert (run_dir / "thumbnail_background.jpg").is_file()
     script = json.loads((run_dir / "script.json").read_text(encoding="utf-8"))
     assert script["format"] == "longform"
     assert len(script["scenes"]) == 40
@@ -87,17 +94,18 @@ def test_longform_workflow_upload_stage_uses_reviewed_output_only(tmp_path):
 
 
 def test_longform_workflow_can_regenerate_thumbnail_without_replacing_topic(tmp_path):
-    from app.services.longform_workflow import (
-        create_longform_draft,
-        regenerate_longform_thumbnail,
-    )
+    from app.services import longform_workflow
 
-    draft = create_longform_draft(
+    background = tmp_path / "background.jpg"
+    Image.new("RGB", (1280, 720), (30, 40, 50)).save(background)
+    longform_workflow._find_thumbnail_background = lambda data_dir, script, candidate, revision=1, ffmpeg_path="ffmpeg": background
+
+    draft = longform_workflow.create_longform_draft(
         tmp_path,
         now=datetime(2026, 9, 11, 9, 0, tzinfo=timezone.utc),
     )
 
-    result = regenerate_longform_thumbnail(tmp_path, draft["run_id"])
+    result = longform_workflow.regenerate_longform_thumbnail(tmp_path, draft["run_id"])
 
     run_dir = tmp_path / "longform" / draft["run_id"]
     script = json.loads((run_dir / "script.json").read_text(encoding="utf-8"))
@@ -106,3 +114,16 @@ def test_longform_workflow_can_regenerate_thumbnail_without_replacing_topic(tmp_
     assert result["thumbnail_revision"] == 2
     assert script["thumbnail_main"] != "지구가 숨긴 TOP 5"
     assert (run_dir / "thumbnail.png").is_file()
+
+
+def test_longform_workflow_refuses_card_thumbnail_when_background_is_missing(tmp_path):
+    from app.services import longform_workflow
+
+    longform_workflow._find_thumbnail_background = lambda data_dir, script, candidate, revision=1, ffmpeg_path="ffmpeg": None
+
+    try:
+        longform_workflow.create_longform_draft(tmp_path)
+    except RuntimeError as exc:
+        assert "썸네일 배경" in str(exc)
+    else:
+        raise AssertionError("draft creation must not fall back to a card thumbnail")

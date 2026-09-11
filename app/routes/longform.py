@@ -91,7 +91,10 @@ def longform_jobs():
 
 @router.post("", dependencies=[Depends(require_dashboard_token)])
 def longform_create_draft():
-    return create_longform_draft(_data_dir())
+    try:
+        return create_longform_draft(_data_dir(), ffmpeg_path=_ffmpeg_path())
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.post("/{run_id}/approve-topic", dependencies=[Depends(require_dashboard_token)])
@@ -110,7 +113,11 @@ def longform_approve_topic(run_id: str = Path(...)):
 @router.post("/{run_id}/thumbnail", dependencies=[Depends(require_dashboard_token)])
 def longform_regenerate_thumbnail(run_id: str = Path(...)):
     try:
-        return regenerate_longform_thumbnail(_data_dir(), _safe_run_id(run_id))
+        return regenerate_longform_thumbnail(
+            _data_dir(),
+            _safe_run_id(run_id),
+            ffmpeg_path=_ffmpeg_path(),
+        )
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

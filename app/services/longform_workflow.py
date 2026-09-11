@@ -5,12 +5,22 @@ import json
 import re
 import subprocess
 import sys
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
 from app.agents.longform_producer import create_longform_thumbnail
 from app.models import validate_longform_script
+from app.services.media_library import (
+    MediaCandidate,
+    _download_candidate,
+    _is_usable_download,
+    _nasa_image_candidates,
+    _pexels_photo_candidates,
+    _wikimedia_image_candidates,
+    choose_candidates,
+)
 
 
 RUN_ID_PATTERN = re.compile(r"^longform-[a-z0-9][a-z0-9_-]{2,80}$")
@@ -208,6 +218,105 @@ def _build_script(candidate: dict) -> dict:
     return validate_longform_script(script)
 
 
+def _thumbnail_queries(script: dict, candidate: dict, revision: int) -> list[str]:
+    title = str(script.get("title") or "").strip()
+    source_topic = str(candidate.get("topic") or candidate.get("title") or "").strip()
+    base = [
+        source_topic,
+        title,
+    ]
+    if any(token in title for token in ("지하", "땅속", "동굴", "광산", "도시")):
+        base.extend([
+            "underground city cave landscape",
+            "ancient underground city tunnel",
+            "cave city documentary landscape",
+        ])
+    elif any(token in title for token in ("빙하", "남극", "피폭포", "호수")):
+        base.extend([
+            "Antarctica glacier red waterfall landscape",
+            "Blood Falls Antarctica landscape",
+            "glacier cave documentary landscape",
+        ])
+    elif any(token in title for token in ("고대", "구조물", "거석")):
+        base.extend([
+            "ancient megalithic ruins landscape",
+            "mysterious ancient stone structure",
+        ])
+    else:
+        base.extend([
+            "mysterious earth landscape documentary",
+            "strange natural phenomenon landscape",
+        ])
+    rotated = base[(revision - 1) % len(base):] + base[:(revision - 1) % len(base)]
+    return [query for query in dict.fromkeys(rotated) if query]
+
+
+def _landscape_first(candidates: list[MediaCandidate]) -> list[MediaCandidate]:
+    return sorted(
+        candidates,
+        key=lambda item: (
+            item.width >= item.height,
+            item.width * item.height,
+        ),
+        reverse=True,
+    )
+
+
+def _find_thumbnail_background(
+    data_dir: Path,
+    script: dict,
+    candidate: dict,
+    *,
+    revision: int = 1,
+    ffmpeg_path: str = "ffmpeg",
+) -> Path | None:
+    del ffmpeg_path
+    target = Path(data_dir) / "longform" / str(script["run_id"]) / "thumbnail_background.jpg"
+    collectors = (
+        _wikimedia_image_candidates,
+        _nasa_image_candidates,
+        _pexels_photo_candidates,
+    )
+    for query in _thumbnail_queries(script, candidate, revision):
+        candidates: list[MediaCandidate] = []
+        for collector in collectors:
+            candidates.extend(collector(query))
+        for item in _landscape_first(choose_candidates(candidates, set())):
+            try:
+                downloaded = _download_candidate(item, target)
+            except Exception:
+                continue
+            if downloaded and _is_usable_download(target):
+                return target
+    return None
+
+
+def _write_thumbnail_or_fail(
+    data_dir: Path,
+    run_dir: Path,
+    script: dict,
+    candidate: dict,
+    *,
+    revision: int = 1,
+    ffmpeg_path: str = "ffmpeg",
+) -> dict:
+    lookup_script = dict(script)
+    lookup_script["run_id"] = run_dir.name
+    background = _find_thumbnail_background(
+        data_dir,
+        lookup_script,
+        candidate,
+        revision=revision,
+        ffmpeg_path=ffmpeg_path,
+    )
+    if background is None or not Path(background).is_file():
+        raise RuntimeError("사진형 썸네일 배경을 확보하지 못했습니다. 카드형 썸네일로 대체하지 않습니다.")
+    final_background = run_dir / "thumbnail_background.jpg"
+    if Path(background).resolve() != final_background.resolve():
+        shutil.copyfile(background, final_background)
+    return create_longform_thumbnail(script, run_dir / "thumbnail.png", background=final_background)
+
+
 def _workflow_state(
     *,
     run_id: str,
@@ -227,7 +336,12 @@ def _workflow_state(
     return state
 
 
-def create_longform_draft(data_dir: Path, *, now: datetime | None = None) -> dict:
+def create_longform_draft(
+    data_dir: Path,
+    *,
+    now: datetime | None = None,
+    ffmpeg_path: str = "ffmpeg",
+) -> dict:
     timestamp = (now or datetime.now(timezone.utc)).strftime("%Y%m%d-%H%M%S")
     run_id = f"longform-{timestamp}"
     candidate = _candidate_from_report(data_dir)
@@ -235,7 +349,14 @@ def create_longform_draft(data_dir: Path, *, now: datetime | None = None) -> dic
     run_dir = _longform_root(data_dir) / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
     _write_json(run_dir / "script.json", script)
-    create_longform_thumbnail(script, run_dir / "thumbnail.png")
+    thumbnail = _write_thumbnail_or_fail(
+        Path(data_dir),
+        run_dir,
+        script,
+        candidate,
+        revision=1,
+        ffmpeg_path=ffmpeg_path,
+    )
     topic = {
         "title": script["title"],
         "brief": candidate.get("expansion_brief") or script["hook"],
@@ -249,6 +370,8 @@ def create_longform_draft(data_dir: Path, *, now: datetime | None = None) -> dic
         now=now,
         extra={
             "thumbnail_url": f"/api/longform/{run_id}/thumbnail",
+            "thumbnail": thumbnail,
+            "thumbnail_revision": 1,
             "next_action": "approve_topic",
         },
     )
@@ -256,7 +379,12 @@ def create_longform_draft(data_dir: Path, *, now: datetime | None = None) -> dic
     return state
 
 
-def regenerate_longform_thumbnail(data_dir: Path, run_id: str) -> dict:
+def regenerate_longform_thumbnail(
+    data_dir: Path,
+    run_id: str,
+    *,
+    ffmpeg_path: str = "ffmpeg",
+) -> dict:
     run_id = _safe_run_id(run_id)
     run_dir = _longform_root(data_dir) / run_id
     script_path = run_dir / "script.json"
@@ -270,13 +398,26 @@ def regenerate_longform_thumbnail(data_dir: Path, run_id: str) -> dict:
     script["thumbnail_sub"] = sub
     script = validate_longform_script(script)
     _write_json(script_path, script)
-    create_longform_thumbnail(script, run_dir / "thumbnail.png")
+    topic = workflow.get("topic") if isinstance(workflow.get("topic"), dict) else {}
+    candidate = {
+        "title": topic.get("title") or script.get("title"),
+        "topic": topic.get("brief") or script.get("title"),
+    }
+    thumbnail = _write_thumbnail_or_fail(
+        Path(data_dir),
+        run_dir,
+        script,
+        candidate,
+        revision=revision,
+        ffmpeg_path=ffmpeg_path,
+    )
     workflow.update(
         {
             "run_id": run_id,
             "status": "DRAFT_TOPIC",
             "thumbnail_revision": revision,
             "thumbnail_url": f"/api/longform/{run_id}/thumbnail",
+            "thumbnail": thumbnail,
             "updated_at": _now_iso(),
         }
     )
