@@ -92,8 +92,14 @@ def _candidate_from_report(data_dir: Path) -> dict:
 def _thumbnail_text(title: str) -> tuple[str, str]:
     if "피폭포" in title:
         return "남극의 피폭포", "절대 안 언다?"
+    if any(token in title for token in ("지하", "땅속", "동굴", "광산", "도시")):
+        return "땅속의 지하도시", "왜 버렸나?"
+    if any(token in title for token in ("빙하", "남극", "호수", "화산")):
+        return "빙하 밑 세계", "진짜 뜨겁다?"
+    if any(token in title for token in ("고대", "거석", "구조물", "유적")):
+        return "고대의 거석", "어떻게 옮겼나?"
     if "TOP" in title.upper():
-        return "지구가 숨긴 TOP 5", "이건 진짜 이상함"
+        return "이상한 지구기록", "왜 남았나?"
     compact = title.replace("진짜 이유", "").replace("비밀", "").strip(" ,:：")
     words = compact.split()
     main = " ".join(words[:3]) if words else compact[:12]
@@ -105,7 +111,7 @@ def _thumbnail_variant(title: str, revision: int) -> tuple[str, str]:
     variants = []
     if any(token in haystack for token in ("지하", "땅속", "동굴", "광산", "도시")):
         variants = [
-            ("지하도시 TOP5", "왜 버렸나?"),
+            ("땅속의 지하도시", "왜 버렸나?"),
             ("땅속의 세계", "실제로 있었다"),
             ("사라진 지하문명", "입구는 남았다"),
         ]

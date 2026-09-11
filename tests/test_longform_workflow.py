@@ -50,8 +50,9 @@ def test_longform_workflow_creates_reviewable_draft_from_performance_report(tmp_
     script = json.loads((run_dir / "script.json").read_text(encoding="utf-8"))
     assert script["format"] == "longform"
     assert len(script["scenes"]) == 40
-    assert script["thumbnail_main"]
-    assert script["thumbnail_sub"]
+    assert script["thumbnail_main"] != "지구가 숨긴 TOP 5"
+    assert "TOP" not in script["thumbnail_main"]
+    assert script["thumbnail_sub"].endswith("?")
 
 
 def test_longform_workflow_records_stage_requests_without_uploading_early(tmp_path):
@@ -122,6 +123,15 @@ def test_longform_workflow_can_regenerate_thumbnail_without_replacing_topic(tmp_
     assert result["thumbnail_revision"] == 2
     assert script["thumbnail_main"] != "지구가 숨긴 TOP 5"
     assert (run_dir / "thumbnail.png").is_file()
+
+
+def test_longform_thumbnail_text_uses_specific_underground_hook():
+    from app.services.longform_workflow import _thumbnail_text
+
+    main, sub = _thumbnail_text("땅속에 숨은 거대 세계 TOP 5")
+
+    assert main == "땅속의 지하도시"
+    assert sub == "왜 버렸나?"
 
 
 def test_longform_workflow_refuses_card_thumbnail_when_background_is_missing(tmp_path, monkeypatch):
