@@ -23,6 +23,11 @@ from app.services.media_library import (
     _wikimedia_image_candidates,
     choose_candidates,
 )
+from app.services.vertex_image import (
+    ImagenGenerationFailed,
+    ImagenUnavailable,
+    generate_thumbnail_poster,
+)
 
 
 RUN_ID_PATTERN = re.compile(r"^longform-[a-z0-9][a-z0-9_-]{2,80}$")
@@ -310,7 +315,7 @@ def _landscape_only(candidates: list[MediaCandidate]) -> list[MediaCandidate]:
     return [item for item in candidates if item.width >= item.height]
 
 
-def _find_thumbnail_background(
+def _stock_thumbnail_background(
     data_dir: Path,
     script: dict,
     candidate: dict,
@@ -338,6 +343,40 @@ def _find_thumbnail_background(
             if downloaded and _is_usable_download(target):
                 return target
     return None
+
+
+def _find_thumbnail_background(
+    data_dir: Path,
+    script: dict,
+    candidate: dict,
+    *,
+    revision: int = 1,
+    ffmpeg_path: str = "ffmpeg",
+) -> Path | None:
+    target = Path(data_dir) / "longform" / str(script["run_id"]) / "thumbnail_ai_poster.jpg"
+    try:
+        poster = generate_thumbnail_poster(
+            target,
+            title=str(script.get("title") or candidate.get("title") or ""),
+            brief=str(
+                script.get("hook")
+                or candidate.get("expansion_brief")
+                or candidate.get("topic")
+                or ""
+            ),
+            run_id=str(script.get("run_id") or ""),
+        )
+        if poster.output.is_file() and _is_usable_download(poster.output):
+            return poster.output
+    except (ImagenUnavailable, ImagenGenerationFailed):
+        pass
+    return _stock_thumbnail_background(
+        data_dir,
+        script,
+        candidate,
+        revision=revision,
+        ffmpeg_path=ffmpeg_path,
+    )
 
 
 def _write_thumbnail_or_fail(

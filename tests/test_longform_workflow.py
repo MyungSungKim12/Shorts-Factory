@@ -200,3 +200,73 @@ def test_longform_thumbnail_background_uses_landscape_candidate(tmp_path, monkey
 
     assert result is not None
     assert selected[0] == "landscape"
+
+
+def test_longform_thumbnail_background_prefers_ai_poster_when_enabled(tmp_path, monkeypatch):
+    from app.services import longform_workflow
+
+    ai_calls = []
+    stock_calls = []
+
+    class FakePoster:
+        def __init__(self, output):
+            self.output = output
+            self.model = "imagen-test"
+            self.estimated_cost_usd = 0.04
+
+    def fake_generate(output, *, title, brief, run_id=None):
+        ai_calls.append((title, brief, run_id))
+        output.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (1600, 900), (110, 20, 20)).save(output)
+        return FakePoster(output)
+
+    monkeypatch.setenv("LONGFORM_THUMBNAIL_AI_ENABLED", "true")
+    monkeypatch.setattr(longform_workflow, "generate_thumbnail_poster", fake_generate)
+    monkeypatch.setattr(
+        longform_workflow,
+        "_stock_thumbnail_background",
+        lambda *args, **kwargs: stock_calls.append(True) or None,
+    )
+
+    script = {
+        "run_id": "longform-demo",
+        "title": "남극의 피폭포",
+        "hook": "붉은 물이 얼지 않는 남극 빙하 미스터리",
+    }
+    result = longform_workflow._find_thumbnail_background(tmp_path, script, {})
+
+    assert result is not None
+    assert result.name == "thumbnail_ai_poster.jpg"
+    assert ai_calls == [("남극의 피폭포", "붉은 물이 얼지 않는 남극 빙하 미스터리", "longform-demo")]
+    assert stock_calls == []
+
+
+def test_longform_thumbnail_background_falls_back_to_stock_when_ai_fails(
+    tmp_path, monkeypatch
+):
+    from app.services import longform_workflow
+    from app.services.vertex_image import ImagenUnavailable
+
+    background = tmp_path / "stock.jpg"
+    Image.new("RGB", (1600, 900), (30, 40, 50)).save(background)
+
+    monkeypatch.setenv("LONGFORM_THUMBNAIL_AI_ENABLED", "true")
+    monkeypatch.setattr(
+        longform_workflow,
+        "generate_thumbnail_poster",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ImagenUnavailable("no quota")),
+    )
+    monkeypatch.setattr(
+        longform_workflow,
+        "_stock_thumbnail_background",
+        lambda *args, **kwargs: background,
+    )
+
+    script = {
+        "run_id": "longform-demo",
+        "title": "남극의 피폭포",
+        "hook": "붉은 물이 얼지 않는 남극 빙하 미스터리",
+    }
+    result = longform_workflow._find_thumbnail_background(tmp_path, script, {})
+
+    assert result == background

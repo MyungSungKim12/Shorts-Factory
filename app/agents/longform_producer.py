@@ -258,12 +258,52 @@ def _draw_torn_strip(
     rng = random.Random(hashlib.sha256(seed.encode("utf-8")).hexdigest())
     x0, y0, x1, y1 = box
     points = []
-    for x in range(x0, x1 + 1, 34):
-        points.append((x, y0 + rng.randint(-8, 8)))
-    for x in range(x1, x0 - 1, -34):
-        points.append((x, y1 + rng.randint(-8, 8)))
+    for x in range(x0, x1 + 1, 28):
+        points.append((x, y0 + rng.randint(-14, 11)))
+    for x in range(x1, x0 - 1, -28):
+        points.append((x, y1 + rng.randint(-10, 16)))
     draw.polygon(points, fill=fill)
-    draw.line(points + [points[0]], fill=(85, 55, 20, 120), width=2)
+    draw.line(points + [points[0]], fill=(95, 62, 15, 150), width=3)
+
+
+def _draw_thumbnail_text(
+    image: Image.Image,
+    xy: tuple[int, int],
+    text: str,
+    *,
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    fill: tuple[int, int, int],
+    stroke_width: int,
+    seed: str,
+) -> tuple[int, int, int, int]:
+    layer = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    layer_draw = ImageDraw.Draw(layer, "RGBA")
+    x, y = xy
+    layer_draw.text(
+        (x + 11, y + 13),
+        text,
+        font=font,
+        fill=(0, 0, 0, 190),
+        stroke_width=stroke_width + 3,
+        stroke_fill=(0, 0, 0, 210),
+    )
+    layer_draw.text(
+        xy,
+        text,
+        font=font,
+        fill=fill,
+        stroke_width=stroke_width,
+        stroke_fill=(0, 0, 0, 255),
+    )
+    bbox = layer_draw.textbbox(
+        xy,
+        text,
+        font=font,
+        stroke_width=stroke_width,
+    )
+    _draw_distress(layer_draw, bbox, seed)
+    image.alpha_composite(layer)
+    return bbox
 
 
 def create_longform_thumbnail(script: dict, output: Path, background: Path | None = None) -> dict:
@@ -273,9 +313,9 @@ def create_longform_thumbnail(script: dict, output: Path, background: Path | Non
         try:
             image = Image.open(background).convert("RGB")
             image = _cover_resize(image, (1280, 720))
-            image = ImageEnhance.Contrast(image).enhance(1.35)
-            image = ImageEnhance.Color(image).enhance(1.25)
-            image = ImageEnhance.Sharpness(image).enhance(1.5)
+            image = ImageEnhance.Contrast(image).enhance(1.55)
+            image = ImageEnhance.Color(image).enhance(1.35)
+            image = ImageEnhance.Sharpness(image).enhance(1.65)
         except Exception:
             image = Image.new("RGB", (1280, 720), (8, 10, 14))
     else:
@@ -290,6 +330,7 @@ def create_longform_thumbnail(script: dict, output: Path, background: Path | Non
         for x in range(640, 1280, 18):
             base_draw.line((x, 0, x - 260, 720), fill=(95, 0, 12, 38), width=10)
         image = image.filter(ImageFilter.GaussianBlur(radius=0.4))
+    image = image.convert("RGBA")
     draw = ImageDraw.Draw(image, "RGBA")
     for x in range(1280):
         ratio = x / 1279
@@ -298,45 +339,63 @@ def create_longform_thumbnail(script: dict, output: Path, background: Path | Non
     for y in range(720):
         ratio = y / 719
         draw.line((0, y, 1280, y), fill=(5, 8, 14, int(25 + 88 * ratio)))
-    draw.polygon([(720, 0), (1280, 0), (1280, 720), (590, 720)], fill=(130, 0, 0, 62))
+    draw.polygon([(700, 0), (1280, 0), (1280, 720), (570, 720)], fill=(140, 0, 0, 75))
+    draw.rectangle((0, 0, 810, 720), fill=(0, 0, 0, 38))
     main_lines = _thumbnail_main_lines(main_text)[:2]
-    y = 82
+    y = 66
+    largest_bbox = (56, y, 760, y)
     for line_index, line in enumerate(main_lines):
-        color = (252, 252, 248) if line_index == 0 else (232, 18, 18)
-        font_size = 190 if len(line.replace(" ", "")) <= 4 else 142
+        color = (252, 252, 248) if line_index == 0 else (238, 15, 15)
+        compact_len = len(line.replace(" ", ""))
+        if line_index == 0:
+            font_size = 156 if compact_len <= 5 else 126
+        else:
+            font_size = 192 if compact_len <= 5 else 154
         font = _title_font(font_size)
-        draw.text(
+        bbox = _draw_thumbnail_text(
+            image,
             (58, y),
             line,
             font=font,
             fill=color,
-            stroke_width=11,
-            stroke_fill=(0, 0, 0),
+            stroke_width=15,
+            seed=f"{main_text}-{line_index}",
         )
-        _draw_distress(draw, (58, y + 10, 760, y + font_size), f"{main_text}-{line_index}")
-        y += font_size - 4
-    strip_y = min(600, y + 10)
+        largest_bbox = (
+            min(largest_bbox[0], bbox[0]),
+            min(largest_bbox[1], bbox[1]),
+            max(largest_bbox[2], bbox[2]),
+            max(largest_bbox[3], bbox[3]),
+        )
+        y += int(font_size * 0.82)
+    strip_y = min(598, max(414, y + 8))
+    strip_x0 = 48
+    strip_x1 = max(650, min(820, largest_bbox[2] + 70))
     _draw_torn_strip(
         draw,
-        (48, strip_y, 760, strip_y + 94),
-        fill=(245, 197, 65, 242),
+        (strip_x0, strip_y, strip_x1, strip_y + 94),
+        fill=(248, 201, 59, 248),
         seed=sub_text,
     )
+    draw.rectangle((strip_x0 + 12, strip_y + 10, strip_x1 - 14, strip_y + 84), fill=(255, 210, 70, 24))
     draw.text(
         (92, strip_y + 47),
         sub_text,
-        font=_title_font(54),
+        font=_title_font(58),
         fill=(0, 0, 0),
         anchor="lm",
-        stroke_width=1,
-        stroke_fill=(255, 236, 160),
+        stroke_width=2,
+        stroke_fill=(255, 232, 135),
     )
     output.parent.mkdir(parents=True, exist_ok=True)
-    image.save(output, quality=94)
+    image.convert("RGB").save(output, quality=94)
     return {
         "thumbnail_file": str(output.resolve()),
         "main_text": main_text,
         "sub_text": sub_text,
+        "style_id": "approved_reference_poster_v2",
+        "layout": "left_big_white_red_yellow_torn_strip",
+        "background_mode": "ai_or_stock_poster",
     }
 
 
