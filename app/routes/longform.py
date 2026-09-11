@@ -14,6 +14,7 @@ from app.services.longform_workflow import (
     RUN_ID_PATTERN,
     create_longform_draft,
     list_longform_jobs,
+    regenerate_longform_thumbnail,
     request_longform_stage,
 )
 
@@ -102,6 +103,14 @@ def longform_approve_topic(run_id: str = Path(...)):
             "preview",
             ffmpeg_path=_ffmpeg_path(),
         )
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/{run_id}/thumbnail", dependencies=[Depends(require_dashboard_token)])
+def longform_regenerate_thumbnail(run_id: str = Path(...)):
+    try:
+        return regenerate_longform_thumbnail(_data_dir(), _safe_run_id(run_id))
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

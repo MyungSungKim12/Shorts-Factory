@@ -32,7 +32,8 @@ def test_longform_workflow_creates_reviewable_draft_from_performance_report(tmp_
 
     run_dir = tmp_path / "longform" / result["run_id"]
     assert result["status"] == "DRAFT_TOPIC"
-    assert result["topic"]["title"] == "남극 피폭포가 붉게 흐르는 진짜 이유"
+    assert result["topic"]["title"] != "남극 피폭포가 붉게 흐르는 진짜 이유"
+    assert "TOP 5" in result["topic"]["title"]
     assert (run_dir / "script.json").is_file()
     assert (run_dir / "thumbnail.png").is_file()
     script = json.loads((run_dir / "script.json").read_text(encoding="utf-8"))
@@ -83,3 +84,25 @@ def test_longform_workflow_upload_stage_uses_reviewed_output_only(tmp_path):
 
     assert result["status"] == "UPLOAD_REQUESTED"
     assert any("upload_longform.py" in part for part in calls[0][0])
+
+
+def test_longform_workflow_can_regenerate_thumbnail_without_replacing_topic(tmp_path):
+    from app.services.longform_workflow import (
+        create_longform_draft,
+        regenerate_longform_thumbnail,
+    )
+
+    draft = create_longform_draft(
+        tmp_path,
+        now=datetime(2026, 9, 11, 9, 0, tzinfo=timezone.utc),
+    )
+
+    result = regenerate_longform_thumbnail(tmp_path, draft["run_id"])
+
+    run_dir = tmp_path / "longform" / draft["run_id"]
+    script = json.loads((run_dir / "script.json").read_text(encoding="utf-8"))
+    assert result["status"] == "DRAFT_TOPIC"
+    assert result["topic"]["title"] == draft["topic"]["title"]
+    assert result["thumbnail_revision"] == 2
+    assert script["thumbnail_main"] != "지구가 숨긴 TOP 5"
+    assert (run_dir / "thumbnail.png").is_file()

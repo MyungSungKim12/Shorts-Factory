@@ -88,6 +88,53 @@ def _thumbnail_text(title: str) -> tuple[str, str]:
     return main[:24] or "지구의 미스터리", "왜 이게 있지?"
 
 
+def _thumbnail_variant(title: str, revision: int) -> tuple[str, str]:
+    haystack = title
+    variants = []
+    if any(token in haystack for token in ("지하", "땅속", "동굴", "광산", "도시")):
+        variants = [
+            ("지하도시 TOP5", "왜 버렸나?"),
+            ("땅속의 세계", "실제로 있었다"),
+            ("사라진 지하문명", "입구는 남았다"),
+        ]
+    elif any(token in haystack for token in ("빙하", "남극", "피폭포", "호수")):
+        variants = [
+            ("빙하 밑 TOP5", "진짜 있었다"),
+            ("얼음 아래 세계", "왜 뜨거울까?"),
+            ("남극의 비밀", "보면 이상함"),
+        ]
+    elif any(token in haystack for token in ("고대", "구조물", "거석")):
+        variants = [
+            ("고대 구조물 TOP5", "어떻게 만들었나?"),
+            ("설명 안 되는 돌", "진짜 기록"),
+            ("고대인의 흔적", "너무 정교함"),
+        ]
+    else:
+        variants = [
+            ("지구 미스터리 TOP5", "이건 진짜 이상함"),
+            ("실제 기록 TOP5", "왜 남았나?"),
+            ("이상한 지구기록", "믿기 힘든 장면"),
+        ]
+    return variants[(max(1, revision) - 1) % len(variants)]
+
+
+def _expanded_longform_title(candidate: dict) -> str:
+    """Turn a winning Shorts subject into a broader longform promise."""
+    source_title = str(candidate.get("title") or "").strip()
+    topic = str(candidate.get("topic") or source_title).strip()
+    category = str(candidate.get("category") or "").strip()
+    haystack = f"{source_title} {topic} {category}"
+    if any(token in haystack for token in ("지하", "동굴", "석굴", "광산", "숨겨진", "도시")):
+        return "땅속에 숨은 거대 세계 TOP 5"
+    if any(token in haystack for token in ("남극", "빙하", "호수", "화산", "피폭포")):
+        return "빙하 아래 숨은 이상한 세계 TOP 5"
+    if any(token in haystack for token in ("거석", "고대", "유적", "문명")):
+        return "고대인이 남긴 설명 안 되는 구조물 TOP 5"
+    if any(token in haystack for token in ("사막", "협곡", "화산", "호수")):
+        return "지도에 남은 이상한 지형 TOP 5"
+    return "실제 기록으로 보는 지구 미스터리 TOP 5"
+
+
 def _sentence(value: str) -> str:
     normalized = " ".join(str(value or "").split()).strip()
     if not normalized:
@@ -96,7 +143,9 @@ def _sentence(value: str) -> str:
 
 
 def _build_script(candidate: dict) -> dict:
-    title = str(candidate.get("title") or "지구에서 실제로 관측된 이상한 장소 TOP 5").strip()
+    source_title = str(candidate.get("title") or "").strip()
+    source_topic = str(candidate.get("topic") or source_title).strip()
+    title = _expanded_longform_title(candidate)
     brief = str(candidate.get("expansion_brief") or "").strip()
     tags = [str(tag) for tag in candidate.get("pattern_tags") or [] if str(tag).strip()]
     main, sub = _thumbnail_text(title)
@@ -108,7 +157,8 @@ def _build_script(candidate: dict) -> dict:
         if index == 1:
             narration = (
                 f"오늘의 주제는 {title}입니다. "
-                "지금부터 화면으로 확인 가능한 기록만 골라, 왜 사람들이 이 장면을 이상하게 느끼는지 순서대로 보겠습니다."
+                f"출발점은 {source_topic or source_title or '성과가 좋았던 실제 지구 미스터리'}이고, "
+                "여기서 비슷한 구조의 기록들을 넓혀 보겠습니다."
             )
         elif index in {9, 17, 25, 33}:
             narration = (
@@ -126,7 +176,7 @@ def _build_script(candidate: dict) -> dict:
             )
             narration = (
                 f"{segment_title}에서는 {angle}을 중심으로 봐야 합니다. "
-                f"{brief_sentence}"
+                f"{brief_sentence} 이 장면은 원래 쇼츠 소재를 반복하는 것이 아니라, 같은 호기심 구조를 가진 롱폼 사례로 확장합니다."
             )
         scenes.append(
             {
@@ -204,6 +254,36 @@ def create_longform_draft(data_dir: Path, *, now: datetime | None = None) -> dic
     )
     _write_json(run_dir / "workflow.json", state)
     return state
+
+
+def regenerate_longform_thumbnail(data_dir: Path, run_id: str) -> dict:
+    run_id = _safe_run_id(run_id)
+    run_dir = _longform_root(data_dir) / run_id
+    script_path = run_dir / "script.json"
+    if not script_path.is_file():
+        raise FileNotFoundError(f"롱폼 script.json이 없습니다: {run_id}")
+    script = _read_json(script_path)
+    workflow = _read_json(run_dir / "workflow.json")
+    revision = int(workflow.get("thumbnail_revision") or 1) + 1
+    main, sub = _thumbnail_variant(str(script.get("title") or ""), revision)
+    script["thumbnail_main"] = main
+    script["thumbnail_sub"] = sub
+    script = validate_longform_script(script)
+    _write_json(script_path, script)
+    create_longform_thumbnail(script, run_dir / "thumbnail.png")
+    workflow.update(
+        {
+            "run_id": run_id,
+            "status": "DRAFT_TOPIC",
+            "thumbnail_revision": revision,
+            "thumbnail_url": f"/api/longform/{run_id}/thumbnail",
+            "updated_at": _now_iso(),
+        }
+    )
+    if not isinstance(workflow.get("topic"), dict):
+        workflow["topic"] = {"title": script["title"]}
+    _write_json(run_dir / "workflow.json", workflow)
+    return workflow
 
 
 def _default_command_runner(command: list[str], cwd: Path, log_file: Path) -> None:
