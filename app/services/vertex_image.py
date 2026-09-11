@@ -156,7 +156,6 @@ def generate_thumbnail_poster(
                     image_config=sdk_types.ImageConfig(
                         aspect_ratio="16:9",
                         output_mime_type="image/jpeg",
-                        person_generation="dont_allow",
                     ),
                 ),
             )

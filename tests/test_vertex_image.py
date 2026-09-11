@@ -92,6 +92,7 @@ def test_thumbnail_poster_uses_gemini_image_when_configured(tmp_path, monkeypatc
     assert config.response_modalities == ["IMAGE"]
     assert config.image_config.aspect_ratio == "16:9"
     assert config.image_config.output_mime_type == "image/jpeg"
+    assert not hasattr(config.image_config, "person_generation")
 
 
 def test_thumbnail_poster_can_use_imagen_model(tmp_path, monkeypatch):
