@@ -5,12 +5,16 @@ from pathlib import Path
 from PIL import Image
 
 
-def test_longform_workflow_creates_reviewable_draft_from_performance_report(tmp_path):
+def test_longform_workflow_creates_reviewable_draft_from_performance_report(tmp_path, monkeypatch):
     from app.services import longform_workflow
 
     background = tmp_path / "background.jpg"
     Image.new("RGB", (1280, 720), (30, 40, 50)).save(background)
-    longform_workflow._find_thumbnail_background = lambda data_dir, script, candidate, revision=1, ffmpeg_path="ffmpeg": background
+    monkeypatch.setattr(
+        longform_workflow,
+        "_find_thumbnail_background",
+        lambda data_dir, script, candidate, revision=1, ffmpeg_path="ffmpeg": background,
+    )
 
     reports = tmp_path / "reports"
     reports.mkdir()
@@ -93,12 +97,16 @@ def test_longform_workflow_upload_stage_uses_reviewed_output_only(tmp_path):
     assert any("upload_longform.py" in part for part in calls[0][0])
 
 
-def test_longform_workflow_can_regenerate_thumbnail_without_replacing_topic(tmp_path):
+def test_longform_workflow_can_regenerate_thumbnail_without_replacing_topic(tmp_path, monkeypatch):
     from app.services import longform_workflow
 
     background = tmp_path / "background.jpg"
     Image.new("RGB", (1280, 720), (30, 40, 50)).save(background)
-    longform_workflow._find_thumbnail_background = lambda data_dir, script, candidate, revision=1, ffmpeg_path="ffmpeg": background
+    monkeypatch.setattr(
+        longform_workflow,
+        "_find_thumbnail_background",
+        lambda data_dir, script, candidate, revision=1, ffmpeg_path="ffmpeg": background,
+    )
 
     draft = longform_workflow.create_longform_draft(
         tmp_path,
@@ -116,10 +124,14 @@ def test_longform_workflow_can_regenerate_thumbnail_without_replacing_topic(tmp_
     assert (run_dir / "thumbnail.png").is_file()
 
 
-def test_longform_workflow_refuses_card_thumbnail_when_background_is_missing(tmp_path):
+def test_longform_workflow_refuses_card_thumbnail_when_background_is_missing(tmp_path, monkeypatch):
     from app.services import longform_workflow
 
-    longform_workflow._find_thumbnail_background = lambda data_dir, script, candidate, revision=1, ffmpeg_path="ffmpeg": None
+    monkeypatch.setattr(
+        longform_workflow,
+        "_find_thumbnail_background",
+        lambda data_dir, script, candidate, revision=1, ffmpeg_path="ffmpeg": None,
+    )
 
     try:
         longform_workflow.create_longform_draft(tmp_path)
@@ -127,3 +139,54 @@ def test_longform_workflow_refuses_card_thumbnail_when_background_is_missing(tmp
         assert "썸네일 배경" in str(exc)
     else:
         raise AssertionError("draft creation must not fall back to a card thumbnail")
+
+
+def test_longform_thumbnail_background_uses_landscape_candidate(tmp_path, monkeypatch):
+    from app.services import longform_workflow
+    from app.services.media_library import MediaCandidate
+
+    portrait = MediaCandidate(
+        provider="pexels_image",
+        media_id="portrait",
+        source_url="https://example.com/portrait",
+        download_url="https://example.com/portrait.jpg",
+        width=800,
+        height=1200,
+        media_type="image",
+        keyword="underground city",
+    )
+    landscape = MediaCandidate(
+        provider="pexels_image",
+        media_id="landscape",
+        source_url="https://example.com/landscape",
+        download_url="https://example.com/landscape.jpg",
+        width=1600,
+        height=900,
+        media_type="image",
+        keyword="underground city",
+    )
+    selected = []
+
+    monkeypatch.setattr(longform_workflow, "_wikimedia_image_candidates", lambda query: [])
+    monkeypatch.setattr(longform_workflow, "_nasa_image_candidates", lambda query: [])
+    monkeypatch.setattr(longform_workflow, "_pexels_landscape_photo_candidates", lambda query: [portrait, landscape])
+    monkeypatch.setattr(longform_workflow, "_pexels_photo_candidates", lambda query: [])
+
+    def fake_download(candidate, output):
+        selected.append(candidate.media_id)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        image = Image.new("RGB", (candidate.width, candidate.height), (30, 40, 50))
+        image.putpixel((0, 0), (200, 10, 10))
+        image.save(output, quality=95)
+        return output.stat().st_size
+
+    monkeypatch.setattr(longform_workflow, "_download_candidate", fake_download)
+
+    script = {
+        "run_id": "longform-demo",
+        "title": "땅속에 숨은 거대 세계 TOP 5",
+    }
+    result = longform_workflow._find_thumbnail_background(tmp_path, script, {})
+
+    assert result is not None
+    assert selected[0] == "landscape"

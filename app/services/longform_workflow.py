@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+import requests
+
 from app.agents.longform_producer import create_longform_thumbnail
 from app.models import validate_longform_script
 from app.services.media_library import (
@@ -262,6 +264,46 @@ def _landscape_first(candidates: list[MediaCandidate]) -> list[MediaCandidate]:
     )
 
 
+def _pexels_landscape_photo_candidates(keyword: str) -> list[MediaCandidate]:
+    import os
+
+    api_key = os.getenv("PEXELS_API_KEY", "").strip()
+    if not api_key:
+        return []
+    try:
+        response = requests.get(
+            "https://api.pexels.com/v1/search",
+            headers={"Authorization": api_key},
+            params={"query": keyword, "per_page": 12, "orientation": "landscape"},
+            timeout=15,
+        )
+        response.raise_for_status()
+        candidates = []
+        for photo in response.json().get("photos", []):
+            source = photo.get("src") or {}
+            download_url = source.get("large2x") or source.get("landscape") or source.get("original")
+            if not download_url:
+                continue
+            candidates.append(MediaCandidate(
+                provider="pexels_image",
+                media_id=str(photo.get("id", "")),
+                source_url=photo.get("url", ""),
+                download_url=download_url,
+                width=int(photo.get("width", 0)),
+                height=int(photo.get("height", 0)),
+                media_type="image",
+                keyword=keyword,
+                description=str(photo.get("alt") or photo.get("url") or ""),
+            ))
+        return candidates
+    except (requests.RequestException, ValueError, TypeError):
+        return []
+
+
+def _landscape_only(candidates: list[MediaCandidate]) -> list[MediaCandidate]:
+    return [item for item in candidates if item.width >= item.height]
+
+
 def _find_thumbnail_background(
     data_dir: Path,
     script: dict,
@@ -275,13 +317,14 @@ def _find_thumbnail_background(
     collectors = (
         _wikimedia_image_candidates,
         _nasa_image_candidates,
+        _pexels_landscape_photo_candidates,
         _pexels_photo_candidates,
     )
     for query in _thumbnail_queries(script, candidate, revision):
         candidates: list[MediaCandidate] = []
         for collector in collectors:
             candidates.extend(collector(query))
-        for item in _landscape_first(choose_candidates(candidates, set())):
+        for item in _landscape_first(choose_candidates(_landscape_only(candidates), set())):
             try:
                 downloaded = _download_candidate(item, target)
             except Exception:
