@@ -459,6 +459,28 @@ def test_thumbnail_overlay_keeps_right_side_background_visible(tmp_path):
     assert pixel[2] > 20
 
 
+def test_thumbnail_yellow_strip_wraps_subtitle_not_full_headline(tmp_path):
+    from app.agents.longform_producer import create_longform_thumbnail
+    from PIL import Image
+
+    background = tmp_path / "background.jpg"
+    Image.new("RGB", (1280, 720), (30, 90, 120)).save(background)
+    output = tmp_path / "thumbnail.png"
+
+    result = create_longform_thumbnail(
+        {
+            "thumbnail_main": "사라진 지하문명",
+            "thumbnail_sub": "입구는 남았다",
+        },
+        output,
+        background=background,
+    )
+
+    x0, _y0, x1, _y1 = result["strip_box"]
+    assert x1 - x0 <= 560
+    assert x1 < 650
+
+
 def test_thumbnail_main_text_splits_into_two_impact_lines():
     from app.agents.longform_producer import _thumbnail_main_lines
 

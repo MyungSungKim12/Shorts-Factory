@@ -258,10 +258,10 @@ def _draw_torn_strip(
     rng = random.Random(hashlib.sha256(seed.encode("utf-8")).hexdigest())
     x0, y0, x1, y1 = box
     points = []
-    for x in range(x0, x1 + 1, 28):
-        points.append((x, y0 + rng.randint(-14, 11)))
-    for x in range(x1, x0 - 1, -28):
-        points.append((x, y1 + rng.randint(-10, 16)))
+    for x in range(x0, x1 + 1, 22):
+        points.append((x, y0 + rng.randint(-13, 10)))
+    for x in range(x1, x0 - 1, -22):
+        points.append((x, y1 + rng.randint(-9, 14)))
     draw.polygon(points, fill=fill)
     draw.line(points + [points[0]], fill=(95, 62, 15, 150), width=3)
 
@@ -371,20 +371,36 @@ def create_longform_thumbnail(script: dict, output: Path, background: Path | Non
             max(largest_bbox[3], bbox[3]),
         )
         y += int(font_size * 0.82)
-    strip_y = min(598, max(414, y + 8))
+    strip_y = min(598, max(414, y + 4))
     strip_x0 = 48
-    strip_x1 = max(650, min(820, largest_bbox[2] + 70))
+    sub_font_size = 58
+    sub_font = _title_font(sub_font_size)
+    while sub_font_size > 44:
+        sub_font = _title_font(sub_font_size)
+        sub_bbox = draw.textbbox((0, 0), sub_text, font=sub_font, stroke_width=2)
+        if sub_bbox[2] - sub_bbox[0] <= 455:
+            break
+        sub_font_size -= 2
+    sub_width = sub_bbox[2] - sub_bbox[0]
+    strip_width = max(360, min(560, sub_width + 112))
+    strip_height = 84
+    strip_x1 = strip_x0 + strip_width
     _draw_torn_strip(
         draw,
-        (strip_x0, strip_y, strip_x1, strip_y + 94),
+        (strip_x0 + 8, strip_y + 9, strip_x1 + 8, strip_y + strip_height + 9),
+        fill=(0, 0, 0, 95),
+        seed=f"{sub_text}-shadow",
+    )
+    _draw_torn_strip(
+        draw,
+        (strip_x0, strip_y, strip_x1, strip_y + strip_height),
         fill=(248, 201, 59, 248),
         seed=sub_text,
     )
-    draw.rectangle((strip_x0 + 12, strip_y + 10, strip_x1 - 14, strip_y + 84), fill=(255, 210, 70, 24))
     draw.text(
-        (92, strip_y + 47),
+        (strip_x0 + 44, strip_y + strip_height // 2 + 1),
         sub_text,
-        font=_title_font(58),
+        font=sub_font,
         fill=(0, 0, 0),
         anchor="lm",
         stroke_width=2,
@@ -399,6 +415,7 @@ def create_longform_thumbnail(script: dict, output: Path, background: Path | Non
         "style_id": "approved_reference_poster_v2",
         "layout": "left_big_white_red_yellow_torn_strip",
         "background_mode": "ai_or_stock_poster",
+        "strip_box": (strip_x0, strip_y, strip_x1, strip_y + strip_height),
     }
 
 
