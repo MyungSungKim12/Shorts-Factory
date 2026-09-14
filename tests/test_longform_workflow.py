@@ -155,6 +155,7 @@ def test_longform_thumbnail_background_uses_landscape_candidate(tmp_path, monkey
     from app.services import longform_workflow
     from app.services.media_library import MediaCandidate
 
+    monkeypatch.setenv("LONGFORM_THUMBNAIL_AI_ENABLED", "false")
     portrait = MediaCandidate(
         provider="pexels_image",
         media_id="portrait",
