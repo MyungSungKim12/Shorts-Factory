@@ -479,6 +479,36 @@ def test_thumbnail_yellow_strip_wraps_subtitle_not_full_headline(tmp_path):
     x0, _y0, x1, _y1 = result["strip_box"]
     assert x1 - x0 <= 560
     assert x1 < 650
+    assert result["label_style"] == "premium_gold_torn_label"
+
+
+def test_thumbnail_yellow_strip_has_premium_texture_and_highlight(tmp_path):
+    from app.agents.longform_producer import create_longform_thumbnail
+    from PIL import Image
+
+    background = tmp_path / "background.jpg"
+    Image.new("RGB", (1280, 720), (15, 25, 35)).save(background)
+    output = tmp_path / "thumbnail.png"
+
+    result = create_longform_thumbnail(
+        {
+            "thumbnail_main": "남극의 피폭포",
+            "thumbnail_sub": "절대 안 언다?",
+        },
+        output,
+        background=background,
+    )
+
+    x0, y0, x1, y1 = result["strip_box"]
+    with Image.open(output) as rendered:
+        image = rendered.convert("RGB")
+        top_sample = image.getpixel((x0 + 80, y0 + 18))
+        bottom_sample = image.getpixel((x0 + 80, y1 - 18))
+        center_sample = image.getpixel((x0 + 185, (y0 + y1) // 2))
+
+    assert top_sample != bottom_sample
+    assert center_sample[0] > 180
+    assert center_sample[1] > 120
 
 
 def test_thumbnail_main_text_stays_inside_left_readable_area(tmp_path):

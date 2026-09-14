@@ -266,6 +266,74 @@ def _draw_torn_strip(
     draw.line(points + [points[0]], fill=(95, 62, 15, 150), width=3)
 
 
+def _torn_strip_points(box: tuple[int, int, int, int], *, seed: str) -> list[tuple[int, int]]:
+    rng = random.Random(hashlib.sha256(seed.encode("utf-8")).hexdigest())
+    x0, y0, x1, y1 = box
+    points: list[tuple[int, int]] = []
+    for x in range(x0, x1 + 1, 20):
+        points.append((x, y0 + rng.randint(-10, 8)))
+    points.append((x1 + rng.randint(-5, 9), y0 + (y1 - y0) // 2))
+    for x in range(x1, x0 - 1, -20):
+        points.append((x, y1 + rng.randint(-8, 11)))
+    points.append((x0 + rng.randint(-8, 4), y0 + (y1 - y0) // 2))
+    return points
+
+
+def _draw_premium_torn_label(
+    image: Image.Image,
+    box: tuple[int, int, int, int],
+    *,
+    seed: str,
+) -> None:
+    rng = random.Random(hashlib.sha256(seed.encode("utf-8")).hexdigest())
+    points = _torn_strip_points(box, seed=seed)
+    mask = Image.new("L", image.size, 0)
+    mask_draw = ImageDraw.Draw(mask)
+    mask_draw.polygon(points, fill=255)
+
+    shadow = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    shadow_mask = mask.filter(ImageFilter.GaussianBlur(radius=5))
+    shadow.paste((0, 0, 0, 135), (8, 10), shadow_mask)
+    image.alpha_composite(shadow)
+
+    x0, y0, x1, y1 = box
+    gradient = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    gradient_draw = ImageDraw.Draw(gradient, "RGBA")
+    height = max(1, y1 - y0)
+    for y in range(y0 - 16, y1 + 17):
+        ratio = (y - y0) / height
+        ratio = max(0.0, min(1.0, ratio))
+        red = int(255 - 20 * ratio)
+        green = int(222 - 58 * ratio)
+        blue = int(83 - 35 * ratio)
+        gradient_draw.line((x0 - 20, y, x1 + 20, y), fill=(red, green, blue, 255))
+    for _ in range(700):
+        x = rng.randint(max(0, x0 - 10), min(image.width - 1, x1 + 10))
+        y = rng.randint(max(0, y0 - 10), min(image.height - 1, y1 + 10))
+        alpha = rng.randint(16, 48)
+        color = (255, 245, 160, alpha) if rng.random() > 0.45 else (115, 72, 18, alpha)
+        gradient_draw.point((x, y), fill=color)
+    highlight = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    highlight_draw = ImageDraw.Draw(highlight, "RGBA")
+    highlight_draw.line((x0 + 22, y0 + 18, x1 - 25, y0 + 9), fill=(255, 248, 180, 75), width=5)
+    highlight_draw.line((x0 + 35, y0 + 28, x1 - 45, y0 + 22), fill=(255, 248, 180, 32), width=3)
+    gradient = Image.alpha_composite(gradient, highlight)
+    label = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    label.paste(gradient, (0, 0), mask)
+    image.alpha_composite(label)
+
+    border = ImageDraw.Draw(image, "RGBA")
+    border.line(points + [points[0]], fill=(66, 37, 6, 220), width=5)
+    inset_points = [
+        (
+            min(max(x0, x + (2 if x < (x0 + x1) // 2 else -2)), x1),
+            min(max(y0, y + (2 if y < (y0 + y1) // 2 else -2)), y1),
+        )
+        for x, y in points
+    ]
+    border.line(inset_points + [inset_points[0]], fill=(255, 232, 132, 115), width=2)
+
+
 def _draw_thumbnail_text(
     image: Image.Image,
     xy: tuple[int, int],
@@ -425,18 +493,9 @@ def create_longform_thumbnail(script: dict, output: Path, background: Path | Non
     strip_width = max(360, min(560, sub_width + 112))
     strip_height = 84
     strip_x1 = strip_x0 + strip_width
-    _draw_torn_strip(
-        draw,
-        (strip_x0 + 8, strip_y + 9, strip_x1 + 8, strip_y + strip_height + 9),
-        fill=(0, 0, 0, 95),
-        seed=f"{sub_text}-shadow",
-    )
-    _draw_torn_strip(
-        draw,
-        (strip_x0, strip_y, strip_x1, strip_y + strip_height),
-        fill=(248, 201, 59, 248),
-        seed=sub_text,
-    )
+    strip_box = (strip_x0, strip_y, strip_x1, strip_y + strip_height)
+    _draw_premium_torn_label(image, strip_box, seed=sub_text)
+    draw = ImageDraw.Draw(image, "RGBA")
     draw.text(
         (strip_x0 + 44, strip_y + strip_height // 2 + 1),
         sub_text,
@@ -455,7 +514,8 @@ def create_longform_thumbnail(script: dict, output: Path, background: Path | Non
         "style_id": "approved_reference_poster_v2",
         "layout": "left_big_white_red_yellow_torn_strip",
         "background_mode": "ai_or_stock_poster",
-        "strip_box": (strip_x0, strip_y, strip_x1, strip_y + strip_height),
+        "strip_box": strip_box,
+        "label_style": "premium_gold_torn_label",
         "text_boxes": text_boxes,
     }
 
