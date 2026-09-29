@@ -84,6 +84,22 @@ def thumbnail_poster_prompt(*, title: str, brief: str) -> str:
     )
 
 
+def visual_asset_prompt(*, subject: str, context: str) -> str:
+    name = " ".join(str(subject or "mysterious earth phenomenon").split())
+    detail = " ".join(str(context or name).split())
+    return (
+        "Create a photorealistic documentary visual asset for a Korean science and "
+        "earth-mystery video. "
+        f"Subject: {name}. Context: {detail}. "
+        "Show one clear focal subject, realistic materials, natural cinematic light, "
+        "high detail, and believable scale. This is reusable supporting footage, not "
+        "proof of a real event. Avoid dark empty space, generic ocean horizons, flat "
+        "PPT design, collage, cartoon, illustration, fantasy, horror, and grotesque imagery. "
+        "Important constraints: no text, no letters, no captions, no logo, no watermark, "
+        "no fake UI, no people, no faces."
+    )
+
+
 def generate_thumbnail_poster(
     output: Path,
     *,
@@ -190,3 +206,103 @@ def generate_thumbnail_poster(
         model=model,
         estimated_cost_usd=estimated_cost,
     )
+
+
+def generate_visual_asset(
+    output: Path,
+    *,
+    subject: str,
+    context: str,
+    aspect_ratio: str = "9:16",
+    run_id: str | None = None,
+    client=None,
+    sdk_types=None,
+) -> ImagenGenerationResult:
+    """Generate one text-free reusable documentary supporting image."""
+    if aspect_ratio not in {"9:16", "16:9"}:
+        raise ValueError(f"unsupported visual asset aspect ratio: {aspect_ratio}")
+    if client is None:
+        client, sdk_types = _client_from_environment()
+    elif sdk_types is None:
+        _, sdk_types = _load_sdk()
+
+    model = os.getenv("IMAGEN_THUMBNAIL_MODEL", "gemini-2.5-flash-image").strip()
+    estimated_cost = _estimated_cost_usd()
+    reservation = None
+    if os.getenv("AI_CREDIT_MODE"):
+        data_dir = Path(os.getenv("DATA_DIR", "./data"))
+        if not paid_features_enabled(data_dir):
+            raise ImagenUnavailable("credit guard disabled new visual asset generation")
+        try:
+            reservation = reserve_cost(
+                data_dir, "imagen_asset_bank", estimated_cost, run_id or subject
+            )
+        except PaidFeatureDisabled as exc:
+            raise ImagenUnavailable(
+                f"credit guard disabled new visual asset generation: {exc}"
+            ) from exc
+
+    destination = Path(output)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        prompt = visual_asset_prompt(subject=subject, context=context)
+        if model.startswith("imagen-"):
+            response = client.models.generate_images(
+                model=model,
+                prompt=prompt,
+                config=sdk_types.GenerateImagesConfig(
+                    number_of_images=1,
+                    aspect_ratio=aspect_ratio,
+                    include_rai_reason=True,
+                    output_mime_type="image/jpeg",
+                    person_generation="dont_allow",
+                ),
+            )
+            generated = getattr(response, "generated_images", None) or []
+            if not generated:
+                raise ImagenGenerationFailed("Imagen returned no visual asset")
+            image = getattr(generated[0], "image", generated[0])
+            if hasattr(image, "save"):
+                image.save(str(destination))
+            elif hasattr(image, "image_bytes"):
+                destination.write_bytes(image.image_bytes)
+            else:
+                raise ImagenGenerationFailed("Imagen visual asset cannot be saved")
+        else:
+            response = client.models.generate_content(
+                model=model,
+                contents=prompt,
+                config=sdk_types.GenerateContentConfig(
+                    response_modalities=["IMAGE"],
+                    image_config=sdk_types.ImageConfig(
+                        aspect_ratio=aspect_ratio,
+                        output_mime_type="image/jpeg",
+                    ),
+                ),
+            )
+            for candidate in getattr(response, "candidates", []) or []:
+                content = getattr(candidate, "content", None)
+                for part in getattr(content, "parts", []) or []:
+                    inline = getattr(part, "inline_data", None)
+                    data = getattr(inline, "data", None) if inline else None
+                    if data:
+                        destination.write_bytes(data)
+                        break
+                if destination.exists():
+                    break
+            if not destination.exists():
+                raise ImagenGenerationFailed("Gemini returned no visual asset")
+        if not destination.is_file() or destination.stat().st_size == 0:
+            raise ImagenGenerationFailed("visual asset output file is empty")
+    except (ImagenUnavailable, ImagenGenerationFailed):
+        if reservation is not None:
+            cancel_cost(reservation)
+        raise
+    except Exception as exc:
+        if reservation is not None:
+            cancel_cost(reservation)
+        raise ImagenGenerationFailed(f"visual asset request failed: {exc}") from exc
+
+    if reservation is not None:
+        commit_cost(reservation, actual_usd=estimated_cost)
+    return ImagenGenerationResult(destination, model, estimated_cost)

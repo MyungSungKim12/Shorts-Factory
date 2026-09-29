@@ -132,3 +132,28 @@ def test_credit_free_mode_prevents_new_thumbnail_poster(tmp_path, monkeypatch):
             client=FakeClient(),
             sdk_types=FakeTypes,
         )
+
+
+def test_visual_asset_uses_vertical_photorealistic_prompt(tmp_path, monkeypatch):
+    from app.services.vertex_image import generate_visual_asset
+
+    monkeypatch.setenv("LONGFORM_THUMBNAIL_AI_ENABLED", "true")
+    monkeypatch.delenv("AI_CREDIT_MODE", raising=False)
+    monkeypatch.setenv("IMAGEN_THUMBNAIL_MODEL", "gemini-2.5-flash-image")
+    client = FakeClient()
+
+    result = generate_visual_asset(
+        tmp_path / "asset.jpg",
+        subject="다르바자 가스 분화구",
+        context="불타는 거대한 지질 구조, 사실적인 다큐멘터리 보조 화면",
+        aspect_ratio="9:16",
+        run_id="asset-bank:test",
+        client=client,
+        sdk_types=FakeTypes,
+    )
+
+    call = client.models.calls[0]
+    assert result.output.read_bytes() == b"gemini-poster"
+    assert "photorealistic documentary visual asset" in call["contents"]
+    assert "no text" in call["contents"].lower()
+    assert call["config"].image_config.aspect_ratio == "9:16"
