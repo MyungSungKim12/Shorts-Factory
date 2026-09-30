@@ -350,6 +350,7 @@ def test_nasa_image_candidates_record_public_domain_provenance(monkeypatch):
 
 
 def test_fetch_uses_nasa_image_before_generic_stock_photo(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "empty-data"))
     nasa = candidate(
         "PIA00001", 1600, 900,
         provider="nasa_image", media_type="image", keyword="Richat Structure",
