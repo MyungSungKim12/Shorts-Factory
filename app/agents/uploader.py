@@ -142,12 +142,19 @@ def _public_wikimedia_title(media_id: object) -> str:
 
 
 def _uses_synthetic_media(produce_log: dict) -> bool:
-    """Return true only when realistic Veo footage is present in the render."""
+    """Return true when realistic generated video or imagery is rendered."""
     ai_generation = (produce_log.get("intro") or {}).get("ai_generation") or {}
-    return (
+    if (
         ai_generation.get("provider") == "vertex_veo"
         and ai_generation.get("status") == "ready"
         and float(ai_generation.get("used_duration_sec") or 0) > 0
+    ):
+        return True
+    return any(
+        isinstance(source, dict)
+        and source.get("provider") == "ai_asset_bank_image"
+        and source.get("ai_generated") is True
+        for source in produce_log.get("sources") or []
     )
 
 

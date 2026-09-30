@@ -130,6 +130,20 @@ def test_synthetic_media_is_true_only_when_veo_footage_was_used():
     assert uploader._uses_synthetic_media({}) is False
 
 
+def test_synthetic_media_is_true_when_saved_ai_image_was_rendered():
+    produce_log = {
+        "sources": [
+            {
+                "provider": "ai_asset_bank_image",
+                "media_id": "richat-structure",
+                "ai_generated": True,
+            }
+        ]
+    }
+
+    assert uploader._uses_synthetic_media(produce_log) is True
+
+
 def test_description_appends_clean_unique_topic_hashtags():
     result = uploader._description_with_hashtags(
         "리차트 구조를 살펴봅니다. #지구미스터리",

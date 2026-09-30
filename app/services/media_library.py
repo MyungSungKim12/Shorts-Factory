@@ -1,7 +1,9 @@
 """스토리형 Shorts용 무료 미디어 검색, 선별, 중복 방지."""
+import json
 import os
 import html
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -473,6 +475,66 @@ def _is_usable_download(path: Path) -> bool:
     return True
 
 
+def _matching_saved_ai_image(
+    keyword: str,
+    used_ids: set[str],
+) -> tuple[Path, dict] | None:
+    """Find one locally generated supporting image for the same named subject."""
+    root = Path(os.getenv("DATA_DIR", "./data")) / "media" / "ai_asset_bank"
+    if not root.is_dir():
+        return None
+    query_tokens = _distinctive_tokens(keyword)
+    if not query_tokens:
+        return None
+    resolved_root = root.resolve()
+    for metadata_file in sorted(root.glob("*/ai-image-vertical.json")):
+        try:
+            metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        subject_key = str(metadata.get("subject_key") or metadata_file.parent.name).strip()
+        unique_id = f"ai_asset_bank_image:{subject_key}"
+        if not subject_key or unique_id in used_ids:
+            continue
+        anchors = []
+        for value in (
+            metadata.get("title_ko"),
+            metadata.get("exact_query"),
+            subject_key.replace("-", " "),
+        ):
+            tokens = _distinctive_tokens(str(value or ""))
+            if tokens:
+                anchors.append(tokens)
+        if not any(anchor.issubset(query_tokens) for anchor in anchors):
+            continue
+        source = Path(str(metadata.get("path") or ""))
+        if not source.is_absolute():
+            source = metadata_file.parent / source.name
+        try:
+            source = source.resolve()
+            source.relative_to(resolved_root)
+        except (OSError, ValueError):
+            continue
+        if not _is_usable_download(source):
+            continue
+        return source, {
+            "provider": "ai_asset_bank_image",
+            "media_id": subject_key,
+            "source_url": "",
+            "keyword": keyword,
+            "width": 1080,
+            "height": 1920,
+            "license": "AI-generated",
+            "ai_generated": True,
+            "model": str(metadata.get("model") or ""),
+            "synthetic_disclosure": str(
+                metadata.get("disclosure")
+                or "AI-generated supporting visual; not factual evidence"
+            ),
+        }
+    return None
+
+
 async def fetch_story_media(
     keywords: list[str],
     output_stem: Path,
@@ -484,6 +546,21 @@ async def fetch_story_media(
     for keyword_index, raw_keyword in enumerate(clean_keywords):
         exact = raw_keyword.lower().startswith("exact:")
         keyword = raw_keyword.split(":", 1)[1].strip() if exact else raw_keyword
+        if not exact:
+            saved = _matching_saved_ai_image(keyword, used_ids)
+            if saved is not None:
+                source, metadata = saved
+                output = Path(f"{output_stem}.jpg")
+                output.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, output)
+                unique_id = f"ai_asset_bank_image:{metadata['media_id']}"
+                used_ids.add(unique_id)
+                metadata.update(
+                    fallback=keyword_index > 0,
+                    download_bytes=output.stat().st_size,
+                    rejected_candidates=rejected_candidates,
+                )
+                return output, metadata
         providers = (
             (_wikimedia_image_candidates,) if exact else ()
         ) + (

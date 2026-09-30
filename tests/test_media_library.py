@@ -1,5 +1,6 @@
 """무료 미디어 후보 선별, 출처 기록, 중복 방지 테스트."""
 import asyncio
+import json
 
 import pytest
 
@@ -462,3 +463,66 @@ def test_stock_candidate_with_subject_overlap_is_kept():
     assert media_library.stock_candidate_matches(
         "tiger keelback snake defensive posture", candidate
     ) is True
+
+
+def test_fetch_prefers_matching_saved_ai_image_before_external_stock(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    subject_dir = data_dir / "media" / "ai_asset_bank" / "richat-structure"
+    subject_dir.mkdir(parents=True)
+    image = subject_dir / "ai-image-vertical.jpg"
+    image.write_bytes(b"\xff\xd8" + b"x" * 2048)
+    (subject_dir / "ai-image-vertical.json").write_text(
+        json.dumps({
+            "asset_type": "synthetic_supporting_image",
+            "subject_key": "richat-structure",
+            "title_ko": "리차트 구조",
+            "exact_query": "Richat Structure",
+            "category": "지형",
+            "path": str(image),
+            "model": "gemini-image",
+            "reuse_scope": "concept",
+            "disclosure": "AI-generated supporting visual; not factual evidence",
+        }, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DATA_DIR", str(data_dir))
+
+    path, meta = asyncio.run(media_library.fetch_story_media(
+        ["Richat Structure aerial view"], tmp_path / "shot", set()
+    ))
+
+    assert path == tmp_path / "shot.jpg"
+    assert path.read_bytes().startswith(b"\xff\xd8")
+    assert meta["provider"] == "ai_asset_bank_image"
+    assert meta["media_id"] == "richat-structure"
+    assert meta["ai_generated"] is True
+
+
+def test_fetch_does_not_reuse_saved_ai_image_in_same_video(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    subject_dir = data_dir / "media" / "ai_asset_bank" / "richat-structure"
+    subject_dir.mkdir(parents=True)
+    image = subject_dir / "ai-image-vertical.jpg"
+    image.write_bytes(b"\xff\xd8" + b"x" * 2048)
+    (subject_dir / "ai-image-vertical.json").write_text(
+        json.dumps({
+            "subject_key": "richat-structure",
+            "title_ko": "리차트 구조",
+            "exact_query": "Richat Structure",
+            "path": str(image),
+        }, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DATA_DIR", str(data_dir))
+    monkeypatch.setattr(media_library, "_pexels_video_candidates", lambda keyword: [])
+    monkeypatch.setattr(media_library, "_pixabay_video_candidates", lambda keyword: [])
+    monkeypatch.setattr(media_library, "_nasa_image_candidates", lambda keyword: [])
+    monkeypatch.setattr(media_library, "_pexels_photo_candidates", lambda keyword: [])
+    used = {"ai_asset_bank_image:richat-structure"}
+
+    path, meta = asyncio.run(media_library.fetch_story_media(
+        ["Richat Structure"], tmp_path / "shot", used
+    ))
+
+    assert path is None
+    assert meta["provider"] == "black_bg"
