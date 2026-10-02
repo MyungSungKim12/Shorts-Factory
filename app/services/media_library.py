@@ -23,6 +23,11 @@ _STOCK_NOISE_TOKENS = _QUERY_NOISE_TOKENS | frozenset({
     "natural", "nature", "wild", "moving", "footage", "portrait", "over",
     "under", "with", "and", "from",
 })
+_PROPER_QUERY_NOISE = _STOCK_NOISE_TOKENS | frozenset({
+    "ancient", "abandoned", "underground", "structure", "building", "city",
+    "cave", "tunnel", "mine", "mountain", "river", "lake", "desert",
+    "storm", "cloud", "lightning", "forest", "stone", "rock", "ruins",
+})
 
 
 class MediaTooLarge(requests.RequestException):
@@ -116,6 +121,13 @@ def stock_candidate_matches(query: str, candidate: MediaCandidate) -> bool:
         )
         if token not in _STOCK_NOISE_TOKENS and not token.isdigit()
     }
+    named_tokens = {
+        token.lower()
+        for token in re.findall(r"\b[A-Z][A-Za-z0-9'-]{2,}\b", query or "")
+        if token.lower() not in _PROPER_QUERY_NOISE
+    }
+    if named_tokens and not named_tokens.issubset(evidence_tokens):
+        return False
     return bool(query_tokens & evidence_tokens)
 
 

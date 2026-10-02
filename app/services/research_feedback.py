@@ -28,6 +28,14 @@ _KOREAN_PARTICLES = (
     "으로", "에서", "에게", "까지", "부터", "처럼", "보다", "하고",
     "의", "에", "가", "이", "은", "는", "을", "를", "와", "과", "로",
 )
+_DUPLICATE_ANCHORS = {
+    "지하", "도시", "빙하", "호수", "화산", "사막", "동굴", "터널",
+    "거석", "유럽", "남극",
+}
+_DUPLICATE_GENERIC_TOKENS = {
+    "지하", "도시", "빙하", "호수", "화산", "사막", "동굴", "터널", "거석",
+    "공간", "시설", "장소", "구조", "아래", "내부", "거대", "숨겨진",
+}
 
 
 def _normalize_token(token: str) -> str:
@@ -100,7 +108,7 @@ def build_research_feedback(
     data_dir: Path,
     *,
     max_winners: int = 8,
-    max_avoid: int = 120,
+    max_avoid: int = 600,
 ) -> dict:
     """Return compact feedback that helps the researcher exploit winners and avoid repeats."""
     fallback = {
@@ -113,6 +121,7 @@ def build_research_feedback(
     if db is None:
         return fallback
 
+    avoid_subjects: list[str] = []
     try:
         if not _table_exists(db, "videos"):
             return fallback
@@ -144,6 +153,18 @@ def build_research_feedback(
             features_join = "LEFT JOIN video_features f ON f.video_id = v.video_id"
             category_expr = "COALESCE(f.category, '')"
 
+        snapshot_columns = _columns(db, "video_performance_snapshots")
+        if "average_view_percentage" in snapshot_columns:
+            avp_column = "average_view_percentage"
+        elif "avg_view_percentage" in snapshot_columns:
+            avp_column = "avg_view_percentage"
+        else:
+            avp_column = None
+        avp_expr = (
+            f"COALESCE(latest.{avp_column}, 0)"
+            if avp_column else "0"
+        )
+
         rows = db.execute(
             f"""
             WITH latest AS (
@@ -164,7 +185,7 @@ def build_research_feedback(
               COALESCE(latest.likes, 0) AS likes,
               COALESCE(latest.shares, 0) AS shares,
               COALESCE(latest.subscribers_gained, 0) AS subscribers_gained,
-              COALESCE(latest.avg_view_percentage, 0) AS avg_view_percentage
+              {avp_expr} AS avg_view_percentage
             FROM videos v
             JOIN latest ON latest.video_id = v.video_id
             {features_join}
@@ -172,7 +193,7 @@ def build_research_feedback(
             """
         ).fetchall()
     except sqlite3.OperationalError:
-        return fallback
+        return {**fallback, "avoid_subjects": avoid_subjects}
     finally:
         db.close()
 
@@ -249,9 +270,11 @@ def topic_duplicate_reason(candidate: dict, avoid_subjects: Iterable[str]) -> st
         smaller = min(len(candidate_tokens), len(prior_tokens))
         if smaller >= 3 and len(overlap) / smaller >= 0.5:
             return f"기존 소재와 유사: {prior_text}"
-        if len(overlap) >= 2 and any(
-            anchor in overlap
-            for anchor in ("지하", "도시", "빙하", "호수", "화산", "사막", "동굴", "터널", "거석", "유럽", "남극")
+        distinctive_overlap = overlap - _DUPLICATE_GENERIC_TOKENS
+        if (
+            len(overlap) >= 2
+            and bool(overlap & _DUPLICATE_ANCHORS)
+            and bool(distinctive_overlap)
         ):
             return f"기존 소재와 유사: {prior_text}"
     return None

@@ -7,6 +7,11 @@ from app.console import safe_print
 from app.content_format import get_content_format
 from app.models import is_rejected_story_topic
 from app.services.claude_client import call_agent
+from app.services.asset_catalog import (
+    rank_asset_backed_candidates,
+    topic_matches_asset_candidate,
+)
+from app.services.ai_opening_library import normalize_subject_key
 from app.services.research_feedback import build_research_feedback, topic_duplicate_reason
 from app.services.web_search import search_ranking_topics
 
@@ -163,6 +168,15 @@ def run_researcher(
         if selected == "story"
         else {"winning_patterns": [], "avoid_subjects": [], "evergreen_buckets": []}
     )
+    asset_candidates = (
+        rank_asset_backed_candidates(
+            data_dir,
+            avoid_subjects=performance_feedback.get("avoid_subjects") or [],
+            limit=20,
+        )
+        if selected == "story"
+        else []
+    )
 
     if run_id is None:
         run_id = datetime.now().strftime("%Y%m%d")
@@ -185,9 +199,14 @@ def run_researcher(
         "category": category,
         "focus_domain": story_focus_domain(run_id) if selected == "story" else None,
         "performance_feedback": performance_feedback,
+        "asset_candidates": asset_candidates,
     }
     if category:
         safe_print(f"  · 회차 {slot} 카테고리: {category['name']}")
+    if asset_candidates:
+        safe_print(
+            f"  · 저장 자산 기반 미사용 후보 {len(asset_candidates)}개 중 소재 선정"
+        )
 
     # 사실 검증 규칙(AGENTS.md): 검증 방식과 근거를 항상 기록한다.
     #   1) 그라운딩 검색 성공 → 검증 + 캐시에 저장 (grounded_search)
@@ -200,6 +219,9 @@ def run_researcher(
     def _reject_story_duplicate(payload: dict) -> bool:
         if selected != "story":
             return False
+        if asset_candidates:
+            if not topic_matches_asset_candidate(payload, asset_candidates):
+                return True
         return topic_duplicate_reason(
             payload,
             performance_feedback.get("avoid_subjects") or [],
@@ -208,6 +230,11 @@ def run_researcher(
     def _validate_candidate(raw_topic: dict) -> dict:
         candidate = validate_topic(raw_topic, selected)
         if selected == "story":
+            if asset_candidates:
+                if not topic_matches_asset_candidate(candidate, asset_candidates):
+                    raise ValueError(
+                        "저장된 제작 가능 AI 자산 후보에 없는 소재를 선택했습니다"
+                    )
             duplicate_reason = topic_duplicate_reason(
                 candidate,
                 performance_feedback.get("avoid_subjects") or [],
@@ -215,6 +242,59 @@ def run_researcher(
             if duplicate_reason:
                 raise ValueError(duplicate_reason)
         return candidate
+
+    def _model_memory_topic() -> dict:
+        max_attempts = max(2, len(asset_candidates)) if asset_candidates else 1
+        retry_context = dict(context)
+        remaining_candidates = list(asset_candidates)
+        rejected: list[str] = []
+        last_error: Exception | None = None
+        for attempt in range(1, max_attempts + 1):
+            retry_context["rejected_selections"] = list(rejected)
+            retry_context["asset_candidates"] = list(remaining_candidates)
+            topic = call_agent(
+                prompt=(
+                    _story_researcher_prompt(retry_context, grounded=False)
+                    if selected == "story" else _researcher_prompt(retry_context, grounded=False)
+                ),
+                agent_name="trend-researcher",
+                grounded=False,
+            )
+            raw_topic: dict = {}
+            try:
+                raw_topic = extract_json(topic)
+                raw_topic["verification_method"] = "model_memory"
+                raw_topic["verified_at"] = datetime.now().isoformat()
+                return _validate_candidate(raw_topic)
+            except (TypeError, ValueError) as error:
+                last_error = error
+                selected_name = str(
+                    raw_topic.get("target_keyword")
+                    or raw_topic.get("topic")
+                    or "형식 오류 소재"
+                )
+                identity = raw_topic.get("visual_identity") or {}
+                rejected_keys = {
+                    normalize_subject_key(
+                        str(query or "").removeprefix("exact:").strip()
+                    )
+                    for query in identity.get("exact_queries") or []
+                }
+                if rejected_keys:
+                    remaining_candidates = [
+                        item for item in remaining_candidates
+                        if normalize_subject_key(str(item.get("exact_query") or ""))
+                        not in rejected_keys
+                    ]
+                rejected.append(f"{selected_name}: {error}")
+                safe_print(
+                    f"  ↻ 소재 재선정 {attempt}/{max_attempts}: {str(error)[:80]}"
+                )
+                if asset_candidates and not remaining_candidates:
+                    break
+        raise RuntimeError(
+            f"제작 가능 후보를 모두 재선정했지만 유효 소재를 얻지 못함: {last_error}"
+        ) from last_error
 
     topic_dict = None
     try:
@@ -246,7 +326,7 @@ def run_researcher(
         cache_slot = 0 if selected == "story" else slot
         allowed_categories = (
             {category["category"]}
-            if selected == "story" and category
+            if selected == "story" and category and not asset_candidates
             else None
         )
         cached = (
@@ -268,18 +348,7 @@ def run_researcher(
             # 캐시도 비었으면 보수 모드(model_memory) — 규칙상 '불변 기록·수치' 소재만 허용.
             # 프롬프트가 최신 변동 소재를 배제하도록 강제한다.
             safe_print("  ℹ️ 캐시 비어있음 — 보수 모드(불변 기록만, model_memory)로 진행")
-            topic = call_agent(
-                prompt=(
-                    _story_researcher_prompt(context, grounded=False)
-                    if selected == "story" else _researcher_prompt(context, grounded=False)
-                ),
-                agent_name="trend-researcher",
-                grounded=False,
-            )
-            raw_topic = extract_json(topic)
-            raw_topic["verification_method"] = "model_memory"
-            raw_topic["verified_at"] = datetime.now().isoformat()
-            topic_dict = _validate_candidate(raw_topic)
+            topic_dict = _model_memory_topic()
 
     # 업로드 가능 검증 방식인지 최종 확인 (방어)
     from app.models import UPLOADABLE_VERIFICATION
@@ -309,6 +378,8 @@ def _story_researcher_prompt(context: dict, grounded: bool = True) -> str:
     category = context.get("category") or {}
     focus_domain = context.get("focus_domain") or {}
     feedback = context.get("performance_feedback") or {}
+    asset_candidates = context.get("asset_candidates") or []
+    rejected_selections = context.get("rejected_selections") or []
     overexposed_domains = _overexposed_recent_domains(recent)
     category_block = (
         f"- 이번 회차 방향: {category.get('name')}\n"
@@ -317,6 +388,11 @@ def _story_researcher_prompt(context: dict, grounded: bool = True) -> str:
         if category else
         "- 이번 회차 방향: 위험, 반전, 거대한 규모 중 하나가 분명한 이야기"
     )
+    if asset_candidates and category:
+        category_block += (
+            "\n- 단, 회차 방향은 동점 후보의 보조 기준이다. 저장 자산의 제작 가능성, "
+            "호기심, 과거 중복 회피를 우선한다."
+        )
     focus_block = (
         f"- 이번 회차 하위 영역: {focus_domain.get('name')}\n"
         f"- 하위 영역 설명: {focus_domain.get('desc')}\n"
@@ -325,6 +401,11 @@ def _story_researcher_prompt(context: dict, grounded: bool = True) -> str:
         if focus_domain else
         "- 이번 회차 하위 영역: 상위 방향 안에서 최근 소재와 가장 다른 영역"
     )
+    if asset_candidates:
+        focus_block += (
+            "\n- 제작 가능 자산 후보가 있으면 하위 영역을 억지로 맞추지 말고, "
+            "후보 목록 안에서 가장 강한 새 소재를 선택한다."
+        )
     overexposed_block = (
         "- 최근 과다 노출 영역: " + ", ".join(overexposed_domains) + "\n"
         "- 위 영역은 특별히 강한 실물 장면, 위험, 규모, 반전이 없는 한 후보 점수에서 크게 감점한다.\n"
@@ -376,6 +457,37 @@ def _story_researcher_prompt(context: dict, grounded: bool = True) -> str:
         "- 소재가 부족하면 회차를 멈추지 말고 아래 축에서 아직 다루지 않은 실물 장소형 소재로 확장한다.\n"
         + ("\n".join(bucket_lines) if bucket_lines else "- 지하·폐쇄시설·고대공학·극한지형·빙하 아래 세계")
     )
+    asset_lines = []
+    for item in asset_candidates:
+        asset_lines.append(
+            "- "
+            f"{item.get('title_ko')} | exact_query={item.get('exact_query')} | "
+            f"자산분류={item.get('category')} | "
+            f"검증영상변형={item.get('ready_video_count', 0)}개 | "
+            f"서로다른기준화면={item.get('distinct_reference_count', 1)}개 | "
+            f"AI이미지={'있음' if item.get('has_ai_image') else '없음'} | "
+            f"제작준비점수={item.get('selection_score', 0)}"
+        )
+    asset_block = (
+        "[제작 가능 자산 후보 — 필수 선택 범위]\n"
+        "- 아래 목록은 서버에 실제 파일이 존재하고 검증 상태가 ready인 대상만 포함한다.\n"
+        "- 목록 밖 소재를 선택하지 않는다. 특정 첫 후보를 고정하지 말고, 목록 전체에서 "
+        "호기심·사건성·구독 전환 가능성이 가장 강한 하나를 선택한다.\n"
+        "- 제작준비점수는 파일 확보성 점수이지 재미 점수가 아니다. 점수만 복사하지 말고 "
+        "성과 패턴과 소재 자체의 반전을 함께 비교한다.\n"
+        "- 같은 기준화면의 영상 변형 여러 개를 서로 다른 장면으로 과대평가하지 않는다.\n"
+        "- 선택한 대상의 exact_query를 visual_identity.exact_queries 첫 항목에 "
+        "`exact:<exact_query>` 형태로 정확히 복사한다.\n"
+        + "\n".join(asset_lines)
+        if asset_lines else
+        "[제작 가능 자산 후보]\n- 저장 자산 후보가 없어 기존 검증 소재 방식으로 진행한다."
+    )
+    rejected_block = (
+        "[직전 재선정에서 제외된 결과]\n"
+        + "\n".join(f"- {value}" for value in rejected_selections)
+        + "\n- 위 결과를 반복하지 말고 남은 후보 중 하나를 선택한다."
+        if rejected_selections else ""
+    )
     return f"""당신은 '이상한 지구기록' 채널의 한국어 Shorts 리서처다. 검증 가능한 자연·과학·숨겨진 장소·역사 미스터리만 조사한다.
 
 [목표]
@@ -392,6 +504,10 @@ def _story_researcher_prompt(context: dict, grounded: bool = True) -> str:
 {focus_block}
 {overexposed_block}
 {hard_block}
+
+{asset_block}
+
+{rejected_block}
 
 {performance_block}
 

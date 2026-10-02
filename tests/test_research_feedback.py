@@ -81,3 +81,61 @@ def test_topic_duplicate_reason_rejects_same_subject_even_when_title_changes():
 
     assert reason
     assert "기존 소재와 유사" in reason
+
+
+def test_topic_duplicate_reason_allows_different_places_with_only_generic_words():
+    avoid_subjects = [
+        "산 속에 숨겨진 핵전쟁 최후의 방어선, 25톤 방폭문 뒤의 지하 도시"
+    ]
+    candidate = {
+        "topic": "오르비에토 지하 도시의 1,200개 동굴",
+        "hook_angle": "도시 아래 또 하나의 도시가 이어진다",
+        "target_keyword": "Orvieto Underground",
+        "core_question": "오르비에토 아래 공간은 왜 만들어졌을까?",
+    }
+
+    assert topic_duplicate_reason(candidate, avoid_subjects) is None
+
+
+def test_topic_duplicate_reason_rejects_same_place_by_distinctive_facts():
+    avoid_subjects = [
+        "핀란드 지하 450m, 10만 년 핵폐기물 영원히 묻는 곳"
+    ]
+    candidate = {
+        "topic": "온칼로 지하 저장소가 10만 년 동안 봉인되는 이유",
+        "hook_angle": "핵폐기물을 사람보다 오래 보관하는 시설",
+        "target_keyword": "Onkalo repository",
+        "core_question": "왜 이 시설은 10만 년을 버텨야 할까?",
+    }
+
+    reason = topic_duplicate_reason(candidate, avoid_subjects)
+
+    assert reason
+    assert "기존 소재와 유사" in reason
+
+
+def test_feedback_keeps_upload_history_with_current_average_view_column(tmp_path):
+    db = sqlite3.connect(tmp_path / "videos.sqlite")
+    db.execute(
+        "CREATE TABLE videos (video_id TEXT, date TEXT, title TEXT, topic TEXT, status TEXT)"
+    )
+    db.execute(
+        "CREATE TABLE video_performance_snapshots ("
+        "video_id TEXT, snapshot_at TEXT, views INTEGER, likes INTEGER, "
+        "shares INTEGER, subscribers_gained INTEGER, average_view_percentage REAL)"
+    )
+    db.execute(
+        "INSERT INTO videos VALUES (?, ?, ?, ?, 'uploaded')",
+        ("v1", "20260924-4", "체르노빌 거대 레이더", "러시아 딱따구리 레이더",),
+    )
+    db.execute(
+        "INSERT INTO video_performance_snapshots VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ("v1", "2026-09-25T00:00:00", 1200, 5, 1, 1, 72.5),
+    )
+    db.commit()
+    db.close()
+
+    feedback = build_research_feedback(tmp_path)
+
+    assert "체르노빌 거대 레이더" in feedback["avoid_subjects"]
+    assert feedback["winning_patterns"][0]["avg_view_percentage"] == 72.5

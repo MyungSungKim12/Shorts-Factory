@@ -466,6 +466,42 @@ def test_stock_candidate_with_subject_overlap_is_kept():
     ) is True
 
 
+def test_stock_candidate_rejects_generic_result_missing_named_place():
+    candidate = media_library.MediaCandidate(
+        provider="pexels_video",
+        media_id="3",
+        source_url="https://www.pexels.com/video/underground-subway-tunnel-3/",
+        download_url="https://example.com/3.mp4",
+        width=1080,
+        height=1920,
+        media_type="video",
+        keyword="Orvieto underground",
+        description="underground subway train tunnel",
+    )
+
+    assert media_library.stock_candidate_matches(
+        "Orvieto underground", candidate
+    ) is False
+
+
+def test_stock_candidate_keeps_result_containing_named_place():
+    candidate = media_library.MediaCandidate(
+        provider="pexels_video",
+        media_id="4",
+        source_url="https://www.pexels.com/video/orvieto-underground-caves-4/",
+        download_url="https://example.com/4.mp4",
+        width=1080,
+        height=1920,
+        media_type="video",
+        keyword="Orvieto underground",
+        description="ancient Orvieto underground caves",
+    )
+
+    assert media_library.stock_candidate_matches(
+        "Orvieto underground", candidate
+    ) is True
+
+
 def test_fetch_prefers_matching_saved_ai_image_before_external_stock(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     subject_dir = data_dir / "media" / "ai_asset_bank" / "richat-structure"

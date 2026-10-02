@@ -1,6 +1,7 @@
 """대본 작가 에이전트 — script.json 생성."""
 import hashlib
 import json
+import re
 from pathlib import Path
 
 from app.content_format import get_content_format
@@ -16,6 +17,35 @@ _PREVIEW_ONLY_FILLER = (
     "확인해 보겠습니다",
     "파헤쳐 보겠습니다",
 )
+_FRIENDLY_ENDING_RE = re.compile(
+    r"(?:니다|니까|인가요|일까요|까요|나요|죠|데요|네요|예요|이에요|해요|돼요|있어요|없어요)[.!?]$"
+)
+_PLAIN_DECLARATIVE_RE = re.compile(r"(?:다|한다|된다|이다|었다|았다|났다|렸다|졌다)\.$")
+
+
+def story_tone_reason(script: dict) -> str | None:
+    """Return why narration is too formal or declarative for the channel voice."""
+    sentences = []
+    for scene in script.get("scenes") or []:
+        narration = " ".join(str(scene.get("narration") or "").split())
+        sentences.extend(
+            sentence.strip()
+            for sentence in re.findall(r"[^.!?]+[.!?]", narration)
+            if sentence.strip()
+        )
+    if not sentences:
+        return "story has no spoken sentences"
+    friendly_count = sum(bool(_FRIENDLY_ENDING_RE.search(item)) for item in sentences)
+    if friendly_count / len(sentences) < 0.7:
+        return "story requires friendly honorific tone in at least 70% of sentences"
+    plain_flags = [
+        bool(_PLAIN_DECLARATIVE_RE.search(item))
+        and not bool(_FRIENDLY_ENDING_RE.search(item))
+        for item in sentences
+    ]
+    if any(first and second for first, second in zip(plain_flags, plain_flags[1:])):
+        return "story contains consecutive plain declarative endings"
+    return None
 
 
 def ensure_story_information_density(script: dict) -> dict:
@@ -39,6 +69,9 @@ def ensure_story_information_density(script: dict) -> dict:
     if not {"hook", "context", "problem", "mechanism", "payoff", "close"} <= roles:
         raise ValueError("story information roles are incomplete")
     narration = " ".join(str(scene.get("narration") or "") for scene in scenes)
+    tone_reason = story_tone_reason(script)
+    if tone_reason:
+        raise ValueError(tone_reason)
     if any(phrase in narration for phrase in _PREVIEW_ONLY_FILLER):
         raise ValueError("story contains preview-only filler")
     if "관련 기록이 확인됐다" in narration:
@@ -187,7 +220,32 @@ def build_verified_story_script(topic: dict) -> dict:
                 shortened = shortened.rsplit(" ", 1)[0]
             normalized = shortened.rstrip(" ,.;:!?")
 
-        return f"{normalized}."
+        if _FRIENDLY_ENDING_RE.search(f"{normalized}."):
+            return f"{normalized}."
+        if normalized.endswith("까"):
+            return f"{normalized}요?"
+        replacements = (
+            ("있다", "있습니다"),
+            ("없다", "없습니다"),
+            ("이다", "입니다"),
+            ("한다", "합니다"),
+            ("된다", "됩니다"),
+            ("했다", "했습니다"),
+            ("됐다", "됐습니다"),
+            ("알려졌다", "알려졌습니다"),
+            ("발견되었다", "발견되었습니다"),
+            ("건설되었다", "건설되었습니다"),
+            ("일어난다", "일어납니다"),
+            ("들어온다", "들어옵니다"),
+            ("남는다", "남습니다"),
+            ("보인다", "보입니다"),
+        )
+        for plain, friendly in replacements:
+            if normalized.endswith(plain):
+                return f"{normalized[:-len(plain)]}{friendly}."
+        if normalized.endswith("다"):
+            return f"{normalized[:-1]}다는 기록입니다."
+        return f"{normalized}입니다."
 
     def fact_claim(fact: dict) -> str:
         return sentence(fact["claim"])
@@ -219,11 +277,16 @@ def build_verified_story_script(topic: dict) -> dict:
         unit_index += 1
     while sum(len(item) for item in narrations) > 440:
         index = max(range(len(narrations)), key=lambda item: len(narrations[item]))
-        current = narrations[index].rstrip(".")
+        previous = narrations[index]
+        current = previous.rstrip(".")
         overflow = sum(len(item) for item in narrations) - 440
-        keep = max(32, len(current) - overflow)
+        keep = max(24, len(current) - overflow - 12)
         shortened = current[:keep].rstrip(" ,.;:!?")
-        narrations[index] = f"{shortened}."
+        replacement = sentence(shortened)
+        if len(replacement) >= len(previous):
+            shorter = current[:max(12, len(current) - max(8, overflow + 4))]
+            replacement = f"{shorter.rstrip(' ,.;:!?')}입니다."
+        narrations[index] = replacement
 
     scenes = []
     for index, (role, duration, narration) in enumerate(
@@ -303,6 +366,9 @@ Preserve exact_queries as the hook and close subject anchor. Use safe_fallbacks 
 - 정보 전달 순서는 배경, 구체적 기록, 기묘한 이유, 가능한 설명 또는 원리, 아직 불확실한 부분, 이 기록이 중요한 이유를 모두 포함한다.
 - "알아보겠습니다", "살펴보겠습니다", "확인해 보겠습니다", "파헤쳐 보겠습니다"처럼 내용을 말하지 않고 다음 설명을 예고하는 문장을 쓰지 않는다.
 - 모든 narration은 마침표·물음표·느낌표 중 하나의 종결 문장부호로 끝나는 완결 문장이다.
+- 문체는 시청자에게 말을 건네는 친근한 설명형 존댓말이다. `~습니다`, `~입니다`를 기본으로 하고, 흐름에 따라 `~죠`, `~일까요?`, `~인데요`를 자연스럽게 섞는다.
+- 딱딱한 보고서식 `~다체`를 연속해서 쓰지 마라. 전체 문장의 최소 70%는 존댓말 종결이어야 하며, 반말·과도한 예능 말투·억지 감탄은 쓰지 않는다.
+- 젊은 여성 아나운서가 흥미로운 사실을 한 사람에게 설명하듯 쓰되, 문장 끝을 모두 같은 표현으로 반복하지 않는다.
 - 전환·대조·조건·원인과 결과의 경계에는 쉼표를 넣고, 문장부호 없이 여러 절을 이어 쓰지 않는다. 소리 내어 읽었을 때 한 호흡이 지나치게 길어지지 않게 한다.
 - 0~3초 hook: 인사, 채널명, 로고, 주제 소개 없이 결과나 모순부터 말한다.
 - 10초 안에 작은 답 하나를 주되 최종 원리는 남겨 둔다.

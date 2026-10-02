@@ -190,6 +190,29 @@ def test_research_prompt_hard_blocks_abstract_space_topics():
     assert "지하·빙하·동굴·도시·폐쇄 구역" in prompt
 
 
+def test_research_prompt_requires_selection_from_ranked_asset_candidates():
+    prompt = researcher._story_researcher_prompt(
+        {
+            "recent_topics": [],
+            "asset_candidates": [{
+                "subject_key": "strong-place-underground",
+                "title_ko": "강한 지하 장소",
+                "exact_query": "Strong Place Underground",
+                "category": "지하시설",
+                "ready_video_count": 5,
+                "has_ai_image": True,
+                "selection_score": 82,
+            }],
+        },
+        grounded=True,
+    )
+
+    assert "제작 가능 자산 후보" in prompt
+    assert "강한 지하 장소" in prompt
+    assert "Strong Place Underground" in prompt
+    assert "목록 밖 소재를 선택하지 않는다" in prompt
+
+
 def test_writer_prompt_contains_retention_beats():
     prompt = writer._story_writer_prompt(_topic())
     assert "완성 영상 목표는 70~80초" in prompt
@@ -218,6 +241,10 @@ def test_writer_prompt_contains_retention_beats():
     assert "제목에서 '비밀'과 '미스터리'에 기대지 말고" in prompt
     assert "장소 + 숫자 + 실제 장면" in prompt
     assert "추상 우주·천문 소재" in prompt
+    assert "친근한 설명형 존댓말" in prompt
+    assert "~습니다" in prompt
+    assert "~입니다" in prompt
+    assert "~다체" in prompt
     assert "close 본문에는 \"\uad6c독\"과 \"좋아요\"를 절대 넣지 마라" in prompt
     assert '"title": "100자 이하 제목"' not in prompt
     assert '"title": "10분만 머물러도 위험한 지하 수정 동굴의 비밀"' in prompt
@@ -234,6 +261,19 @@ def test_story_information_density_rejects_short_preview_only_narration():
         assert "320~440" in str(exc) or "preview-only" in str(exc)
     else:
         raise AssertionError("information-poor story was accepted")
+
+
+def test_story_information_density_rejects_repeated_plain_declarative_tone():
+    script = _script()
+    for scene in script["scenes"]:
+        scene["narration"] = scene["narration"].replace("보여줍니다.", "보여준다.")
+
+    try:
+        writer.ensure_story_information_density(script)
+    except ValueError as exc:
+        assert "friendly honorific tone" in str(exc)
+    else:
+        raise AssertionError("repeated plain declarative tone was accepted")
 
 
 def test_writer_routes_story_format_and_saves_validated_json(tmp_path, monkeypatch):
@@ -305,8 +345,9 @@ def test_writer_uses_verified_template_after_two_invalid_responses(tmp_path, mon
     narration = " ".join(scene["narration"] for scene in result["scenes"])
     assert 320 <= sum(len(scene["narration"]) for scene in result["scenes"]) <= 440
     assert all(scene["narration"].endswith((".", "?", "!")) for scene in result["scenes"])
+    assert writer.story_tone_reason(result) is None
     assert topic["facts"][0]["claim"] in narration
-    assert topic["facts"][0]["value"] in narration
+    assert "지하 대수층" in narration
     allowed_visuals = {
         keyword
         for item in topic["visual_plan"]
@@ -527,6 +568,183 @@ def test_sample_researcher_skips_sqlite_cache(tmp_path, monkeypatch):
     assert result["verification_method"] == "grounded_search"
     assert (tmp_path / "samples" / "isolated" / "topic.json").exists()
     assert not (tmp_path / "videos.sqlite").exists()
+
+
+def test_asset_backed_model_memory_topic_is_not_rejected_by_generic_history_words(
+    tmp_path, monkeypatch
+):
+    candidate = {
+        "subject_key": "orvieto-underground",
+        "title_ko": "오르비에토 지하도시",
+        "exact_query": "Orvieto Underground",
+        "category": "지하도시",
+        "ready_video_count": 2,
+        "distinct_reference_count": 1,
+        "has_ai_image": True,
+        "selection_score": 94,
+        "production_ready": True,
+    }
+    feedback = {
+        "winning_patterns": [],
+        "longform_candidates": [],
+        "avoid_subjects": [
+            "산 속에 숨겨진 핵전쟁 최후의 방어선, 25톤 방폭문 뒤의 지하 도시"
+        ],
+        "evergreen_buckets": [],
+    }
+    model_topic = {
+        "format": "story",
+        "topic": "오르비에토 지하 도시의 1,200개 동굴",
+        "category": "hidden_world",
+        "hook_angle": "도시 아래 또 하나의 도시가 이어진다",
+        "target_keyword": "Orvieto Underground",
+        "core_question": "오르비에토 아래 공간은 왜 만들어졌을까?",
+        "facts": [{
+            "claim": "도시 아래 지하 공간이 존재한다",
+            "value": "여러 시대에 걸쳐 조성된 동굴과 통로가 남아 있다",
+            "source": "Orvieto Underground",
+            "source_url": "https://www.orvietounderground.it/",
+        }],
+        "visual_plan": [{
+            "beat": "hook",
+            "keywords": ["Orvieto underground caves", "Orvieto tunnels"],
+        }],
+        "visual_identity": {
+            "exact_queries": ["exact:Orvieto Underground"],
+            "safe_fallbacks": ["Orvieto underground caves"],
+            "required_exact": True,
+        },
+        "verification_method": "model_memory",
+        "verified_at": "2026-10-01T09:00:00+09:00",
+    }
+    calls = 0
+
+    def fake_call_agent(**kwargs):
+        nonlocal calls
+        calls += 1
+        if kwargs.get("grounded"):
+            raise RuntimeError("Gemini 일일 한도 초과")
+        return json.dumps(model_topic, ensure_ascii=False)
+
+    monkeypatch.setattr(researcher, "build_research_feedback", lambda *_: feedback)
+    monkeypatch.setattr(
+        researcher,
+        "rank_asset_backed_candidates",
+        lambda *args, **kwargs: [candidate],
+    )
+    monkeypatch.setattr(researcher, "call_agent", fake_call_agent)
+
+    result = researcher.run_researcher(
+        tmp_path,
+        "20261001-2",
+        recent_topics=[],
+        content_format="story",
+        use_cache=False,
+    )
+
+    assert result["topic"] == "오르비에토 지하 도시의 1,200개 동굴"
+    assert result["verification_method"] == "model_memory"
+    assert calls == 2
+
+
+def test_model_memory_reselects_when_first_ready_asset_topic_is_duplicate(
+    tmp_path, monkeypatch
+):
+    candidate = {
+        "subject_key": "orvieto-underground",
+        "title_ko": "오르비에토 지하도시",
+        "exact_query": "Orvieto Underground",
+        "category": "지하도시",
+        "ready_video_count": 2,
+        "distinct_reference_count": 1,
+        "has_ai_image": True,
+        "selection_score": 94,
+        "production_ready": True,
+    }
+    duplicate_candidate = {
+        **candidate,
+        "subject_key": "onkalo-repository",
+        "title_ko": "온칼로 핵폐기물 저장소",
+        "exact_query": "Onkalo repository",
+    }
+    feedback = {
+        "winning_patterns": [],
+        "longform_candidates": [],
+        "avoid_subjects": ["핀란드 지하 450m, 10만 년 핵폐기물 영원히 묻는 곳"],
+        "evergreen_buckets": [],
+    }
+    base = {
+        "format": "story",
+        "category": "hidden_world",
+        "facts": [{
+            "claim": "검증된 지하 공간",
+            "value": "실제 지하 통로가 남아 있다",
+            "source": "공식 장소 안내",
+            "source_url": "https://example.com/place",
+        }],
+        "visual_plan": [{
+            "beat": "hook",
+            "keywords": ["underground place", "stone tunnel"],
+        }],
+        "verification_method": "model_memory",
+        "verified_at": "2026-10-01T09:00:00+09:00",
+    }
+    duplicate = {
+        **base,
+        "topic": "핀란드 온칼로 핵폐기물 저장소",
+        "hook_angle": "10만 년 동안 닫히는 지하 시설",
+        "target_keyword": "Onkalo repository",
+        "core_question": "왜 이 시설은 10만 년을 버텨야 할까?",
+        "visual_identity": {
+            "exact_queries": ["exact:Onkalo repository"],
+            "safe_fallbacks": ["nuclear waste tunnel"],
+            "required_exact": True,
+        },
+    }
+    fresh = {
+        **base,
+        "topic": "오르비에토 아래 이어진 지하 도시",
+        "hook_angle": "도시 아래 또 하나의 도시가 이어진다",
+        "target_keyword": "Orvieto Underground",
+        "core_question": "오르비에토 아래 공간은 왜 만들어졌을까?",
+        "visual_identity": {
+            "exact_queries": ["exact:Orvieto Underground"],
+            "safe_fallbacks": ["Orvieto underground caves"],
+            "required_exact": True,
+        },
+    }
+    responses = iter((duplicate, fresh))
+    calls = 0
+    prompts = []
+
+    def fake_call_agent(**kwargs):
+        nonlocal calls
+        calls += 1
+        prompts.append(kwargs["prompt"])
+        if kwargs.get("grounded"):
+            raise RuntimeError("Gemini 일일 한도 초과")
+        return json.dumps(next(responses), ensure_ascii=False)
+
+    monkeypatch.setattr(researcher, "build_research_feedback", lambda *_: feedback)
+    monkeypatch.setattr(
+        researcher,
+        "rank_asset_backed_candidates",
+        lambda *args, **kwargs: [duplicate_candidate, candidate],
+    )
+    monkeypatch.setattr(researcher, "call_agent", fake_call_agent)
+
+    result = researcher.run_researcher(
+        tmp_path,
+        "20261001-2",
+        recent_topics=[],
+        content_format="story",
+        use_cache=False,
+    )
+
+    assert result["topic"] == "오르비에토 아래 이어진 지하 도시"
+    assert calls == 3
+    assert "exact_query=Onkalo repository" not in prompts[-1]
+    assert "Orvieto Underground" in prompts[-1]
 
 
 def test_writer_uses_manual_contract_for_prechecked_topic(tmp_path, monkeypatch):
