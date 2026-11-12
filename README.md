@@ -61,7 +61,7 @@ Python 에이전트 모듈이 각 단계를 담당하며, 무료 스톡과 Googl
 | 오케스트레이션 | Python 스케줄러 + Linux cron | 서버 자동 실행 |
 | 백엔드 | Python FastAPI | 오픈소스 |
 | 프론트(대시보드) | React + Vite | 오픈소스 |
-| TTS 음성 | Google Cloud Chirp 3 HD 여성 음성, 실패 시 gTTS | 무료 크레딧/무료 폴백 |
+| TTS 음성 | 로컬 Supertonic 3 한국어 여성 F3, 실패 시 제작 중단 | 무료 |
 | 영상 합성 | ffmpeg (이미 보유: D:\ms\ffmpeg-8.1.2) | 오픈소스 |
 | 이미지 소스 | Pexels/Pixabay API | 무료 API 키 |
 | AI 오프닝 | Vertex AI Veo 이미지→영상, 실패 시 무료 스톡 | Google Cloud 크레딧 사용 |
@@ -158,14 +158,12 @@ npm run dev
 운영 포맷은 단일 소재를 목표 60~75초 동안 설명하는 스토리형이다. 실제 TTS 발화가 계획보다 길어지면 음성을 자르지 않고 최종 180초까지 허용한다. 로컬 샘플 명령은 리서처 → 작가 → 프로듀서까지만 실행하며 업로더, `data/work/`, SQLite, cron을 변경하지 않는다.
 
 ```powershell
-gcloud auth application-default login
-gcloud auth application-default set-quota-project shorts-factory-502004
 $env:CONTENT_FORMAT='story'
-$env:TTS_PROVIDER='google'
+$env:TTS_PROVIDER='supertonic'
 python scripts\generate_sample.py --sample-id story-v1
 ```
 
-결과는 `data/samples/story-v1/` 아래의 `topic.json`, `script.json`, `produce_log.json`, `validation.json`, `output.mp4`에 저장된다. Google 음성 호출에 실패하면 제작 로그에 실제 공급자를 기록하고 gTTS로 폴백한다.
+결과는 `data/samples/story-v1/` 아래의 `topic.json`, `script.json`, `produce_log.json`, `validation.json`, `output.mp4`에 저장된다. Supertonic 모델은 최초 1회 내려받아 로컬에서 재사용하며, 음성 생성 실패 시 품질이 다른 음성으로 바꾸지 않고 제작을 중단한다.
 
 ## 롱폼 제작
 
@@ -199,10 +197,12 @@ python scripts\upload_longform.py --run-id longform-demo
 
 ```dotenv
 CONTENT_FORMAT=story
-TTS_PROVIDER=google
+TTS_PROVIDER=supertonic
+SUPERTONIC_VOICE=F3
+SUPERTONIC_SPEED=1.0
 ```
 
-Google TTS 호출이 실패하면 제작 로그에 실제 공급자를 기록하고 gTTS로 자동 폴백한다.
+Supertonic 3는 서버 CPU에서 무료로 합성하며 Google Cloud TTS를 호출하지 않는다. 실패 시 gTTS로 자동 폴백하지 않아 남성·로봇 음성이 예고 없이 업로드되는 일을 막는다.
 # 독립 성과 분석
 
 자동 제작·업로드와 분리된 성과 수집 명령을 제공한다.

@@ -410,8 +410,8 @@ def _prepare_narration(
     *,
     ssml: str | None = None,
 ):
-    """Create one exact narration; use deterministic Cloud TTS if Gemini repeats."""
-    for provider in (None, "google"):
+    """Create one exact narration; retry with local Supertonic if audio repeats."""
+    for provider in (None, "supertonic"):
         result = synthesize(text, raw_output, provider=provider, ssml=ssml)
         _trim_narration(raw_output, wav_output, ffmpeg_path)
         _normalize_narration(wav_output, ffmpeg_path)
@@ -420,7 +420,7 @@ def _prepare_narration(
             return result, duration
         safe_print(
             f"  ⚠️ 반복 발화 의심 음성 폐기: {duration:.2f}초, "
-            f"{result.provider} → Cloud TTS 재생성"
+            f"{result.provider} → Supertonic 재생성"
         )
     raise RuntimeError("반복 발화로 의심되는 비정상 길이의 음성이 재생성 후에도 남았습니다")
 

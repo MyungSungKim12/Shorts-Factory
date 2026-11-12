@@ -1,4 +1,4 @@
-"""교체 가능한 한국어 TTS 공급자 — Google Neural2 우선, gTTS 폴백."""
+"""교체 가능한 한국어 TTS 공급자 — 무료 로컬 Supertonic 우선."""
 import base64
 import os
 from dataclasses import dataclass
@@ -71,6 +71,54 @@ def _synthesize_gtts(text: str, output: Path) -> None:
     gTTS(text=text, lang="ko", slow=False).save(str(output))
 
 
+_SUPERTONIC_ENGINE = None
+
+
+def _get_supertonic_engine():
+    """무거운 ONNX 모델은 프로세스마다 한 번만 불러온다."""
+    global _SUPERTONIC_ENGINE
+    if _SUPERTONIC_ENGINE is None:
+        from supertonic import TTS
+
+        _SUPERTONIC_ENGINE = TTS(
+            model="supertonic-3",
+            auto_download=True,
+            intra_op_num_threads=int(os.getenv("SUPERTONIC_INTRA_OP_THREADS", "1")),
+            inter_op_num_threads=int(os.getenv("SUPERTONIC_INTER_OP_THREADS", "1")),
+        )
+    return _SUPERTONIC_ENGINE
+
+
+def _synthesize_supertonic(
+    text: str,
+    output: Path,
+    voice: str,
+    speed: float,
+) -> None:
+    """로컬 Supertonic 3 한국어 음성을 WAV 컨테이너로 저장한다."""
+    engine = _get_supertonic_engine()
+    style = engine.get_voice_style(voice)
+    waveform, _duration = engine.synthesize(
+        text,
+        voice_style=style,
+        lang="ko",
+        speed=speed,
+        silence_duration=0.15,
+    )
+    import soundfile as sf
+
+    # 파이프라인의 기존 임시 파일명은 .mp3지만 FFmpeg는 헤더를 감지한다.
+    # 확장자 추론에 맡기지 않고 실제 컨테이너를 WAV로 명시한다.
+    sf.write(
+        str(output),
+        waveform.squeeze(),
+        engine.sample_rate,
+        format="WAV",
+    )
+    if not output.is_file() or output.stat().st_size == 0:
+        raise RuntimeError("Supertonic이 빈 음성 파일을 반환했습니다")
+
+
 def _synthesize_gemini_tts(
     text: str,
     output: Path,
@@ -109,8 +157,8 @@ def synthesize(
     ssml: str | None = None,
 ) -> TTSResult:
     """음성을 합성하고 실제 사용된 공급자를 반환한다."""
-    selected = (provider or os.getenv("TTS_PROVIDER", "gtts")).strip().lower()
-    if selected not in {"auto", "google", "gtts"}:
+    selected = (provider or os.getenv("TTS_PROVIDER", "supertonic")).strip().lower()
+    if selected not in {"auto", "supertonic", "google", "gtts"}:
         raise ValueError(f"지원하지 않는 TTS_PROVIDER: {selected}")
 
     voice = os.getenv("TTS_VOICE", "ko-KR-Chirp3-HD-Kore")
@@ -149,7 +197,15 @@ def synthesize(
             safe_print(f"  ⚠️ Gemini TTS 실패, Chirp 3 HD 폴백: {exc}")
 
     if selected == "auto":
-        selected = "google"
+        selected = "supertonic"
+
+    if selected == "supertonic":
+        local_voice = os.getenv("SUPERTONIC_VOICE", "F3").strip() or "F3"
+        local_speed = float(os.getenv("SUPERTONIC_SPEED", "1.0"))
+        _synthesize_supertonic(text, output_path, local_voice, local_speed)
+        return TTSResult(
+            output_path, "supertonic", local_voice, local_speed
+        )
 
     if selected == "google":
         try:

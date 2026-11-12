@@ -1,9 +1,90 @@
 """Google Neural2 ADC 어댑터와 gTTS 폴백 테스트."""
 import base64
+import sys
+from types import SimpleNamespace
 
 import pytest
 
 from app.services import tts
+
+
+def test_supertonic_engine_is_reused_within_process(tmp_path, monkeypatch):
+    created = []
+
+    class FakeWaveform:
+        def squeeze(self):
+            return b"samples"
+
+    class FakeEngine:
+        sample_rate = 44100
+
+        def __init__(self, **kwargs):
+            created.append(kwargs)
+
+        def get_voice_style(self, voice):
+            return f"style:{voice}"
+
+        def synthesize(self, text, **kwargs):
+            return FakeWaveform(), [1.0]
+
+        def save_audio(self, waveform, output):
+            from pathlib import Path
+
+            Path(output).write_bytes(b"wav")
+
+    monkeypatch.setitem(sys.modules, "supertonic", SimpleNamespace(TTS=FakeEngine))
+    monkeypatch.setitem(
+        sys.modules,
+        "soundfile",
+        SimpleNamespace(
+            write=lambda output, samples, sample_rate, format: __import__(
+                "pathlib"
+            ).Path(output).write_bytes(b"wav")
+        ),
+    )
+    monkeypatch.setattr(tts, "_SUPERTONIC_ENGINE", None)
+
+    tts._synthesize_supertonic("첫 문장", tmp_path / "one.wav", "F3", 1.0)
+    tts._synthesize_supertonic("둘째 문장", tmp_path / "two.wav", "F3", 1.0)
+
+    assert len(created) == 1
+
+
+def test_supertonic_writes_wav_container_even_when_pipeline_uses_mp3_suffix(
+    tmp_path, monkeypatch
+):
+    seen = {}
+
+    class FakeWaveform:
+        def squeeze(self):
+            return b"samples"
+
+    class FakeEngine:
+        sample_rate = 44100
+
+        def get_voice_style(self, voice):
+            return f"style:{voice}"
+
+        def synthesize(self, text, **kwargs):
+            return FakeWaveform(), [1.0]
+
+        def save_audio(self, *args, **kwargs):
+            raise AssertionError("extension-based save must not be used")
+
+    def fake_write(output, samples, sample_rate, format):
+        from pathlib import Path
+
+        seen.update(sample_rate=sample_rate, format=format)
+        Path(output).write_bytes(b"wav")
+
+    monkeypatch.setattr(tts, "_SUPERTONIC_ENGINE", FakeEngine())
+    monkeypatch.setitem(sys.modules, "soundfile", SimpleNamespace(write=fake_write))
+    output = tmp_path / "narration.mp3"
+
+    tts._synthesize_supertonic("테스트 문장", output, "F3", 1.0)
+
+    assert output.read_bytes() == b"wav"
+    assert seen == {"sample_rate": 44100, "format": "WAV"}
 
 
 def _clear_voice_env(monkeypatch):
@@ -142,6 +223,70 @@ def test_explicit_gtts_does_not_attempt_google(tmp_path, monkeypatch):
     result = tts.synthesize("기존 음성", tmp_path / "nested" / "voice.mp3", provider="gtts")
     assert result.provider == "gtts"
     assert result.path.exists()
+
+
+def test_supertonic_provider_uses_free_korean_female_voice_without_paid_api(
+    tmp_path, monkeypatch
+):
+    seen = {}
+    monkeypatch.delenv("SUPERTONIC_VOICE", raising=False)
+    monkeypatch.delenv("SUPERTONIC_SPEED", raising=False)
+    monkeypatch.setattr(
+        tts,
+        "_synthesize_google",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Google paid TTS must not run")
+        ),
+    )
+
+    def fake_supertonic(text, output, voice, speed):
+        seen.update(text=text, voice=voice, speed=speed)
+        output.write_bytes(b"wav")
+
+    monkeypatch.setattr(tts, "_synthesize_supertonic", fake_supertonic, raising=False)
+
+    result = tts.synthesize(
+        "무료 여성 음성입니다.", tmp_path / "voice.mp3", provider="supertonic"
+    )
+
+    assert result.provider == "supertonic"
+    assert result.voice == "F3"
+    assert result.path.read_bytes() == b"wav"
+    assert seen == {
+        "text": "무료 여성 음성입니다.",
+        "voice": "F3",
+        "speed": 1.0,
+    }
+
+
+def test_supertonic_failure_stops_instead_of_silently_using_gtts(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        tts,
+        "_synthesize_google",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Google paid TTS must not run")
+        ),
+    )
+    monkeypatch.setattr(
+        tts,
+        "_synthesize_supertonic",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError("local model unavailable")
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        tts,
+        "_synthesize_gtts",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("gTTS must not hide a Supertonic failure")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="local model unavailable"):
+        tts.synthesize("무료 음성", tmp_path / "voice.mp3", provider="supertonic")
 
 
 def test_unknown_provider_is_rejected(tmp_path):

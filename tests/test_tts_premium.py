@@ -27,7 +27,9 @@ def test_auto_provider_uses_prompt_controlled_gemini_female_voice_in_premium_mod
     assert "미스터리" in seen["prompt"]
 
 
-def test_auto_provider_uses_chirp_without_gemini_call_in_free_mode(tmp_path, monkeypatch):
+def test_auto_provider_uses_supertonic_without_paid_calls_in_free_mode(
+    tmp_path, monkeypatch
+):
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.delenv("TTS_VOICE", raising=False)
     monkeypatch.setattr(tts, "paid_features_enabled", lambda data_dir: False)
@@ -41,10 +43,18 @@ def test_auto_provider_uses_chirp_without_gemini_call_in_free_mode(tmp_path, mon
     monkeypatch.setattr(
         tts,
         "_synthesize_google",
-        lambda text, output, voice, rate, pitch: output.write_bytes(b"chirp"),
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Google paid TTS must not run")
+        ),
+    )
+    monkeypatch.setattr(
+        tts,
+        "_synthesize_supertonic",
+        lambda text, output, voice, speed: output.write_bytes(b"wav"),
+        raising=False,
     )
 
     result = tts.synthesize("무료 모드", tmp_path / "voice.mp3", provider="auto")
 
-    assert result.provider == "google"
-    assert result.voice == "ko-KR-Chirp3-HD-Kore"
+    assert result.provider == "supertonic"
+    assert result.voice == "F3"

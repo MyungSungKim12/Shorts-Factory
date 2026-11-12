@@ -833,8 +833,8 @@ def test_prepare_narration_falls_back_when_generated_audio_is_implausibly_long(
         "ffmpeg",
     )
 
-    assert providers == [None, "google"]
-    assert result.provider == "google"
+    assert providers == [None, "supertonic"]
+    assert result.provider == "supertonic"
     assert duration == 4.8
 
 

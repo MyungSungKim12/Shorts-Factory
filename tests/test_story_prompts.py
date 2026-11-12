@@ -747,6 +747,149 @@ def test_model_memory_reselects_when_first_ready_asset_topic_is_duplicate(
     assert "Orvieto Underground" in prompts[-1]
 
 
+def test_grounded_research_reselects_duplicate_before_cache_fallback(
+    tmp_path, monkeypatch
+):
+    feedback = {
+        "winning_patterns": [],
+        "longform_candidates": [],
+        "avoid_subjects": ["이미 다룬 온칼로 핵폐기물 저장소"],
+        "evergreen_buckets": [],
+    }
+    base = {
+        "format": "story",
+        "category": "hidden_world",
+        "facts": [{
+            "claim": "검증된 지하 공간",
+            "value": "실제 기록이 남아 있다",
+            "source": "공식 기관",
+            "source_url": "https://example.org/source",
+        }],
+        "visual_plan": [{
+            "beat": "hook",
+            "keywords": ["underground tunnel", "stone chamber"],
+        }],
+        "visual_identity": {
+            "exact_queries": ["exact:verified underground place"],
+            "safe_fallbacks": ["underground tunnel"],
+            "required_exact": True,
+        },
+        "verification_method": "grounded_search",
+        "verified_at": "2026-11-12T09:00:00+09:00",
+    }
+    duplicate = {
+        **base,
+        "topic": "온칼로 핵폐기물 저장소의 비밀",
+        "hook_angle": "10만 년 동안 닫히는 지하 시설",
+        "target_keyword": "Onkalo repository",
+        "core_question": "왜 10만 년을 버텨야 할까?",
+    }
+    fresh = {
+        **base,
+        "topic": "폴란드 비엘리치카 소금광산의 지하 예배당",
+        "hook_angle": "광부들이 소금 암반 속에 성당을 만들었다",
+        "target_keyword": "Wieliczka salt mine chapel",
+        "core_question": "지하에 거대한 예배당을 만든 이유는 무엇일까?",
+    }
+    responses = iter((duplicate, fresh))
+    grounded_flags = []
+    prompts = []
+
+    def fake_call_agent(**kwargs):
+        grounded_flags.append(kwargs.get("grounded"))
+        prompts.append(kwargs["prompt"])
+        return json.dumps(next(responses), ensure_ascii=False)
+
+    monkeypatch.setattr(researcher, "build_research_feedback", lambda *_: feedback)
+    monkeypatch.setattr(
+        researcher, "rank_asset_backed_candidates", lambda *args, **kwargs: []
+    )
+    monkeypatch.setattr(researcher, "call_agent", fake_call_agent)
+
+    result = researcher.run_researcher(
+        tmp_path,
+        "20261112-3",
+        recent_topics=[],
+        content_format="story",
+        use_cache=False,
+    )
+
+    assert result["topic"].startswith("폴란드 비엘리치카")
+    assert result["verification_method"] == "grounded_search"
+    assert grounded_flags == [True, True]
+    assert "온칼로 핵폐기물 저장소" in prompts[1]
+
+
+def test_model_memory_reselects_duplicate_without_asset_candidates(
+    tmp_path, monkeypatch
+):
+    feedback = {
+        "winning_patterns": [],
+        "longform_candidates": [],
+        "avoid_subjects": ["이미 다룬 사하라의 눈 리차트 구조"],
+        "evergreen_buckets": [],
+    }
+    base = {
+        "format": "story",
+        "category": "history_mystery",
+        "hook_angle": "눈에 보이는 실제 구조의 반전",
+        "core_question": "이 구조는 왜 만들어졌을까?",
+        "facts": [{
+            "claim": "불변 기록",
+            "value": "공식 기록으로 확인된다",
+            "source": "공식 기관",
+            "source_url": "https://example.org/fact",
+        }],
+        "visual_plan": [{
+            "beat": "hook",
+            "keywords": ["ancient structure", "underground stone chamber"],
+        }],
+        "visual_identity": {
+            "exact_queries": ["exact:ancient structure"],
+            "safe_fallbacks": ["ancient stone structure"],
+            "required_exact": True,
+        },
+        "verification_method": "model_memory",
+        "verified_at": "2026-11-12T09:00:00+09:00",
+    }
+    duplicate = {
+        **base,
+        "topic": "사하라의 눈 리차트 구조의 비밀",
+        "target_keyword": "Richat Structure",
+    }
+    fresh = {
+        **base,
+        "topic": "몰타 지하 신전 할 사플리에니의 음향 구조",
+        "target_keyword": "Hal Saflieni Hypogeum",
+    }
+    responses = iter((duplicate, fresh))
+    grounded_flags = []
+
+    def fake_call_agent(**kwargs):
+        grounded_flags.append(kwargs.get("grounded"))
+        if kwargs.get("grounded"):
+            raise RuntimeError("all grounded providers unavailable")
+        return json.dumps(next(responses), ensure_ascii=False)
+
+    monkeypatch.setattr(researcher, "build_research_feedback", lambda *_: feedback)
+    monkeypatch.setattr(
+        researcher, "rank_asset_backed_candidates", lambda *args, **kwargs: []
+    )
+    monkeypatch.setattr(researcher, "call_agent", fake_call_agent)
+
+    result = researcher.run_researcher(
+        tmp_path,
+        "20261112-4",
+        recent_topics=[],
+        content_format="story",
+        use_cache=False,
+    )
+
+    assert result["topic"].startswith("몰타 지하 신전")
+    assert result["verification_method"] == "model_memory"
+    assert grounded_flags == [True, False, False]
+
+
 def test_writer_uses_manual_contract_for_prechecked_topic(tmp_path, monkeypatch):
     staging = tmp_path / "staging" / "manual"
     staging.mkdir(parents=True)

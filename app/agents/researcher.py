@@ -244,7 +244,7 @@ def run_researcher(
         return candidate
 
     def _model_memory_topic() -> dict:
-        max_attempts = max(2, len(asset_candidates)) if asset_candidates else 1
+        max_attempts = max(2, len(asset_candidates)) if asset_candidates else 3
         retry_context = dict(context)
         remaining_candidates = list(asset_candidates)
         rejected: list[str] = []
@@ -298,18 +298,40 @@ def run_researcher(
 
     topic_dict = None
     try:
-        topic = call_agent(
-            prompt=(
-                _story_researcher_prompt(context, grounded=True)
-                if selected == "story" else _researcher_prompt(context, grounded=True)
-            ),
-            agent_name="trend-researcher",
-            grounded=True,
-        )
-        raw_topic = extract_json(topic)
-        raw_topic["verification_method"] = "grounded_search"
-        raw_topic["verified_at"] = datetime.now().isoformat()
-        topic_dict = _validate_candidate(raw_topic)
+        grounded_rejections: list[str] = []
+        grounded_error: Exception | None = None
+        for attempt in range(1, 4):
+            grounded_context = dict(context)
+            grounded_context["rejected_selections"] = list(grounded_rejections)
+            raw_topic: dict = {}
+            try:
+                topic = call_agent(
+                    prompt=(
+                        _story_researcher_prompt(grounded_context, grounded=True)
+                        if selected == "story"
+                        else _researcher_prompt(grounded_context, grounded=True)
+                    ),
+                    agent_name="trend-researcher",
+                    grounded=True,
+                )
+                raw_topic = extract_json(topic)
+                raw_topic["verification_method"] = "grounded_search"
+                raw_topic["verified_at"] = datetime.now().isoformat()
+                topic_dict = _validate_candidate(raw_topic)
+                break
+            except (TypeError, ValueError) as error:
+                grounded_error = error
+                selected_name = str(
+                    raw_topic.get("target_keyword")
+                    or raw_topic.get("topic")
+                    or "형식 오류 소재"
+                )
+                grounded_rejections.append(f"{selected_name}: {error}")
+                safe_print(
+                    f"  ↻ 검색 소재 재선정 {attempt}/3: {str(error)[:80]}"
+                )
+        if topic_dict is None:
+            raise grounded_error or RuntimeError("검색 소재를 얻지 못했습니다")
         cache_slot = 0 if selected == "story" else slot
         if use_cache:
             save_verified(data_dir, cache_slot, topic_dict)

@@ -77,10 +77,11 @@ def call_agent(
     """
     premium = paid_features_enabled(Path(os.getenv("DATA_DIR", "./data")))
     if grounded:
-        # 검색 경로는 Gemini 그라운딩만 (Groq compound는 무료 티어에서 413으로 상시 실패해 제거).
-        # 그라운딩 할당량이 소진되면 이 호출은 실패하고, 리서처가 보수 모드로 폴백한다.
+        # 검색과 JSON 강제 모드는 한 요청에서 함께 쓸 수 없으므로 Groq는
+        # 브라우저 검색 메모 → 계약 JSON 변환의 두 단계로 호출한다.
         providers = [
             ("gemini(검색)", lambda: _gemini_chain(prompt, max_tokens, agent_name, grounded=True)),
+            ("groq(검색)", lambda: _groq_grounded_call(prompt, max_tokens, agent_name)),
         ]
     elif prefer == "groq":
         providers = [
@@ -261,6 +262,84 @@ def _gemini_generate(model: str, prompt: str, max_tokens: int, api_key: str, gro
 
 
 # ---------------------------------------------------------------- Groq
+
+def _groq_grounded_call(prompt: str, max_tokens: int, agent_name: str) -> str:
+    """Groq 브라우저 검색 결과를 기존 JSON 계약으로 변환한다."""
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        raise RuntimeError("GROQ_API_KEY 미설정 — console.groq.com에서 무료 발급")
+
+    model = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+    search_prompt = (
+        "Use browser search to verify the factual claims requested below. "
+        "Return concise research notes with direct source URLs. Do not return JSON, "
+        "do not call a JSON tool, and do not invent facts that are absent from sources.\n\n"
+        f"Original task:\n{prompt}"
+    )
+    body = {
+        "model": model,
+        "messages": [{"role": "user", "content": search_prompt}],
+        "max_tokens": min(max_tokens, 4000),
+        "temperature": 0.2,
+        "tools": [{"type": "browser_search"}],
+    }
+    notes = ""
+    last_error = "알 수 없는 오류"
+    for attempt in range(len(_BACKOFF_SECONDS) + 1):
+        try:
+            response = requests.post(
+                GROQ_API_URL,
+                headers={"Authorization": f"Bearer {api_key}"},
+                json=body,
+                timeout=120,
+            )
+            response.raise_for_status()
+            result = response.json()
+            notes = (
+                (result.get("choices") or [{}])[0]
+                .get("message", {})
+                .get("content", "")
+                .strip()
+            )
+            if not notes:
+                raise RuntimeError(f"Groq 검색 응답이 비어 있음: {str(result)[:200]}")
+            break
+        except requests.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else 0
+            detail = exc.response.text[:500] if exc.response is not None else str(exc)
+            if status == 429:
+                if _is_daily_quota(detail):
+                    raise _DailyQuotaError("일일 할당량 소진") from exc
+                error = _RetryableError("HTTP 429 (분당 한도/혼잡)")
+            elif status in (500, 503):
+                error = _RetryableError(f"HTTP {status} (서버 혼잡)")
+            else:
+                raise RuntimeError(
+                    f"Groq 검색 API 오류 (HTTP {status}): {detail[:300]}"
+                ) from exc
+        except requests.ConnectionError:
+            error = _RetryableError("네트워크 연결 실패")
+        except requests.Timeout:
+            error = _RetryableError("응답 시간 초과")
+
+        last_error = str(error)
+        safe_print(
+            f"  ⚠️ [{agent_name}] groq/{model} 검색 {attempt + 1}차 실패: {error}"
+        )
+        if attempt < len(_BACKOFF_SECONDS):
+            time.sleep(_BACKOFF_SECONDS[attempt])
+    if not notes:
+        raise RuntimeError(f"Groq 검색 실패 (마지막: {last_error})")
+
+    json_prompt = (
+        f"{prompt}\n\n"
+        "[웹 검색 검증 메모]\n"
+        f"{notes}\n\n"
+        "위 메모와 직접 출처 URL에 있는 사실만 사용해 원래 요청의 JSON 계약을 "
+        "완성하라. 메모에 없는 사실은 만들지 말고 verification_method는 "
+        "grounded_search로 기록하라. JSON만 출력하라."
+    )
+    return _groq_call(json_prompt, max_tokens, agent_name)
 
 def _groq_call(prompt: str, max_tokens: int, agent_name: str) -> str:
     """Groq 호출 (OpenAI 호환 API). 무료 티어: gpt-oss-120b 일 1,000회/20만 토큰."""
