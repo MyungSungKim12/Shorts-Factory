@@ -198,8 +198,9 @@ python scripts\upload_longform.py --run-id longform-demo
 ```dotenv
 CONTENT_FORMAT=story
 TTS_PROVIDER=supertonic
-SUPERTONIC_VOICE=F3
-SUPERTONIC_SPEED=1.0
+SUPERTONIC_VOICE=F4
+SUPERTONIC_SPEED=1.2
+SUPERTONIC_SILENCE_DURATION=0.08
 ```
 
 Supertonic 3는 서버 CPU에서 무료로 합성하며 Google Cloud TTS를 호출하지 않는다. 실패 시 gTTS로 자동 폴백하지 않아 남성·로봇 음성이 예고 없이 업로드되는 일을 막는다.

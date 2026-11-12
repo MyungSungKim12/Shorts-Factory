@@ -350,17 +350,47 @@ def _retime_audio(source: Path, tempo: float, ffmpeg_path: str) -> None:
 
 def _retime_story_narrations(
     intro: Path,
+    intro_result: TTSResult,
     scenes: dict[int, Path],
+    scene_results: dict[int, TTSResult],
     cta: Path | None,
-    tempo: float,
+    cta_result: TTSResult | None,
+    target_rate: float,
     ffmpeg_path: str,
-) -> None:
-    """Apply one playback tempo to the title, every body scene, and the CTA."""
-    _retime_audio(intro, tempo, ffmpeg_path)
-    for narration in scenes.values():
-        _retime_audio(narration, tempo, ffmpeg_path)
-    if cta is not None:
-        _retime_audio(cta, tempo, ffmpeg_path)
+) -> dict[str, float]:
+    """Reach one target rate without accelerating native-speed audio twice."""
+    adjustments = {"intro": _post_tempo(target_rate, intro_result)}
+    for scene_number, result in scene_results.items():
+        adjustments[f"scene_{scene_number}"] = _post_tempo(target_rate, result)
+    if cta is not None and cta_result is not None:
+        adjustments["cta"] = _post_tempo(target_rate, cta_result)
+
+    if not math.isclose(adjustments["intro"], 1.0, abs_tol=0.01):
+        _retime_audio(intro, adjustments["intro"], ffmpeg_path)
+    for scene_number, narration in scenes.items():
+        tempo = adjustments[f"scene_{scene_number}"]
+        if not math.isclose(tempo, 1.0, abs_tol=0.01):
+            _retime_audio(narration, tempo, ffmpeg_path)
+    if cta is not None and "cta" in adjustments:
+        if not math.isclose(adjustments["cta"], 1.0, abs_tol=0.01):
+            _retime_audio(cta, adjustments["cta"], ffmpeg_path)
+    return adjustments
+
+
+def _post_tempo(target_rate: float, result: TTSResult) -> float:
+    """Return the pitch-preserving adjustment still needed after synthesis."""
+    try:
+        native_rate = float(result.speaking_rate)
+    except (TypeError, ValueError):
+        native_rate = 1.0
+    if native_rate <= 0:
+        native_rate = 1.0
+    tempo = float(target_rate) / native_rate
+    if not 0.8 <= tempo <= 1.5:
+        raise RuntimeError(
+            f"TTS 후처리 속도 {tempo:.3f}이 안전 범위(0.8~1.5)를 벗어났습니다"
+        )
+    return round(tempo, 6)
 
 
 def _narration_target_lufs() -> float:
@@ -414,7 +444,6 @@ def _prepare_narration(
     for provider in (None, "supertonic"):
         result = synthesize(text, raw_output, provider=provider, ssml=ssml)
         _trim_narration(raw_output, wav_output, ffmpeg_path)
-        _normalize_narration(wav_output, ffmpeg_path)
         duration = _duration(wav_output, ffmpeg_path)
         if _narration_duration_is_plausible(text, duration):
             return result, duration
@@ -428,7 +457,7 @@ def _prepare_narration(
 def _scene_duration(
     planned_duration: float,
     audio_duration: float,
-    padding: float = 0.15,
+    padding: float = 0.06,
 ) -> float:
     """Keep scene cuts aligned to cleaned narration, not model estimates."""
     _ = planned_duration
@@ -1109,6 +1138,10 @@ def _finish_video(
     bgm = _pick_bgm()
     cue_times = (transition_times or [])[:2]
     use_tone = transition_tone is not None and bool(cue_times)
+    narration_target = _narration_target_lufs()
+    narration_filter = (
+        f"[0:a]loudnorm=I={narration_target:.1f}:LRA=7:TP=-1.5[voice]"
+    )
     cmd = [ffmpeg_path, "-i", str(concat_video)]
     if bgm:
         volume = os.getenv("BGM_VOLUME", "0.08")
@@ -1116,12 +1149,12 @@ def _finish_video(
         title_index = 2
         base_audio_filter = (
             f"[1:a]volume={volume}[bg];"
-            "[bg][0:a]sidechaincompress=threshold=0.02:ratio=8[ducked];"
-            "[0:a][ducked]amix=inputs=2:duration=first:dropout_transition=2[aout]"
+            "[bg][voice]sidechaincompress=threshold=0.02:ratio=8[ducked];"
+            "[voice][ducked]amix=inputs=2:duration=first:dropout_transition=2[aout]"
         )
     else:
         title_index = 1
-        base_audio_filter = "[0:a]anull[aout]" if use_tone else ""
+        base_audio_filter = "[voice]anull[aout]" if use_tone else ""
 
     cmd += ["-loop", "1", "-i", str(title_overlay)]
     tone_index = title_index + 1
@@ -1131,14 +1164,15 @@ def _finish_video(
     filters = (
         f"[0:v]{video_filter}[subbed];"
         f"[{title_index}:v]setsar=1[title];"
-        "[subbed][title]overlay=0:0:shortest=1[vout]"
+        "[subbed][title]overlay=0:0:shortest=1[vout];"
+        + narration_filter
     )
     if base_audio_filter:
         filters += ";" + base_audio_filter
     if use_tone:
         filters += ";" + _transition_audio_filter(tone_index, cue_times)
 
-    audio_map = "[finala]" if use_tone else ("[aout]" if bgm else "0:a:0")
+    audio_map = "[finala]" if use_tone else ("[aout]" if bgm else "[voice]")
     cmd += [
             "-filter_complex", filters,
             "-map", "[vout]", "-map", audio_map,
@@ -1246,11 +1280,14 @@ async def run_story_producer(
             tts_results.append(cta_result)
 
         audio_tempo = story_playback_tempo()
-        safe_print(f"  → 피치 유지 스토리 음성 속도 적용: {audio_tempo:.3f}배")
-        _retime_story_narrations(
+        safe_print(f"  → 스토리 목표 발화 속도 적용: {audio_tempo:.3f}배")
+        post_tempo_adjustments = _retime_story_narrations(
             intro_narration,
+            intro_result,
             narration_files,
+            scene_tts_results,
             cta_narration,
+            cta_result,
             audio_tempo,
             ffmpeg_path,
         )
@@ -1462,6 +1499,7 @@ async def run_story_producer(
         "script_sha256": hashlib.sha256(script_file.read_bytes()).hexdigest(),
         "tts": summarize_tts(tts_results),
         "audio_tempo_adjustment": audio_tempo,
+        "post_tempo_adjustments": post_tempo_adjustments,
         "layout": {**STORY_LAYOUT, "title": title_metadata},
         "retention_editing": {
             "subtitle_margin_v": 90,

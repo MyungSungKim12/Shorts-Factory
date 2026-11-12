@@ -250,13 +250,50 @@ def test_supertonic_provider_uses_free_korean_female_voice_without_paid_api(
     )
 
     assert result.provider == "supertonic"
-    assert result.voice == "F3"
+    assert result.voice == "F4"
     assert result.path.read_bytes() == b"wav"
     assert seen == {
         "text": "무료 여성 음성입니다.",
-        "voice": "F3",
-        "speed": 1.0,
+        "voice": "F4",
+        "speed": 1.2,
     }
+
+
+def test_supertonic_uses_short_natural_sentence_gap_by_default(tmp_path, monkeypatch):
+    seen = {}
+
+    class FakeWaveform:
+        def squeeze(self):
+            return b"samples"
+
+    class FakeEngine:
+        sample_rate = 44100
+
+        def get_voice_style(self, voice):
+            return f"style:{voice}"
+
+        def synthesize(self, text, **kwargs):
+            seen.update(kwargs)
+            return FakeWaveform(), [1.0]
+
+    monkeypatch.delenv("SUPERTONIC_SILENCE_DURATION", raising=False)
+    monkeypatch.setattr(tts, "_SUPERTONIC_ENGINE", FakeEngine())
+    monkeypatch.setitem(
+        sys.modules,
+        "soundfile",
+        SimpleNamespace(
+            write=lambda output, samples, sample_rate, format: __import__(
+                "pathlib"
+            ).Path(output).write_bytes(b"wav")
+        ),
+    )
+
+    tts._synthesize_supertonic(
+        "첫 문장입니다. 다음 문장입니다.", tmp_path / "voice.wav", "F4", 1.2
+    )
+
+    assert seen["speed"] == 1.2
+    assert seen["silence_duration"] == 0.08
 
 
 def test_supertonic_failure_stops_instead_of_silently_using_gtts(

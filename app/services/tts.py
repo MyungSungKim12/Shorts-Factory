@@ -98,12 +98,18 @@ def _synthesize_supertonic(
     """로컬 Supertonic 3 한국어 음성을 WAV 컨테이너로 저장한다."""
     engine = _get_supertonic_engine()
     style = engine.get_voice_style(voice)
+    try:
+        silence_duration = float(os.getenv("SUPERTONIC_SILENCE_DURATION", "0.08"))
+    except ValueError:
+        silence_duration = 0.08
+    if not 0.03 <= silence_duration <= 0.3:
+        silence_duration = 0.08
     waveform, _duration = engine.synthesize(
         text,
         voice_style=style,
         lang="ko",
         speed=speed,
-        silence_duration=0.15,
+        silence_duration=silence_duration,
     )
     import soundfile as sf
 
@@ -200,8 +206,13 @@ def synthesize(
         selected = "supertonic"
 
     if selected == "supertonic":
-        local_voice = os.getenv("SUPERTONIC_VOICE", "F3").strip() or "F3"
-        local_speed = float(os.getenv("SUPERTONIC_SPEED", "1.0"))
+        local_voice = os.getenv("SUPERTONIC_VOICE", "F4").strip() or "F4"
+        try:
+            local_speed = float(os.getenv("SUPERTONIC_SPEED", "1.2"))
+        except ValueError:
+            local_speed = 1.2
+        if not 0.8 <= local_speed <= 1.5:
+            local_speed = 1.2
         _synthesize_supertonic(text, output_path, local_voice, local_speed)
         return TTSResult(
             output_path, "supertonic", local_voice, local_speed

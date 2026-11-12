@@ -57,4 +57,5 @@ def test_auto_provider_uses_supertonic_without_paid_calls_in_free_mode(
     result = tts.synthesize("무료 모드", tmp_path / "voice.mp3", provider="auto")
 
     assert result.provider == "supertonic"
-    assert result.voice == "F3"
+    assert result.voice == "F4"
+    assert result.speaking_rate == 1.2

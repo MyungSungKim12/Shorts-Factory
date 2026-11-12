@@ -584,7 +584,7 @@ def test_trim_narration_removes_only_leading_and_trailing_silence(tmp_path, monk
 
 
 def test_scene_duration_follows_clean_audio_instead_of_planned_padding():
-    assert story_producer._scene_duration(7.0, 5.8) == 5.95
+    assert story_producer._scene_duration(7.0, 5.8) == 5.86
 
 
 def test_finish_video_normalizes_both_overlay_aspect_ratios(tmp_path, monkeypatch):
@@ -613,6 +613,9 @@ def test_finish_video_normalizes_both_overlay_aspect_ratios(tmp_path, monkeypatc
     title_input = seen["cmd"].index(str(tmp_path / "title.png"))
     assert seen["cmd"][title_input - 3:title_input] == ["-loop", "1", "-i"]
     assert "overlay=0:0:shortest=1" in filters
+    assert filters.count("loudnorm=I=-16.0:LRA=7:TP=-1.5") == 1
+    assert "[0:a]loudnorm=I=-16.0:LRA=7:TP=-1.5[voice]" in filters
+    assert seen["cmd"][seen["cmd"].index("-map") + 3] == "[voice]"
     assert seen["timeout"] == 900
 
 
@@ -713,11 +716,26 @@ def test_story_playback_tempo_accepts_configured_value(monkeypatch):
     assert story_producer.story_playback_tempo() == 1.25
 
 
-def test_all_story_narrations_are_retimed_at_playback_speed(tmp_path, monkeypatch):
+def test_story_post_tempo_skips_native_target_rate():
+    result = type("Result", (), {"speaking_rate": 1.2})()
+
+    assert story_producer._post_tempo(1.2, result) == 1.0
+
+
+def test_story_post_tempo_accelerates_slower_provider():
+    result = type("Result", (), {"speaking_rate": 1.0})()
+
+    assert story_producer._post_tempo(1.2, result) == 1.2
+
+
+def test_only_slower_story_narrations_are_retimed(tmp_path, monkeypatch):
     intro = tmp_path / "intro.wav"
     scenes = {1: tmp_path / "scene-1.wav", 2: tmp_path / "scene-2.wav"}
     cta = tmp_path / "cta.wav"
     calls = []
+
+    native = type("Result", (), {"speaking_rate": 1.2})()
+    slower = type("Result", (), {"speaking_rate": 1.0})()
 
     monkeypatch.setattr(
         story_producer,
@@ -725,20 +743,27 @@ def test_all_story_narrations_are_retimed_at_playback_speed(tmp_path, monkeypatc
         lambda source, tempo, ffmpeg: calls.append((source, tempo, ffmpeg)),
     )
 
-    story_producer._retime_story_narrations(
+    adjustments = story_producer._retime_story_narrations(
         intro,
+        native,
         scenes,
+        {1: slower, 2: native},
         cta,
+        slower,
         1.2,
         "ffmpeg",
     )
 
     assert calls == [
-        (intro, 1.2, "ffmpeg"),
         (scenes[1], 1.2, "ffmpeg"),
-        (scenes[2], 1.2, "ffmpeg"),
         (cta, 1.2, "ffmpeg"),
     ]
+    assert adjustments == {
+        "intro": 1.0,
+        "scene_1": 1.2,
+        "scene_2": 1.0,
+        "cta": 1.2,
+    }
 
 
 def test_retime_audio_uses_atempo_and_replaces_source(tmp_path, monkeypatch):
@@ -823,7 +848,13 @@ def test_prepare_narration_falls_back_when_generated_audio_is_implausibly_long(
         "_trim_narration",
         lambda source, target, ffmpeg: target.write_bytes(source.read_bytes()),
     )
-    monkeypatch.setattr(story_producer, "_normalize_narration", lambda *args: None)
+    monkeypatch.setattr(
+        story_producer,
+        "_normalize_narration",
+        lambda *args: (_ for _ in ()).throw(
+            AssertionError("individual narration must not be normalized")
+        ),
+    )
     monkeypatch.setattr(story_producer, "_duration", lambda *args: next(durations))
 
     result, duration = story_producer._prepare_narration(
