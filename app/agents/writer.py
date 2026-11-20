@@ -160,12 +160,24 @@ def run_writer(
                 "설명과 코드펜스를 제외하고 같은 사실만 사용해 더 짧고 완결된 "
                 "JSON 객체 하나만 출력하라."
             )
-        script_text = call_agent(
-            prompt=prompt,
-            agent_name="script-writer",
-            max_tokens=16000,
-            prefer="groq",
-        )
+        try:
+            script_text = call_agent(
+                prompt=prompt,
+                agent_name="script-writer",
+                max_tokens=16000,
+                prefer="groq",
+            )
+        except Exception as exc:
+            if selected != "story":
+                raise
+            safe_print(
+                "  [script-writer] 모델 제공자 장애 → 검증 사실 템플릿으로 전환"
+            )
+            last_error = exc
+            script_dict = validate_script(build_verified_story_script(topic), selected)
+            script_dict = ensure_story_information_density(script_dict)
+            script_dict["writer_mode"] = "verified_template"
+            break
         try:
             script_dict = validate_script(extract_json(script_text), selected)
             if selected == "story":

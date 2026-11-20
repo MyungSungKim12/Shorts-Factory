@@ -17,6 +17,12 @@ from app.services.cache_warmer import warm_verified_cache  # noqa: E402
 from app.services.notifications import send_alert  # noqa: E402
 
 
+def _enabled() -> bool:
+    return os.getenv("ENABLE_CACHE_WARMER", "false").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
 def _notify(data_dir: Path, event_key: str, text: str) -> None:
     try:
         send_alert(data_dir, event_key, text=text)
@@ -50,6 +56,12 @@ def main() -> None:
     os.chdir(ROOT)
     load_dotenv()
     data_dir = Path(os.getenv("DATA_DIR", "./data"))
+    if not _enabled():
+        print(json.dumps({
+            "status": "disabled",
+            "reason": "production LLM quota is reserved for the four scheduled slots",
+        }, ensure_ascii=False, sort_keys=True))
+        return
     summary = warm_verified_cache(data_dir)
     _notify(
         data_dir,

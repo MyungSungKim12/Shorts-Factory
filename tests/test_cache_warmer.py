@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from datetime import datetime, timedelta
 
@@ -160,6 +161,7 @@ def test_cache_warmer_cli_alerts_with_counts_sizes_and_shortage(tmp_path, monkey
     monkeypatch.setattr(command, "ROOT", tmp_path)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ENABLE_CACHE_WARMER", "true")
     monkeypatch.setattr(command, "load_dotenv", lambda: None)
     monkeypatch.setattr(command, "warm_verified_cache", lambda data_dir: summary)
     monkeypatch.setattr(
@@ -173,3 +175,24 @@ def test_cache_warmer_cli_alerts_with_counts_sizes_and_shortage(tmp_path, monkey
     assert "sizes: 1=4, 2=10, 3=2" in alerts[0][1]["text"]
     assert "quota_exhausted: true" in alerts[0][1]["text"]
     assert "shortage_slots: 1, 3" in alerts[0][1]["text"]
+
+
+def test_cache_warmer_cli_is_disabled_by_default_to_preserve_production_quota(
+    tmp_path, monkeypatch, capsys
+):
+    from scripts import warm_verified_cache as command
+
+    monkeypatch.setattr(command, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ENABLE_CACHE_WARMER", raising=False)
+    monkeypatch.setattr(command, "load_dotenv", lambda: None)
+    monkeypatch.setattr(
+        command,
+        "warm_verified_cache",
+        lambda *_: pytest.fail("disabled cache warmer must not call a provider"),
+    )
+
+    command.main()
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["status"] == "disabled"

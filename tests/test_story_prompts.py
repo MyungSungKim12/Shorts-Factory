@@ -2,7 +2,7 @@
 import json
 import asyncio
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from app.agents import orchestrator, researcher, writer
 
@@ -356,6 +356,79 @@ def test_writer_uses_verified_template_after_two_invalid_responses(tmp_path, mon
     assert {
         visual for scene in result["scenes"] for visual in scene["visuals"]
     } <= allowed_visuals
+
+
+def test_writer_uses_verified_template_when_all_llm_providers_are_unavailable(
+    tmp_path, monkeypatch
+):
+    run_id = "provider-outage-story"
+    work_dir = tmp_path / "work" / run_id
+    work_dir.mkdir(parents=True)
+    (work_dir / "topic.json").write_text(
+        json.dumps(_topic(), ensure_ascii=False), encoding="utf-8"
+    )
+    calls = []
+
+    def unavailable(**kwargs):
+        calls.append(kwargs)
+        raise RuntimeError("모든 LLM 제공자 실패: 일일 할당량 소진")
+
+    monkeypatch.setattr(writer, "call_agent", unavailable)
+
+    result = writer.run_writer(tmp_path, run_id, content_format="story")
+
+    assert len(calls) == 1
+    assert result["writer_mode"] == "verified_template"
+    assert 60 <= result["total_duration_sec"] <= 75
+    assert (work_dir / "script.json").exists()
+
+
+def test_story_researcher_reuses_older_verified_unused_cache_on_provider_outage(
+    tmp_path, monkeypatch
+):
+    from app.services.fact_cache import save_verified
+
+    cached = _topic()
+    cached["topic"] = "오래됐지만 검증된 미사용 지구 기록"
+    save_verified(tmp_path, 0, cached)
+    with sqlite3.connect(tmp_path / "videos.sqlite") as db:
+        db.execute(
+            "UPDATE verified_topics SET verified_at = ? WHERE topic = ?",
+            (
+                (datetime.now() - timedelta(days=90)).isoformat(),
+                cached["topic"],
+            ),
+        )
+
+    monkeypatch.setattr(
+        researcher,
+        "call_agent",
+        lambda **kwargs: (_ for _ in ()).throw(
+            RuntimeError("모든 LLM 제공자 실패: 일일 할당량 소진")
+        ),
+    )
+    monkeypatch.setattr(
+        researcher,
+        "build_research_feedback",
+        lambda *_: {
+            "winning_patterns": [],
+            "avoid_subjects": [],
+            "evergreen_buckets": [],
+        },
+    )
+    monkeypatch.setattr(
+        researcher, "rank_asset_backed_candidates", lambda *args, **kwargs: []
+    )
+
+    result = researcher.run_researcher(
+        tmp_path,
+        "20261120-3",
+        recent_topics=[],
+        content_format="story",
+    )
+
+    assert result["topic"] == cached["topic"]
+    assert result["verification_method"] == "verified_cache"
 
 
 def test_verified_template_stays_in_contract_with_long_verified_facts():

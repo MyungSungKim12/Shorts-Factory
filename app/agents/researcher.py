@@ -103,7 +103,7 @@ def _overexposed_recent_domains(recent_topics: list, threshold: int = 2) -> list
     return overexposed
 
 
-def _load_recent_topics(data_dir: Path, days: int = 14) -> list:
+def _load_recent_topics(data_dir: Path, days: int | None = 14) -> list:
     """최근 업로드된 영상 제목을 DB에서 조회 (소재 중복 방지용)."""
     import sqlite3
     from datetime import timedelta
@@ -112,16 +112,22 @@ def _load_recent_topics(data_dir: Path, days: int = 14) -> list:
     if not db_file.exists():
         return []
 
-    cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
     db = sqlite3.connect(db_file)
     try:
         columns = {row[1] for row in db.execute("PRAGMA table_info(videos)")}
         topic_column = "topic" if "topic" in columns else "NULL"
-        rows = db.execute(
-            f"SELECT title, {topic_column} FROM videos "
-            "WHERE date >= ? AND status = 'uploaded' ORDER BY date DESC",
-            (cutoff,),
-        ).fetchall()
+        if days is None:
+            rows = db.execute(
+                f"SELECT title, {topic_column} FROM videos "
+                "WHERE status = 'uploaded' ORDER BY date DESC"
+            ).fetchall()
+        else:
+            cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
+            rows = db.execute(
+                f"SELECT title, {topic_column} FROM videos "
+                "WHERE date >= ? AND status = 'uploaded' ORDER BY date DESC",
+                (cutoff,),
+            ).fetchall()
     except sqlite3.OperationalError:
         return []
     finally:
@@ -219,9 +225,6 @@ def run_researcher(
     def _reject_story_duplicate(payload: dict) -> bool:
         if selected != "story":
             return False
-        if asset_candidates:
-            if not topic_matches_asset_candidate(payload, asset_candidates):
-                return True
         return topic_duplicate_reason(
             payload,
             performance_feedback.get("avoid_subjects") or [],
@@ -346,16 +349,19 @@ def run_researcher(
             ) from e
         safe_print(f"  ℹ️ 그라운딩 검증 실패({str(e)[:60]}) — 검증 캐시에서 소재 찾기")
         cache_slot = 0 if selected == "story" else slot
-        allowed_categories = (
-            {category["category"]}
-            if selected == "story" and category and not asset_candidates
-            else None
-        )
+        # 스토리 캐시는 과거 채널 분류(place_nature/history_mystery 포함)로도
+        # 검증됐다. 현재 회차 방향은 프롬프트 우선순위일 뿐 기존 검증 기록을
+        # 폐기하는 조건이 아니며, 랭킹 캐시도 기존처럼 회차로만 분리한다.
+        allowed_categories = None
         cached = (
             pick_cached(
                 data_dir,
                 cache_slot,
-                recent_topics,
+                list(dict.fromkeys([
+                    *recent_topics,
+                    *(_load_recent_topics(data_dir, days=None) if selected == "story" else []),
+                ])),
+                reverify_days=365 if selected == "story" else 30,
                 allowed_categories=allowed_categories,
                 reject_payload=(
                     lambda payload: is_rejected_story_topic(payload) or _reject_story_duplicate(payload)

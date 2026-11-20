@@ -114,6 +114,27 @@ def test_topic_duplicate_reason_rejects_same_place_by_distinctive_facts():
     assert "기존 소재와 유사" in reason
 
 
+def test_topic_duplicate_reason_does_not_confuse_generic_mystery_words_for_same_subject():
+    avoid_subjects = [
+        "아프리카 사막 한가운데, 거대한 눈 구조물: 외계 문명의 흔적인가?",
+        "러시아 숲 속에 숨겨진 거대 레이더, 러시아 딱따구리의 정체",
+    ]
+
+    nazca = {
+        "topic": "나스카 라인, 사막에 그려진 거대 그림의 미스터리",
+        "target_keyword": "Nazca Lines",
+        "core_question": "누가 이 그림을 만들었을까?",
+    }
+    pyramid = {
+        "topic": "기자의 대피라미드 속 30미터 비밀 공간의 정체",
+        "target_keyword": "Great Pyramid void",
+        "core_question": "숨겨진 공간은 어떤 용도였을까?",
+    }
+
+    assert topic_duplicate_reason(nazca, avoid_subjects) is None
+    assert topic_duplicate_reason(pyramid, avoid_subjects) is None
+
+
 def test_feedback_keeps_upload_history_with_current_average_view_column(tmp_path):
     db = sqlite3.connect(tmp_path / "videos.sqlite")
     db.execute(
